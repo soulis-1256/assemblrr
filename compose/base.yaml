@@ -1,0 +1,243 @@
+services:
+  # Jellyfin — open source media server (recommended)
+  jellyfin:
+    profiles: ["jellyfin"]
+    image: lscr.io/linuxserver/jellyfin
+    container_name: jellyfin
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+      - VERSION=docker
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - ${MEDIA_DIRECTORY}:/data
+      - ${INSTALL_DIRECTORY}/config/jellyfin:/config
+    ports:
+      - 8096:8096
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8096/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      assemblrr_network:
+        ipv4_address: 172.60.0.11
+
+  # Emby — media server with premium features
+  emby:
+    profiles: ["emby"]
+    image: lscr.io/linuxserver/emby
+    container_name: emby
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+      - VERSION=docker
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - ${MEDIA_DIRECTORY}:/data
+      - ${INSTALL_DIRECTORY}/config/emby:/config
+    ports:
+      - 8096:8096
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8096/emby/System/Ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      assemblrr_network:
+        ipv4_address: 172.60.0.11
+
+  # Plex — popular media server with advanced features (uses host networking)
+  plex:
+    profiles: ["plex"]
+    image: lscr.io/linuxserver/plex
+    container_name: plex
+    network_mode: host
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+      - VERSION=docker
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - ${MEDIA_DIRECTORY}:/data
+      - ${INSTALL_DIRECTORY}/config/plex:/config
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:32400/identity"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+
+  # qBittorrent — torrent client (ports added by overlay)
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: qbittorrent
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+      - WEBUI_PORT=8081
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - ${MEDIA_DIRECTORY}:/data
+      - ${INSTALL_DIRECTORY}/config/qbittorrent:/config
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8081"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Sonarr — TV show management and automation
+  sonarr:
+    image: lscr.io/linuxserver/sonarr
+    container_name: sonarr
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - ${MEDIA_DIRECTORY}:/data
+      - ${INSTALL_DIRECTORY}/config/sonarr:/config
+      - ${INSTALL_DIRECTORY}/scripts/jellyfin-refresh.sh:/scripts/jellyfin-refresh.sh:ro
+      - ${INSTALL_DIRECTORY}/secrets:/run/secrets:ro
+    ports:
+      - 8989:8989
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8989/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      assemblrr_network:
+        ipv4_address: 172.60.0.13
+
+  # Radarr — movie management and automation
+  radarr:
+    image: lscr.io/linuxserver/radarr
+    container_name: radarr
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - ${MEDIA_DIRECTORY}:/data
+      - ${INSTALL_DIRECTORY}/config/radarr:/config
+      - ${INSTALL_DIRECTORY}/scripts/jellyfin-refresh.sh:/scripts/jellyfin-refresh.sh:ro
+      - ${INSTALL_DIRECTORY}/secrets:/run/secrets:ro
+    ports:
+      - 7878:7878
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:7878/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      assemblrr_network:
+        ipv4_address: 172.60.0.14
+
+  # Prowlarr — indexer management for *arr apps
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr
+    container_name: prowlarr
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - ${INSTALL_DIRECTORY}/config/prowlarr:/config
+    ports:
+      - 9696:9696
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9696/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      assemblrr_network:
+        ipv4_address: 172.60.0.15
+
+  # Portainer — container management UI
+  portainer:
+    image: portainer/portainer-ce
+    container_name: portainer
+    ports:
+      - 9000:9000
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9000/api/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ${INSTALL_DIRECTORY}/config/portainer:/data
+    restart: unless-stopped
+    networks:
+      assemblrr_network:
+        ipv4_address: 172.60.0.16
+
+  # Seerr — media request management (successor to Jellyseerr/Overseerr)
+  seerr:
+    image: ghcr.io/seerr-team/seerr:latest
+    container_name: seerr
+    init: true
+    environment:
+      - TZ=${TZ}
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - ${INSTALL_DIRECTORY}/config/seerr:/app/config
+    ports:
+      - 5055:5055
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5055/api/v1/settings/public"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      assemblrr_network:
+        ipv4_address: 172.60.0.17
+
+  # Recyclarr - automatically syncs TRaSH guides
+  recyclarr:
+    image: ghcr.io/recyclarr/recyclarr:latest
+    container_name: recyclarr
+    user: ${PUID}:${PGID}
+    environment:
+      - TZ=${TZ}
+      - CRON=@daily
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - ${INSTALL_DIRECTORY}/config/recyclarr:/config
+    restart: unless-stopped
+    networks:
+      assemblrr_network:
+        ipv4_address: 172.60.0.18
+
+networks:
+  assemblrr_network:
+    name: assemblrr_network
+    ipam:
+      config:
+        - subnet: 172.60.0.0/24

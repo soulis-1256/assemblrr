@@ -1,0 +1,11 @@
+# Overlay: direct access ports and networks for qBittorrent (no VPN)
+# Usage: docker compose -f base.yaml -f direct-access.yaml --profile <media_service> up -d
+
+services:
+  qbittorrent:
+    ports:
+      - 8081:8081
+    networks:
+      assemblrr_network:
+        ipv4_address: 172.60.0.12
+

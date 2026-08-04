@@ -1,0 +1,102 @@
+# Custom services overlay
+# Rename this file to custom.yaml to enable optional services
+# They will automatically join the assemblrr_network
+#
+# Usage: docker compose -f base.yaml -f [direct-access|vpn].yaml -f custom.yaml --profile <media_service> up -d
+#
+# These services are NOT auto-configured by assemblrr.
+# You will need to configure them manually through their web UIs after enabling.
+
+networks:
+  default:
+    external: true
+    name: assemblrr_network
+
+services:
+
+  # --- Lidarr — Music management and automation ---
+  # Requires: Prowlarr indexer, qBittorrent download client (configure manually)
+  # Web UI: http://<host>:8686
+  # lidarr:
+  #   image: lscr.io/linuxserver/lidarr
+  #   container_name: lidarr
+  #   environment:
+  #     - PUID=${PUID}
+  #     - PGID=${PGID}
+  #     - TZ=${TZ}
+  #   volumes:
+  #     - /etc/localtime:/etc/localtime:ro
+  #     - ${MEDIA_DIRECTORY}:/data
+  #     - ${INSTALL_DIRECTORY}/config/lidarr:/config
+  #   ports:
+  #     - 8686:8686
+  #   restart: unless-stopped
+  #   networks:
+  #     assemblrr_network:
+  #       ipv4_address: 172.60.0.20
+
+  # --- SABnzbd — Usenet downloader ---
+  # Requires: A paid Usenet provider (Newshosting, Eweka, etc.)
+  # Note: Routes through VPN if enabled (same as qBittorrent)
+  # Web UI: http://<host>:8080
+  # sabnzbd:
+  #   image: lscr.io/linuxserver/sabnzbd:latest
+  #   container_name: sabnzbd
+  #   environment:
+  #     - PUID=${PUID}
+  #     - PGID=${PGID}
+  #     - TZ=${TZ}
+  #   volumes:
+  #     - /etc/localtime:/etc/localtime:ro
+  #     - ${MEDIA_DIRECTORY}:/data
+  #     - ${INSTALL_DIRECTORY}/config/sabnzbd:/config
+  #   restart: unless-stopped
+  #   networks:
+  #     assemblrr_network:
+  #       ipv4_address: 172.60.0.21
+
+  # --- Bazarr — Automatic subtitle management ---
+  # Requires: Radarr and/or Sonarr configured (configure manually)
+  # Web UI: http://<host>:6767
+  # bazarr:
+  #   image: lscr.io/linuxserver/bazarr
+  #   container_name: bazarr
+  #   environment:
+  #     - PUID=${PUID}
+  #     - PGID=${PGID}
+  #     - TZ=${TZ}
+  #   volumes:
+  #     - /etc/localtime:/etc/localtime:ro
+  #     - ${MEDIA_DIRECTORY}:/data
+  #     - ${INSTALL_DIRECTORY}/config/bazarr:/config
+  #   ports:
+  #     - 6767:6767
+  #   restart: unless-stopped
+  #   networks:
+  #     assemblrr_network:
+  #       ipv4_address: 172.60.0.22
+
+  # --- Watchtower — Automatic container update notifications ---
+  # MONITOR_ONLY=true: Notifies when updates are available, does NOT auto-update
+  # To enable notifications, set WATCHTOWER_NOTIFICATION_URL (see: https://containrrr.dev/shoutrrr/v0.5/services/)
+  #   Examples:
+  #     Discord:  discord://token@id
+  #     Telegram: telegram://bottoken@ChatID
+  #     Slack:    slack://token@channel
+  #     Email:    smtp://user:pass@host:port/?from=addr&to=addr
+  # watchtower:
+  #   image: nickfedor/watchtower
+  #   container_name: watchtower
+  #   environment:
+  #     - WATCHTOWER_CLEANUP=true
+  #     - TZ=${TZ}
+  #     - WATCHTOWER_SCHEDULE=0 0 4 * * *
+  #     - WATCHTOWER_MONITOR_ONLY=true
+  #     - WATCHTOWER_NOTIFICATIONS=shoutrrr
+  #     - WATCHTOWER_NOTIFICATION_URL=discord://token@id
+  #   volumes:
+  #     - /var/run/docker.sock:/var/run/docker.sock
+  #   restart: unless-stopped
+  #   networks:
+  #     assemblrr_network:
+  #       ipv4_address: 172.60.0.23

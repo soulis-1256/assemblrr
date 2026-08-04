@@ -1,0 +1,365 @@
+#!/bin/bash
+# Assemblrr core library — sourced by all other lib modules and entry points
+# Provides: color codes, logging, safe_source, find_install_directory,
+#           path utilities, directory helpers, dot_inline
+
+# Guard against double-sourcing (readonly arrays would fail on re-source)
+if [ -n "${_ASSEMBLRR_CORE_SOURCED:-}" ]; then
+    return 0
+fi
+readonly _ASSEMBLRR_CORE_SOURCED=1
+
+# --- Color codes ---
+readonly RED='\033[0;31m'
+readonly GREEN='\033[0;32m'
+readonly YELLOW='\033[1;33m'
+readonly NC='\033[0m'
+
+# --- Logging ---
+# Optional: set LOG_FILE before sourcing lib/core.sh to enable file logging
+_log_to_file() {
+    if [ -n "${LOG_FILE:-}" ]; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
+    fi
+    return 0
+}
+log_success() { echo -e "${GREEN}$1${NC}"; _log_to_file "INFO: $1"; return 0; }
+log_error()   { echo -e "${RED}$1${NC}" >&2; _log_to_file "ERROR: $1"; exit 1; }
+log_warning() { echo -e "${YELLOW}$1${NC}"; _log_to_file "WARN: $1"; return 0; }
+log_info()    { echo "$1"; _log_to_file "INFO: $1"; return 0; }
+log_debug()   { _log_to_file "DEBUG: $1"; return 0; }
+
+# --- Progress indicators ---
+# Inline dot for polling loops (simple, foreground, no process management)
+dot_inline() { printf "." >&2; }
+
+# --- Safe source ---
+# Safely source a config file — validates that it contains only KEY=VALUE
+# assignments (no command substitution, pipes, etc.) before sourcing
+safe_source() {
+    local file="$1"
+    if [ ! -f "$file" ]; then
+        return 1
+    fi
+
+    local line
+    while IFS= read -r line || [ -n "$line" ]; do
+        # Skip blank lines and comments
+        [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+
+        # Must match KEY=VALUE pattern (KEY: alphanumeric + underscore)
+        if ! [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+            echo -e "${RED}Rejecting unsafe line in $file: $line${NC}" >&2
+            return 1
+        fi
+
+        # Reject dangerous shell constructs in the value
+        case "$line" in
+            *'$('* | *'`'* | *';'* | *'||'* | *'&&'* | *'>'* | *'<'*)
+                echo -e "${RED}Rejecting unsafe line in $file: $line${NC}" >&2
+                return 1
+                ;;
+        esac
+    done < "$file"
+
+    # shellcheck disable=SC1090
+    source "$file"
+}
+
+# --- Install directory discovery ---
+# Discover installation directory from runtime config
+find_install_directory() {
+    local search_order=(
+        "/opt/assemblrr/.assemblrr-config"
+        "$HOME/assemblrr/.assemblrr-config"
+        "$HOME/.assemblrr-config"
+    )
+
+    # Check ASSEMBLRR_DIR env var first
+    if [ -n "${ASSEMBLRR_DIR:-}" ]; then
+        echo "$ASSEMBLRR_DIR"
+        return 0
+    fi
+
+    for config_file in "${search_order[@]}"; do
+        if [ -f "$config_file" ]; then
+            safe_source "$config_file"
+            if [ -n "${INSTALL_DIRECTORY:-}" ]; then
+                echo "$INSTALL_DIRECTORY"
+                return 0
+            fi
+        fi
+    done
+
+    echo ""
+    return 1
+}
+
+# --- Path utilities ---
+
+# Expand tilde in user input paths (no eval — safe from code injection)
+expand_path() {
+    local path="$1"
+    # Only expand leading ~ to $HOME, nothing else
+    echo "${path/#\~/$HOME}"
+}
+
+# Validate that a path is safe to remove (used by safe_rm_rf)
+_is_safe_rm_path() {
+    local dir="$1"
+    # Refuse empty paths
+    if [ -z "$dir" ]; then
+        log_error "Refusing to remove empty path"
+        return 1
+    fi
+    # Safety guard: never remove root, system paths, or shallow paths
+    case "$dir" in
+        ""|"/"|"/home"|"/usr"|"/etc"|"/var"|"/opt"|"/root"|"/tmp"|"${HOME:-}")
+            log_error "Refusing to remove system path: $dir"
+            return 1
+            ;;
+    esac
+    # Refuse to remove a user's home directory directly
+    if [[ "$dir" =~ ^/home/[^/]+$ ]]; then
+        log_error "Refusing to remove home directory: $dir"
+        return 1
+    fi
+    # Refuse to remove paths shallower than /home/<user>/<app> (3+ slashes required)
+    # Examples: /home/soulis (2 levels) = blocked, /home/soulis/assemblrr (3 levels) = allowed
+    local depth
+    depth=$(echo "$dir" | tr -cd '/' | wc -c)
+    if [ "$depth" -lt 2 ]; then
+        log_error "Refusing to remove shallow path (depth < 2): $dir"
+        return 1
+    fi
+    return 0
+}
+
+# Remove a directory with sudo fallback (Docker containers create root-owned files)
+safe_rm_rf() {
+    local dir="$1"
+    # Normalize trailing slashes
+    while [ "${dir%/}" != "$dir" ]; do
+        dir="${dir%/}"
+    done
+
+    if ! _is_safe_rm_path "$dir"; then
+        return 1
+    fi
+
+    if ! rm -rf "$dir" 2>/dev/null; then
+        local parent_dir; parent_dir="$(dirname "$dir")"
+        local base_name; base_name="$(basename "$dir")"
+        # Run rm inside docker by mounting the parent directory
+        if ! docker run --rm -v "$parent_dir:/target" alpine rm -rf "/target/$base_name" 2>/dev/null; then
+            log_warning "Failed to remove $dir. You may need to remove it manually."
+        fi
+    fi
+}
+
+# --- Directory helpers ---
+
+create_and_verify_directory() {
+    local dir="$1"
+    local dir_type="$2"
+
+    if [ ! -d "$dir" ]; then
+        echo "The directory \"$dir\" does not exist. Attempting to create..."
+        if mkdir -p "$dir"; then
+            log_success "Directory $dir created"
+        else
+            log_error "Failed to create $dir_type directory at \"$dir\". Check permissions"
+        fi
+    fi
+
+    if [ ! -w "$dir" ] || [ ! -r "$dir" ]; then
+        log_error "Directory \"$dir\" is not writable or readable. Check permissions"
+    fi
+}
+
+setup_directory_structure() {
+    local media_dir="$1"
+    create_and_verify_directory "$media_dir" "media"
+    for subdir in "${MEDIA_SUBDIRS[@]}"; do
+        create_and_verify_directory "$media_dir/$subdir" "media subdirectory"
+    done
+}
+
+verify_user_permissions() {
+    local username="$1"
+    local directory="$2"
+
+    if ! id -u "$username" &>/dev/null; then
+        log_error "User \"$username\" doesn't exist!"
+    fi
+
+    # Check write access directly for the current user (no sudo needed)
+    if [ "$username" = "$(id -un)" ]; then
+        if [ ! -w "$directory" ]; then
+            log_error "User \"$username\" doesn't have write permissions to \"$directory\""
+        fi
+    elif ! sudo -u "$username" test -w "$directory"; then
+        log_error "User \"$username\" doesn't have write permissions to \"$directory\""
+    fi
+}
+
+verify_docker() {
+    local docker_exe="/mnt/c/Program Files/Docker/Docker/Docker Desktop.exe"
+    local is_wsl=false
+    if grep -qi microsoft /proc/version 2>/dev/null; then
+        is_wsl=true
+    fi
+
+    # Check if docker command is missing
+    if ! command -v docker &>/dev/null; then
+        # If in WSL2 and Docker Desktop is installed on host, we can start it to mount it
+        if [ "$is_wsl" = true ] && [ -f "$docker_exe" ] && command -v cmd.exe &>/dev/null; then
+            log_info "Docker Desktop integration is offline. Attempting to start Docker Desktop on Windows..."
+            cmd.exe /c start "" "C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe" < /dev/null > /dev/null 2>&1 &
+            log_info "Waiting for Docker Desktop integration to become ready (up to 45s)..."
+            for i in {1..45}; do
+                dot_inline
+                sleep 1
+                if command -v docker &>/dev/null && docker info &>/dev/null; then
+                    echo ""
+                    log_success "Docker Desktop started successfully and integration is ready."
+                    return 0
+                fi
+            done
+            echo ""
+        fi
+        log_warning "Docker is not installed or not in PATH."
+        return 1
+    fi
+
+    # If docker command exists, check if daemon is running
+    if ! docker info &>/dev/null; then
+        if [ "$is_wsl" = true ] && [ -f "$docker_exe" ] && command -v cmd.exe &>/dev/null; then
+            log_info "Docker daemon is not running. Attempting to start Docker Desktop on Windows..."
+            cmd.exe /c start "" "C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe" < /dev/null > /dev/null 2>&1 &
+            log_info "Waiting for Docker daemon to become ready (up to 45s)..."
+            for i in {1..45}; do
+                dot_inline
+                sleep 1
+                if docker info &>/dev/null; then
+                    echo ""
+                    log_success "Docker Desktop started successfully and is ready."
+                    return 0
+                fi
+            done
+            echo ""
+        fi
+        return 1
+    fi
+
+    return 0
+}
+
+# Helper to generate PBKDF2 password hash for qBittorrent WebUI
+# Format: @ByteArray(salt:hash) where both salt and hash are Base64 encoded
+qbit_generate_pbkdf2() {
+    local password="$1"
+    if [ -z "$password" ]; then
+        echo ""
+        return
+    fi
+    if command -v python3 &>/dev/null; then
+        QBIT_PWD="$password" python3 -c "import hashlib, os, base64; salt = os.urandom(16); dk = hashlib.pbkdf2_hmac('sha512', os.environ.get('QBIT_PWD', '').encode('utf-8'), salt, 100000); print(f'@ByteArray({base64.b64encode(salt).decode()}:{base64.b64encode(dk).decode()})')" 2>/dev/null || echo ""
+    elif command -v python &>/dev/null; then
+        QBIT_PWD="$password" python -c "import hashlib, os, base64; salt = os.urandom(16); dk = hashlib.pbkdf2_hmac('sha512', os.environ.get('QBIT_PWD', '').encode('utf-8'), salt, 100000); print(f'@ByteArray({base64.b64encode(salt).decode()}:{base64.b64encode(dk).decode()})')" 2>/dev/null || echo ""
+    else
+        echo ""
+    fi
+}
+
+run_docker() {
+    # Run the docker command directly
+    # Disable exit on error temporarily so we can catch the status
+    set +e
+    docker "$@"
+    local exit_code=$?
+    set -e
+
+    if [ $exit_code -ne 0 ]; then
+        # If it failed, check if the Docker daemon is actually running or missing
+        if ! command -v docker &>/dev/null || ! docker info &>/dev/null; then
+            log_warning "Docker daemon is not running or integration is offline. Attempting auto-start..."
+            if verify_docker; then
+                # Retry the command once
+                docker "$@"
+                return $?
+            else
+                log_error "Docker daemon is not running. Please start Docker and try again."
+            fi
+        fi
+    fi
+
+    return $exit_code
+}
+
+# --- Masked input ---
+# Read masked input (shows asterisks for each character, works in WSL2)
+read_masked() {
+    local prompt="$1"
+    local var_name="$2"
+    local value=""
+    local charcount=0
+    local old_settings
+
+    clear_masked_input() {
+        while [ "$charcount" -gt 0 ]; do
+            printf '\b \b' >&2
+            charcount=$((charcount - 1))
+        done
+        value=""
+    }
+
+    printf "%s" "$prompt"
+
+    # Save and disable terminal echo
+    old_settings=$(stty -g)
+    stty -echo
+
+    while IFS= read -r -n 1 char; do
+        # Enter key
+        if [[ $char == $'\n' ]] || [[ -z "$char" ]]; then
+            break
+        fi
+        # Backspace / Delete
+        if [[ $char == $'\177' ]] || [[ $char == $'\b' ]]; then
+            if [ $charcount -gt 0 ]; then
+                charcount=$((charcount - 1))
+                printf '\b \b' >&2
+                value="${value%?}"
+            fi
+        # Ctrl+U and Ctrl+W clear current masked input
+        elif [[ $char == $'\025' ]] || [[ $char == $'\027' ]]; then
+            clear_masked_input
+        # Escape sequences (Ctrl+Backspace, Ctrl+Delete, etc.)
+        elif [[ $char == $'\e' ]]; then
+            local seq=""
+            local next=""
+            while IFS= read -r -s -n 1 -t 0.01 next; do
+                seq+="$next"
+                [[ $next == "~" ]] && break
+                [ ${#seq} -ge 8 ] && break
+            done
+
+            case "$seq" in
+                "[3;5~"|"[127;5u"|"[8;5~")
+                    clear_masked_input
+                    ;;
+            esac
+        else
+            charcount=$((charcount + 1))
+            printf '*' >&2
+            value+="$char"
+        fi
+    done
+
+    # Restore terminal settings
+    stty "$old_settings"
+    echo
+    printf -v "$var_name" '%s' "$value"
+}
