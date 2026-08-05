@@ -32,6 +32,8 @@ A lightweight media server stack via Docker. Cross-platform, VPN-aware, and buil
 - **Subtitles:** Bazarr
 - **Update Notifications:** Watchtower
 
+These are deployed only — no auto-configuration like the core stack. Wire them up in each service’s UI after enabling.
+
 ## Installation
 
 ### Linux / WSL2
@@ -56,27 +58,27 @@ Ensure Docker Desktop is running before execution.
 irm https://raw.githubusercontent.com/soulis-1256/assemblrr/main/platform/windows/bootstrap.ps1 | iex
 ```
 
-## Usage (Assemblrr CLI)
+## Usage (CLI)
 
-The `assemblrr` command is injected into your path locally to orchestrate the Docker containers seamlessly.
+After install, the CLI is on your `PATH` as `assemblrr`. Run `assemblrr <command>`:
 
-```bash
-assemblrr start                # Start all services (with VPN verification)
-assemblrr stop                 # Stop all services
-assemblrr restart              # Restart all services
-assemblrr status               # Show container status
-assemblrr health               # Show healthcheck status of all services
-assemblrr logs [service]       # Follow logs (all services, or one)
-assemblrr config               # Show current configuration
-assemblrr configure            # Auto-configure APIs (Radarr, Prowlarr) using jq
-assemblrr reconfigure          # Re-run the setup wizard
-assemblrr backup /target/dir   # Create a safe snapshot of the configuration
-assemblrr restore /backup.tar.gz  # Non-destructive config wipe and restore
-assemblrr update-containers    # Pull latest images and restart (offers a backup first)
-assemblrr update-cli           # Update the CLI to the latest version
-assemblrr check-vpn            # Actively poll VPN health
-assemblrr uninstall            # Remove everything (asks before deleting data)
-```
+| Command | Description |
+|---|---|
+| `start` | Start all services (with VPN verification) |
+| `stop` | Stop all services |
+| `restart` | Restart all services |
+| `status` | Show container status |
+| `health` | Show healthcheck status of all services |
+| `logs [service]` | Follow logs (all services, or one) |
+| `config` | Show current configuration |
+| `configure` | Auto-configure APIs (Radarr, Prowlarr) using jq |
+| `reconfigure` | Re-run the setup wizard |
+| `backup /target/dir` | Snapshot configuration |
+| `restore /backup.tar.gz` | Restore from a backup archive |
+| `update-containers` | Pull latest images and restart (offers a backup first) |
+| `update-cli` | Update the CLI to the latest version |
+| `check-vpn` | Poll VPN health |
+| `uninstall` | Remove everything (asks before deleting data) |
 
 ## Uninstall
 
@@ -112,6 +114,17 @@ git clone https://github.com/soulis-1256/assemblrr.git
 cd assemblrr
 bash bin/setup.sh
 ```
+
+### Tests
+
+```bash
+make test                 # unit + compose config + shellcheck (if installed)
+make test-unit            # pure shell unit tests (no Docker)
+make test-compose         # docker compose config validation
+make test-integration     # live qBittorrent + vpn-watchdog (opt-in)
+```
+
+Live integration mutates a running stack — requires `ASSEMBLRR_ALLOW_LIVE_TEST=1`. See [tests/README.md](tests/README.md).
 
 ## Acknowledgments
 

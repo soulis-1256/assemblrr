@@ -17,7 +17,6 @@ even if the installation itself is broken.
 | CLI library modules | `~/.local/bin/lib/{core,branding,compose,vpn}.sh` |
 | Runtime config | `~/assemblrr/.assemblrr-config` (inside the install directory) |
 | Service URL cheat-sheet | `~/assemblrr_services.txt` |
-| PATH entries (added only if missing) | `~/.profile` and/or `~/.config/fish/config.fish` |
 | Logs | `/tmp/assemblrr-*.log` |
 
 No named Docker volumes are used — all state lives in the two directories above.
@@ -100,20 +99,6 @@ docker rmi lscr.io/linuxserver/jellyfin lscr.io/linuxserver/qbittorrent \
     lscr.io/linuxserver/prowlarr portainer/portainer-ce \
     ghcr.io/seerr-team/seerr ghcr.io/recyclarr/recyclarr alpine:3
 ```
-
-**6. PATH entries.** Uninstall keeps the `$HOME/.local/bin` PATH lines in
-`~/.profile` / `~/.config/fish/config.fish`. Remove them manually if you want.
-
-## Guarantees
-
-Removal will never:
-
-- touch system directories or require sudo (default home-based installation)
-- delete your media directory without explicit confirmation or `--media`
-- remove `~/.local/bin/lib` if it contains files that aren't Assemblrr's
-- delete Docker images or the `~/.local/bin` PATH entry
-- uninstall packages, because none are installed (dependencies are only
-  suggested via your package manager during setup if missing)
 
 ## Windows / WSL2
 
