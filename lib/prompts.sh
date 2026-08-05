@@ -379,18 +379,5 @@ get_installation_paths() {
     setup_directory_structure "$media_directory"
     verify_user_permissions "$username" "$media_directory"
 
-    # Pre-create Seerr config dir with correct ownership (Seerr runs as node/UID 1000)
-    # Docker would create this as root on first mount, causing EACCES
-    mkdir -p "$install_directory/config/seerr"
-    if [ "$(id -u)" -ne 1000 ]; then
-        sudo chown -R 1000:1000 "$install_directory/config/seerr" 2>/dev/null || true
-    fi
-
-    # Pre-create Recyclarr config dir to avoid root-owned volume files
-    mkdir -p "$install_directory/config/recyclarr"
-    if [ "$(id -u)" -ne "$puid" ] || [ "$(id -g)" -ne "$pgid" ]; then
-        sudo chown -R "$puid:$pgid" "$install_directory/config/recyclarr" 2>/dev/null || true
-    fi
-
     export install_directory media_directory
 }

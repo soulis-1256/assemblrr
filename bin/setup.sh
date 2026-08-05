@@ -490,6 +490,8 @@ early_vpn_gate() {
     copy_configuration_files
     generate_env_file
     write_vpn_secrets
+    # Bind mounts must exist as the host user before Gluetun starts
+    prepare_install_dirs "$install_directory" "$puid" "$pgid"
     ensure_vpn_connection
     log_success "VPN is working — continuing with the rest of setup."
     echo
@@ -547,35 +549,17 @@ install_cli() {
 }
 
 set_permissions() {
-    local dirs=("$media_directory" "$install_directory" "$install_directory/config")
+    log_info "Setting ownership for install and media directories..."
 
-    # Skip chown entirely if the current user already matches PUID/PGID
-    if [ "$(id -u)" = "$puid" ] && [ "$(id -g)" = "$pgid" ]; then
-        log_success "Permissions already correct (current user matches PUID/PGID)"
-    else
-        for dir in "${dirs[@]}"; do
-            log_info "Setting permissions for $dir..."
-            if [ ! -d "$dir" ]; then
-                mkdir -p "$dir" || log_error "Failed to create directory $dir"
-            fi
+    # Install bind-mount tree (idempotent; also fixes root-owned leftovers)
+    prepare_install_dirs "$install_directory" "$puid" "$pgid"
 
-            if sudo chown -R "$puid:$pgid" "$dir"; then
-                log_success "Permissions set successfully for $dir"
-            else
-                log_error "Failed to set permissions for $dir"
-            fi
-        done
+    if [ ! -d "$media_directory" ]; then
+        mkdir -p "$media_directory" || log_error "Failed to create media directory $media_directory"
     fi
+    ensure_owned "$media_directory" "$puid" "$pgid"
 
-    # Seerr runs as node user (UID 1000), not PUID — ensure its config dir is owned by 1000
-    local seerr_config_dir="$install_directory/config/seerr"
-    if [ ! -d "$seerr_config_dir" ]; then
-        mkdir -p "$seerr_config_dir" || log_warning "Failed to create Seerr config directory"
-    fi
-    if [ -d "$seerr_config_dir" ] && [ "$(id -u)" -ne 1000 ]; then
-        sudo chown -R 1000:1000 "$seerr_config_dir" 2>/dev/null || log_warning "Failed to set Seerr config ownership to 1000:1000"
-        log_success "Seerr config directory ownership set to 1000:1000"
-    fi
+    log_success "Ownership set for $install_directory and $media_directory"
 }
 
 main() {
@@ -646,6 +630,9 @@ copy_configuration_files
 generate_env_file
 write_vpn_secrets
 
+# Final bind-mount skeleton + ownership before any further compose operations
+prepare_install_dirs "$install_directory" "$puid" "$pgid"
+
 # Re-check only if we never verified (VPN disabled skips; early gate already set the flag)
 if [ "${setup_vpn,,}" = "y" ] && [ "${VPN_ALREADY_VERIFIED:-}" != "1" ]; then
     ensure_vpn_connection
@@ -661,6 +648,8 @@ log_success "Install files ready — starting services..."
 
 log_info "Starting ${APP_DISPLAY_NAME} services..."
 log_info "This may take a while..."
+# Ensure mounts still exist/owned immediately before the full stack comes up
+prepare_install_dirs "$install_directory" "$puid" "$pgid"
 build_compose_args "$install_directory" "${setup_vpn,,}"
 if ! run_docker compose "${COMPOSE_ARGS[@]}" --profile "$media_service" up -d; then
     log_error "Failed to start ${APP_DISPLAY_NAME} services"

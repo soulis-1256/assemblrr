@@ -354,7 +354,23 @@ uninstall_app() {
     log_info "Docker images were left on disk — see docs/uninstall.md to remove them."
 }
 
+# Load PUID/PGID from install .env when present (for prepare_install_dirs)
+_load_install_ids() {
+    local env_file="$INSTALL_DIR/.env"
+    if [ -f "$env_file" ]; then
+        # shellcheck disable=SC1090
+        set -a
+        safe_source "$env_file" 2>/dev/null || true
+        set +a
+    fi
+    _HOST_UID="${PUID:-$(id -u)}"
+    _HOST_GID="${PGID:-$(id -g)}"
+}
+
 start_app() {
+    _load_install_ids
+    prepare_install_dirs "$INSTALL_DIR" "$_HOST_UID" "$_HOST_GID"
+
     # Validate VPN config before starting (if VPN is enabled)
     if [ "${VPN_ENABLED:-n}" = "y" ]; then
         if ! validate_vpn_secrets "$INSTALL_DIR" "${VPN_ENABLED:-n}" "${VPN_TYPE:-openvpn}"; then
@@ -366,7 +382,7 @@ start_app() {
             log_error "VPN startup failed. Fix credentials in $INSTALL_DIR/secrets (and .env if needed), then retry."
         fi
     fi
-    
+
     if [ "$#" -eq 0 ]; then
         "${DC[@]}" up -d || log_error "Failed to start services"
         wait_for_services
@@ -376,6 +392,9 @@ start_app() {
 }
 
 restart_app() {
+    _load_install_ids
+    prepare_install_dirs "$INSTALL_DIR" "$_HOST_UID" "$_HOST_GID"
+
     if [ "$#" -eq 0 ]; then
         "${DC[@]}" stop || log_warning "Some services failed to stop"
         "${DC[@]}" up -d || log_error "Failed to start services"

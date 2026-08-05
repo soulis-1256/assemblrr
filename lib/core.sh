@@ -178,6 +178,114 @@ create_and_verify_directory() {
     fi
 }
 
+# Set ownership on a path (recursive). Tries without sudo first.
+# Usage: ensure_owned "$path" "$uid" "$gid"
+ensure_owned() {
+    local path="$1"
+    local uid="$2"
+    local gid="$3"
+
+    [ -e "$path" ] || return 0
+
+    local actual_uid actual_gid
+    actual_uid=$(stat -c '%u' "$path" 2>/dev/null || echo "")
+    actual_gid=$(stat -c '%g' "$path" 2>/dev/null || echo "")
+
+    if [ "$actual_uid" = "$uid" ] && [ "$actual_gid" = "$gid" ]; then
+        # Directory may still be mode-inaccessible to us (e.g. root sticky leftovers)
+        if [ -d "$path" ] && [ "$(id -u)" = "$uid" ] && [ ! -w "$path" ]; then
+            :
+        else
+            return 0
+        fi
+    fi
+
+    if chown -R "$uid:$gid" "$path" 2>/dev/null; then
+        return 0
+    fi
+    if command -v sudo >/dev/null 2>&1 && sudo chown -R "$uid:$gid" "$path" 2>/dev/null; then
+        return 0
+    fi
+
+    log_error "Cannot set ownership of $path to ${uid}:${gid} (Docker may have created it as root). Fix with: sudo chown -R ${uid}:${gid} \"$path\""
+}
+
+# Create every host bind-mount target under the install tree *before* any
+# container starts. Docker creates missing mount parents as root; that makes
+# later setup mkdir fail. Call this immediately before compose up / VPN test.
+#
+# Usage: prepare_install_dirs "$install_dir" "$puid" "$pgid"
+prepare_install_dirs() {
+    local install_dir="$1"
+    local uid="${2:-$(id -u)}"
+    local gid="${3:-$(id -g)}"
+
+    if [ -z "$install_dir" ]; then
+        log_error "prepare_install_dirs: install_dir is required"
+    fi
+
+    # Paths mounted from compose/base.yaml, vpn.yaml, and optional custom services
+    local -a rel_paths=(
+        "config"
+        "config/gluetun"
+        "config/jellyfin"
+        "config/emby"
+        "config/plex"
+        "config/qbittorrent"
+        "config/sonarr"
+        "config/radarr"
+        "config/prowlarr"
+        "config/portainer"
+        "config/seerr"
+        "config/recyclarr"
+        "config/lidarr"
+        "config/sabnzbd"
+        "config/bazarr"
+        "secrets"
+        "scripts"
+    )
+
+    # Reclaim install root if a previous run left it root-owned
+    if [ -d "$install_dir" ] && [ ! -w "$install_dir" ]; then
+        ensure_owned "$install_dir" "$(id -u)" "$(id -g)"
+    fi
+
+    if [ ! -d "$install_dir" ]; then
+        mkdir -p "$install_dir" || log_error "Failed to create install directory: $install_dir"
+    fi
+
+    # If config/ already exists as root (failed prior VPN test), reclaim before mkdir
+    if [ -d "$install_dir/config" ] && [ ! -w "$install_dir/config" ]; then
+        ensure_owned "$install_dir/config" "$(id -u)" "$(id -g)"
+    fi
+
+    local rel
+    for rel in "${rel_paths[@]}"; do
+        local path="$install_dir/$rel"
+        if [ ! -d "$path" ]; then
+            if ! mkdir -p "$path" 2>/dev/null; then
+                ensure_owned "$(dirname "$path")" "$(id -u)" "$(id -g)"
+                mkdir -p "$path" || log_error "Failed to create $path"
+            fi
+        fi
+    done
+
+    # Align tree to the service host user (PUID/PGID)
+    ensure_owned "$install_dir/config" "$uid" "$gid"
+    ensure_owned "$install_dir/secrets" "$uid" "$gid"
+    ensure_owned "$install_dir/scripts" "$uid" "$gid"
+
+    # Seerr runs as node (UID 1000), not necessarily PUID
+    if [ "$uid" != "1000" ] || [ "$gid" != "1000" ]; then
+        ensure_owned "$install_dir/config/seerr" "1000" "1000"
+    fi
+
+    # Setup process must keep writing under config/ (qBittorrent conf, etc.)
+    if [ "$(id -u)" = "$uid" ] && [ ! -w "$install_dir/config" ]; then
+        log_error "Install config directory is not writable: $install_dir/config"
+    fi
+}
+
 setup_directory_structure() {
     local media_dir="$1"
     create_and_verify_directory "$media_dir" "media"
