@@ -44,10 +44,8 @@ run_config "base + vpn" \
     -f "$tmp/compose/base.yaml" \
     -f "$tmp/compose/vpn.yaml"
 
-# examples/custom.yaml.example is documentation (all services commented), so
-# `services:` is empty and invalid for compose. Test a minimal real overlay instead.
+# example custom.yaml has only commented services; use a valid empty overlay
 cat >"$tmp/compose/custom.yaml" <<'EOF'
-# Minimal custom overlay for config validation
 services: {}
 EOF
 run_config "base + direct-access + custom overlay" \

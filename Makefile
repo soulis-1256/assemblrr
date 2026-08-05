@@ -1,4 +1,3 @@
-# Assemblrr developer targets
 .PHONY: test test-unit test-compose test-integration lint help
 
 help:

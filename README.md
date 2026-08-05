@@ -32,7 +32,7 @@ A lightweight media server stack via Docker. Cross-platform, VPN-aware, and buil
 - **Subtitles:** Bazarr
 - **Update Notifications:** Watchtower
 
-These are deployed only — no auto-configuration like the core stack. Wire them up in each service’s UI after enabling.
+Deployed only — not auto-configured. Set them up in each service’s UI.
 
 ## Installation
 
@@ -90,10 +90,11 @@ See [docs/uninstall.md](docs/uninstall.md) for the complete removal guide, inclu
 
 Configuration lives in your installation directory (default: `~/assemblrr`).
 
-- `.env`: Environment overrides (ASSEMBLRR_HOST for remote proxying, PUID/PGID, API variables).
-- `compose/base.yaml`: Immutable core services.
-- `compose/vpn.yaml`: Gluetun routing overlays.
-- `config/`: Persistent data safe from container teardowns.
+- `.env`: Generated at install from [`.env.example`](.env.example) (all variables are documented there). Credentials live under `secrets/`, not in `.env`.
+- `compose/base.yaml`: Core services.
+- `compose/vpn.yaml` / `compose/direct-access.yaml`: Networking overlays.
+- `compose/custom.yaml`: Optional services (from the example under `compose/examples/`).
+- `config/`: Persistent service data.
 
 ## Development
 

@@ -1,14 +1,5 @@
 #!/bin/bash
-# Assemblrr test runner
-#
-# Usage:
-#   ./tests/run.sh              # unit tests only
-#   ./tests/run.sh unit
-#   ./tests/run.sh compose      # docker compose config checks
-#   ./tests/run.sh integration  # live stack (requires ASSEMBLRR_ALLOW_LIVE_TEST=1)
-#   ./tests/run.sh all          # unit + compose (not live integration)
-#   ./tests/run.sh lint         # shellcheck if installed
-#
+# Usage: ./tests/run.sh [unit|compose|integration|lint|all]
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -44,10 +35,10 @@ run_scripts() {
 
 run_unit() {
     echo "Running unit tests..."
-    # Pure unit tests first (no docker required)
     for f in \
         "$SCRIPT_DIR/unit/test_compose.sh" \
         "$SCRIPT_DIR/unit/test_core.sh" \
+        "$SCRIPT_DIR/unit/test_env_example.sh" \
         "$SCRIPT_DIR/unit/test_vpn_secrets.sh"
     do
         echo ""
@@ -101,7 +92,6 @@ run_lint() {
         return 0
     fi
 
-    # SC1091: sourced paths resolved at runtime; SC2034: libs export for callers
     if shellcheck -x -e SC1091,SC2034 "${files[@]}"; then
         echo "shellcheck: OK"
     else

@@ -1,12 +1,8 @@
 #!/bin/bash
-# Shared helpers for Assemblrr unit and integration tests.
 # shellcheck shell=bash
 
-# Repo root (parent of tests/)
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-
-# --- Assertion helpers ---
 
 _TEST_FAILURES=0
 _TEST_PASSES=0
@@ -124,8 +120,7 @@ assert_false() {
     return 0
 }
 
-# Soft log_error for unit tests — core.sh's log_error exits the process.
-# Call after sourcing lib/core.sh so we can exercise guard paths.
+# core.sh log_error exits; unit tests need a non-fatal stub
 stub_log_error_no_exit() {
     log_error() {
         echo -e "${RED:-}$1${NC:-}" >&2
@@ -145,10 +140,6 @@ test_summary() {
     return 0
 }
 
-# --- Install / config discovery (integration) ---
-
-# Resolve Assemblrr install directory.
-# Priority: ASSEMBLRR_DIR, ASSEMBLRR_CONFIG parent, find_install_directory, ~/assemblrr
 resolve_install_dir() {
     if [ -n "${ASSEMBLRR_DIR:-}" ]; then
         echo "$ASSEMBLRR_DIR"
@@ -195,8 +186,6 @@ load_assemblrr_config() {
     source "$config_file"
 }
 
-# --- qBittorrent API helpers (integration) ---
-
 QBIT_HOST="${QBIT_HOST:-127.0.0.1:8081}"
 QBIT_API="http://${QBIT_HOST}/api/v2"
 
@@ -219,7 +208,6 @@ qbit_api() {
     curl -s -b "$cookie_jar" -H "Referer: http://${QBIT_HOST}" "$@"
 }
 
-# Create a temporary install-like tree for compose validation.
 make_compose_fixture() {
     local dest="$1"
     mkdir -p "$dest/compose" "$dest/config" "$dest/scripts" "$dest/secrets" "$dest/media"
@@ -228,7 +216,7 @@ make_compose_fixture() {
         mkdir -p "$dest/compose/examples"
         cp "$REPO_ROOT/compose/examples/"* "$dest/compose/examples/" 2>/dev/null || true
     fi
-    # Secret files must exist for `docker compose config` with vpn overlay
+    # vpn overlay expects these files to exist
     : >"$dest/secrets/openvpn_user.txt"
     : >"$dest/secrets/openvpn_password.txt"
     : >"$dest/secrets/wireguard_private_key.txt"

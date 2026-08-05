@@ -1,20 +1,13 @@
 #!/bin/bash
-# Live integration test: stall qBittorrent connections and verify vpn-watchdog reacts.
-#
-# SAFETY: mutates a running qBittorrent instance (max connections → 0, test torrent).
-# Requires ASSEMBLRR_ALLOW_LIVE_TEST=1 and a configured Assemblrr install.
-#
-# Usage:
-#   ASSEMBLRR_ALLOW_LIVE_TEST=1 ./tests/integration/watchdog_stall.sh
-#   ASSEMBLRR_DIR=~/assemblrr ASSEMBLRR_ALLOW_LIVE_TEST=1 ./tests/integration/watchdog_stall.sh
-#
+# Live test: stall qBittorrent and check vpn-watchdog.
+# Mutates a real install — requires ASSEMBLRR_ALLOW_LIVE_TEST=1.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/../helpers.sh"
 
-# Ubuntu 22.04.4 desktop ISO infohash + public trackers (no content hosted by us)
+# Ubuntu 22.04 desktop infohash + public trackers
 TARGET_HASH="3b245504cf5f11bbdbe1201cea6a6bf45aee1bc0"
 MAGNET="magnet:?xt=urn:btih:${TARGET_HASH}&dn=ubuntu-22.04.4-desktop-amd64.iso&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Ftracker.openbittorrent.com%3A6969%2Fannounce"
 
@@ -46,7 +39,6 @@ EOF
     fi
 }
 
-# Fail fast before any trap/cleanup noise
 require_live_opt_in
 
 cleanup() {
@@ -78,7 +70,6 @@ resolve_watchdog_script() {
     return 1
 }
 
-# Watchdog in containers reads /run/secrets; for host runs, stage secrets or env.
 prepare_watchdog_env() {
     local install_dir="$1"
     local secrets="$install_dir/secrets"
@@ -87,7 +78,6 @@ prepare_watchdog_env() {
         export AUTH_PASSWORD_FILE="$secrets/auth_password.txt"
         return 0
     fi
-    # Fallback: materialize from config credentials into temp secret files
     if [ -n "${AUTH_USERNAME:-}" ] && [ -n "${AUTH_PASSWORD:-}" ]; then
         local staged
         staged=$(mktemp -d)
@@ -117,7 +107,6 @@ install_dir=$(resolve_install_dir) || die "Could not resolve install directory. 
 load_assemblrr_config "$install_dir" || die "Could not load config from $install_dir"
 
 if [ -z "${AUTH_USERNAME:-}" ] || [ -z "${AUTH_PASSWORD:-}" ]; then
-    # Try secret files
     if [ -f "$install_dir/secrets/auth_username.txt" ]; then
         AUTH_USERNAME=$(cat "$install_dir/secrets/auth_username.txt")
         AUTH_PASSWORD=$(cat "$install_dir/secrets/auth_password.txt")
@@ -152,7 +141,6 @@ echo "    $(torrent_summary || echo 'torrent not listed yet')"
 echo "[4] Sabotaging max_connecs=0..."
 qbit_api "$COOKIE_JAR" -d 'json={"max_connecs": 0}' "${QBIT_API}/app/setPreferences" >/dev/null
 
-# Bounce torrent to drop existing peer connections quickly
 qbit_api "$COOKIE_JAR" -d "hashes=${TARGET_HASH}" "${QBIT_API}/torrents/stop" >/dev/null 2>&1 || true
 sleep 2
 qbit_api "$COOKIE_JAR" -d "hashes=${TARGET_HASH}" "${QBIT_API}/torrents/start" >/dev/null 2>&1 || true
@@ -176,19 +164,15 @@ failures=0
 if [ "$watchdog_rc" -ne 0 ]; then
     echo "  PASS: watchdog exited non-zero (rc=$watchdog_rc) — expected under stall"
 else
-    # Watchdog only restarts gluetun when specific tracker-failure symptoms match.
-    # If symptoms are not severe enough yet, surface a soft failure with diagnostics.
     if echo "$watchdog_out" | grep -qiE 'DETECTED|routing failure|VPN routing'; then
         echo "  PASS: watchdog reported routing failure"
     else
         echo "  FAIL: watchdog exited 0 without a detection message"
-        echo "        Symptoms may not have matched (needs has_metadata=false, 0 connections,"
-        echo "        and ≥3 failed trackers with Operation not permitted / timed out / Host not found)."
+        echo "        (needs stalled torrent + failed trackers — see vpn-watchdog.sh)"
         failures=$((failures + 1))
     fi
 fi
 
-# API still reachable after watchdog
 if qbit_api "$COOKIE_JAR" "${QBIT_API}/app/version" >/dev/null 2>&1 \
     || qbit_login "$COOKIE_JAR" "$AUTH_USERNAME" "$AUTH_PASSWORD"; then
     echo "  PASS: qBittorrent API still reachable after watchdog"

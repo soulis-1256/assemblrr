@@ -238,7 +238,7 @@ copy_configuration_files() {
         ["compose/direct-access.yaml"]="compose/direct-access.yaml"
         ["compose/vpn.yaml"]="compose/vpn.yaml"
         ["compose/examples/custom.yaml.example"]="compose/examples/custom.yaml.example"
-        ["templates/envsubst.env"]="templates/envsubst.env"
+        [".env.example"]=".env.example"
         ["templates/recyclarr-ultra_hd.yml"]="templates/recyclarr-ultra_hd.yml"
         ["templates/recyclarr-full_hd.yml"]="templates/recyclarr-full_hd.yml"
         ["branding.conf"]="branding.conf"
@@ -322,8 +322,13 @@ generate_env_file() {
     export PORT_FORWARD_ONLY VPN_PORT_FORWARDING
     export API_HOST
 
-    # Generate .env from template using envsubst
-    envsubst < "$APP_ROOT/templates/envsubst.env" > "$env_file" || \
+    local env_template
+    if ! env_template=$(resolve_project_file ".env.example"); then
+        log_error "Failed to locate .env.example"
+    fi
+    # Explicit key list so envsubst does not pull in unrelated shell variables
+    envsubst '${PUID} ${PGID} ${MEDIA_DIRECTORY} ${INSTALL_DIRECTORY} ${MEDIA_SERVICE} ${TZ} ${VPN_ENABLED} ${VPN_SERVICE} ${VPN_TYPE} ${WIREGUARD_ADDRESSES} ${PORT_FORWARD_ONLY} ${VPN_PORT_FORWARDING} ${API_HOST}' \
+        < "$env_template" > "$env_file" || \
         log_error "Failed to generate .env file"
 
     chmod 600 "$env_file"
