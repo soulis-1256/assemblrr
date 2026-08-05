@@ -484,63 +484,104 @@ configure_radarr() {
 
 # --- Prowlarr configuration ---
 
-# Set minimumSeeders=0 on Prowlarr app profiles and *arr indexers.
-# Peer counts from indexers are often incomplete; requiring seeders>=1 blocks valid grabs.
-relax_minimum_seeders() {
+# Set minimumSeeders=0 on Prowlarr app profiles (call once before connecting apps).
+prowlarr_set_app_profile_min_seeders() {
     local prowlarr_key="$1"
-    local radarr_key="${2:-}"
-    local sonarr_key="${3:-}"
-
     local profiles
     profiles=$(api_get "9696" "/api/v1/appprofile" "$prowlarr_key")
-    if [ -n "$profiles" ] && [ "$profiles" != "[]" ]; then
-        local profile_id profile_payload
-        while IFS= read -r row; do
-            [ -z "$row" ] && continue
-            profile_id=$(echo "$row" | jq -r '.id // empty')
-            [ -z "$profile_id" ] && continue
-            profile_payload=$(echo "$row" | jq '.minimumSeeders = 0' 2>/dev/null || echo "")
-            [ -z "$profile_payload" ] && continue
-            if api_put "9696" "/api/v1/appprofile/${profile_id}" "$prowlarr_key" "$profile_payload" >/dev/null 2>&1; then
-                log_step "Prowlarr: app profile '${profile_id}' minimumSeeders → 0"
-            fi
-        done < <(echo "$profiles" | jq -c '.[]' 2>/dev/null || true)
+    if [ -z "$profiles" ] || [ "$profiles" = "[]" ]; then
+        return 1
     fi
 
-    local port key name
-    for port_key_name in "7878:${radarr_key}:Radarr" "8989:${sonarr_key}:Sonarr"; do
-        port="${port_key_name%%:*}"
-        rest="${port_key_name#*:}"
-        key="${rest%%:*}"
-        name="${rest#*:}"
-        [ -z "$key" ] && continue
+    local updated=0
+    local profile_id profile_payload
+    while IFS= read -r row; do
+        [ -z "$row" ] && continue
+        profile_id=$(echo "$row" | jq -r '.id // empty')
+        [ -z "$profile_id" ] && continue
+        profile_payload=$(echo "$row" | jq '.minimumSeeders = 0' 2>/dev/null || echo "")
+        [ -z "$profile_payload" ] && continue
+        if api_put "9696" "/api/v1/appprofile/${profile_id}" "$prowlarr_key" "$profile_payload" >/dev/null 2>&1; then
+            updated=$((updated + 1))
+        fi
+    done < <(echo "$profiles" | jq -c '.[]' 2>/dev/null || true)
 
-        local indexers
-        indexers=$(api_get "$port" "/api/v3/indexer" "$key")
-        [ -z "$indexers" ] || [ "$indexers" = "[]" ] && continue
+    if [ "$updated" -gt 0 ]; then
+        log_step "Prowlarr: app profile minimumSeeders → 0"
+        return 0
+    fi
+    return 1
+}
 
-        while IFS= read -r idx; do
-            [ -z "$idx" ] && continue
-            local idx_id idx_payload
-            idx_id=$(echo "$idx" | jq -r '.id // empty')
-            [ -z "$idx_id" ] && continue
-            idx_payload=$(echo "$idx" | jq '
-                .fields = [.fields[] |
-                    if .name == "minimumSeeders" then .value = 0 else . end
-                ]
-            ' 2>/dev/null || echo "")
-            [ -z "$idx_payload" ] && continue
-            api_put "$port" "/api/v3/indexer/${idx_id}" "$key" "$idx_payload" >/dev/null 2>&1 || true
-        done < <(echo "$indexers" | jq -c '.[]' 2>/dev/null || true)
-        log_step "${name}: indexer minimumSeeders → 0"
+# Set minimumSeeders=0 on every indexer present in one *arr app.
+# Call after Prowlarr fullSync has created the indexers (app profile alone is not enough).
+arr_set_indexer_min_seeders() {
+    local service_name="$1"
+    local port="$2"
+    local apikey="$3"
+
+    [ -z "$apikey" ] && return 1
+
+    local indexers
+    indexers=$(api_get "$port" "/api/v3/indexer" "$apikey")
+    if [ -z "$indexers" ] || [ "$indexers" = "[]" ]; then
+        return 1
+    fi
+
+    local ok=0
+    local idx_id idx_payload result
+    while IFS= read -r idx; do
+        [ -z "$idx" ] && continue
+        idx_id=$(echo "$idx" | jq -r '.id // empty')
+        [ -z "$idx_id" ] && continue
+        idx_payload=$(echo "$idx" | jq '
+            .fields = [.fields[] |
+                if .name == "minimumSeeders" then .value = 0 else . end
+            ]
+        ' 2>/dev/null || echo "")
+        [ -z "$idx_payload" ] && continue
+        result=$(api_put "$port" "/api/v3/indexer/${idx_id}" "$apikey" "$idx_payload")
+        if echo "$result" | jq -e '.id' >/dev/null 2>&1; then
+            ok=$((ok + 1))
+        fi
+    done < <(echo "$indexers" | jq -c '.[]' 2>/dev/null || true)
+
+    if [ "$ok" -gt 0 ]; then
+        log_step "${service_name}: indexer minimumSeeders → 0 (${ok})"
+        return 0
+    fi
+    return 1
+}
+
+# Wait until Radarr has at least one indexer from Prowlarr fullSync (max ~30s).
+# Sonarr is not a gate — movie-only indexers never appear there.
+wait_for_arr_indexer_sync() {
+    local radarr_key="${1:-}"
+    local waited=0
+
+    [ -z "$radarr_key" ] && return 0
+
+    while [ $waited -lt 30 ]; do
+        local rc
+        rc=$(api_get "7878" "/api/v3/indexer" "$radarr_key" | jq 'length' 2>/dev/null || echo 0)
+        if [ "${rc:-0}" -gt 0 ]; then
+            return 0
+        fi
+        sleep 2
+        waited=$((waited + 2))
     done
+    return 1
 }
 
 configure_prowlarr() {
     local apikey="$1"
     local radarr_apikey="$2"
+    local sonarr_apikey="${3:-}"
 
-    # 1. Add Radarr as connected application
+    # 1) App profile once — so new fullSync prefers min seeders 0
+    prowlarr_set_app_profile_min_seeders "$apikey" || true
+
+    # 2. Add Radarr as connected application
     local apps
     apps=$(api_get "9696" "/api/v1/applications" "$apikey")
     local existing_impls
@@ -572,8 +613,6 @@ configure_prowlarr() {
     fi
 
     # 1b. Add Sonarr as connected application
-    local sonarr_apikey="$3"
-
     if [ -n "$sonarr_apikey" ]; then
         if ! echo "$existing_impls" | grep -q "Sonarr"; then
             local sonarr_app_payload
@@ -664,7 +703,10 @@ configure_prowlarr() {
     echo >&2
     log_success "Indexers added to Prowlarr!" >&2
 
-    relax_minimum_seeders "$apikey" "$radarr_apikey" "${sonarr_apikey:-}"
+    # 3) Patch *arr once after fullSync has created indexers (profile alone is not enough)
+    wait_for_arr_indexer_sync "$radarr_apikey" || true
+    arr_set_indexer_min_seeders "Radarr" "7878" "$radarr_apikey" || true
+    arr_set_indexer_min_seeders "Sonarr" "8989" "$sonarr_apikey" || true
 
     # 4. Set authentication
     set_arr_auth "Prowlarr" "9696" "$apikey" "v1"

@@ -10,13 +10,18 @@ Self-hosted media automation, set up in minutes, not a weekend.
 
 ## Features & Philosophy
 
-- **100% Docker Native**
-- **Fail-Safe Backups:** Built-in CLI backup & restore features snapshot your configuration before merging to prevent data corruption.
-- **Secure Networking:** First-class Gluetun VPN integration. All traffic from download clients strictly routes through the VPN context.
+- **Docker-native stack:** One Compose project, overlays for VPN vs direct access, optional services via `compose/custom.yaml` — no host package installs for the *arr suite.
+- **Guided install, multi-platform:** Interactive wizard (or express defaults) for Linux, WSL2, and Windows (PowerShell → WSL). Fail-fast VPN check before the rest of setup when VPN is enabled.
+- **Auto-wired services:** Post-install configure connects Radarr, Sonarr, Prowlarr, qBittorrent, Seerr, Recyclarr, and Jellyfin (libraries, auth, root folders, download clients) instead of a manual weekend of clicking.
+- **Quality profiles that ship ready:** Recyclarr syncs assemblrr-named HD and UHD (and TV) profiles from TRaSH Guides; setup only picks Seerr’s default. Both resolutions stay available for overrides.
+- **Request → library path:** Seerr in front of Radarr/Sonarr for a simple request UX, with hardlinks-friendly media layout for Jellyfin/Emby/Plex.
+- **VPN-first downloads:** Gluetun integration, download client traffic forced through the VPN context, `check-vpn` / start-time verification, and a vpn-watchdog for stalled routing.
+- **Operator CLI:** `start` / `stop` / `restart` / `status` / `health` / `logs`, `configure` / `reconfigure`, `backup` / `restore`, `update-containers` / `update-cli`, and a careful `uninstall` that preserves media unless you opt in.
+- **Fail-safe backups:** CLI snapshots of configuration before risky updates so you can roll back without rebuilding from scratch.
+- **Secrets outside `.env`:** Service login and VPN credentials live under `secrets/`; runtime settings stay in `.assemblrr-config` and `.env`.
+- **Optional extras:** Lidarr, SABnzbd, Bazarr, Watchtower via custom compose — deployed, not auto-configured.
 
 ## The Stack
-
-### Core (included, auto-configured)
 - **Media Server:** Jellyfin (recommended), Emby, or Plex
 - **Download Client:** qBittorrent
 - **Managers:** Sonarr, Radarr
@@ -24,14 +29,6 @@ Self-hosted media automation, set up in minutes, not a weekend.
 - **Request Management:** Seerr
 - **Quality Profiles:** Recyclarr
 - **Management:** Portainer
-
-### Optional (via `compose/custom.yaml`)
-- **Music Manager:** Lidarr
-- **Usenet Downloader:** SABnzbd
-- **Subtitles:** Bazarr
-- **Update Notifications:** Watchtower
-
-Deployed only — not auto-configured. Set them up in each service’s UI.
 
 ## Installation
 
