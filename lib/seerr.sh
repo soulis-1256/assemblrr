@@ -1,9 +1,9 @@
 #!/bin/bash
-# assemblrr Seerr & Recyclarr configuration — sourced by configure.sh
+# assemblrr Seerr & Recyclarr configuration — sourced by config.sh
 # Provides: configure_seerr, configure_recyclarr
 # Requires: lib/core.sh (logging), lib/api.sh (api_get/post helpers),
 #           lib/arr.sh (lookup_radarr_profile, lookup_sonarr_profile),
-#           configure.sh (_cfg_log_info, log_step, log_step_fail, etc.)
+#           config.sh (_cfg_log_info, log_step, log_step_fail, etc.)
 
 set -euo pipefail
 

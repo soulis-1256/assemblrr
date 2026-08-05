@@ -1,9 +1,9 @@
 #!/bin/bash
-# assemblrr Jellyfin configuration — sourced by configure.sh
+# assemblrr Jellyfin configuration — sourced by config.sh
 # Provides: configure_jellyfin, configure_jellyfin_xml_fallback,
 #           configure_jellyfin_libraries, configure_jellyfin_notifications
 # Requires: lib/core.sh (logging), lib/api.sh (api_get/post helpers),
-#           configure.sh (_cfg_log_info, log_step, log_step_fail, AUTH_USERNAME, etc.)
+#           config.sh (_cfg_log_info, log_step, log_step_fail, AUTH_USERNAME, etc.)
 
 set -euo pipefail
 

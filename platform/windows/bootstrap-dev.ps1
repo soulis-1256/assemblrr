@@ -84,7 +84,7 @@ function Copy-ProjectToWSL2 {
     $wslSourcePath = "/mnt/$driveLetter" + ($ProjectDir.Substring(2) -replace '\\', '/')
     wsl -d $Distro -- bash -c "cp -r $wslSourcePath/* /tmp/$AppName/ && cp -r $wslSourcePath/.env.example $wslSourcePath/.gitignore /tmp/$AppName/ 2>/dev/null; true"
 
-    wsl -d $Distro -- bash -c "chmod +x /tmp/$AppName/bin/setup.sh /tmp/$AppName/bin/cli.sh /tmp/$AppName/bin/docker-install.sh /tmp/$AppName/bin/configure.sh /tmp/$AppName/lib/*.sh /tmp/$AppName/scripts/*.sh 2>/dev/null"
+    wsl -d $Distro -- bash -c "chmod +x /tmp/$AppName/bin/setup.sh /tmp/$AppName/bin/cli.sh /tmp/$AppName/bin/docker-install.sh /tmp/$AppName/bin/config.sh /tmp/$AppName/lib/*.sh /tmp/$AppName/scripts/*.sh 2>/dev/null"
 
     # Convert CRLF to LF on shell scripts (Windows line endings break bash)
     wsl -d $Distro -- bash -c "sed -i 's/\r$//' /tmp/$AppName/bin/*.sh /tmp/$AppName/lib/*.sh /tmp/$AppName/branding.conf /tmp/$AppName/compose/*.yaml /tmp/$AppName/compose/examples/*.yaml /tmp/$AppName/templates/*.env /tmp/$AppName/templates/*.yml /tmp/$AppName/scripts/*.sh 2>/dev/null; true"
@@ -243,7 +243,8 @@ if [ -z "`$INSTALL_DIR" ]; then
     exit 1
 fi
 echo "Install directory: `$INSTALL_DIR"
-cp /tmp/$AppName/bin/cli.sh /tmp/$AppName/bin/setup.sh /tmp/$AppName/bin/docker-install.sh /tmp/$AppName/bin/configure.sh /tmp/$AppName/branding.conf "`$INSTALL_DIR/"
+cp /tmp/$AppName/bin/cli.sh /tmp/$AppName/bin/setup.sh /tmp/$AppName/bin/docker-install.sh /tmp/$AppName/bin/config.sh /tmp/$AppName/branding.conf "`$INSTALL_DIR/"
+rm -f "`$INSTALL_DIR/configure.sh" 2>/dev/null || true
 mkdir -p "`$INSTALL_DIR/lib"
 cp /tmp/$AppName/lib/*.sh "`$INSTALL_DIR/lib/"
 cp /tmp/$AppName/compose/base.yaml /tmp/$AppName/compose/vpn.yaml /tmp/$AppName/compose/direct-access.yaml "`$INSTALL_DIR/compose/"

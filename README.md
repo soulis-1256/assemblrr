@@ -12,11 +12,11 @@ Self-hosted media automation, set up in minutes, not a weekend.
 
 - **Docker-native stack:** One Compose project, overlays for VPN vs direct access, optional services via `compose/custom.yaml` — no host package installs for the *arr suite.
 - **Guided install, multi-platform:** Interactive wizard (or express defaults) for Linux, WSL2, and Windows (PowerShell → WSL). Fail-fast VPN check before the rest of setup when VPN is enabled.
-- **Auto-wired services:** Post-install configure connects Radarr, Sonarr, Prowlarr, qBittorrent, Seerr, Recyclarr, and Jellyfin (libraries, auth, root folders, download clients) instead of a manual weekend of clicking.
+- **Auto-wired services:** Post-install wiring connects Radarr, Sonarr, Prowlarr, qBittorrent, Seerr, Recyclarr, and Jellyfin (libraries, auth, root folders, download clients) instead of a manual weekend of clicking.
 - **Quality profiles that ship ready:** Recyclarr syncs assemblrr-named HD and UHD (and TV) profiles from TRaSH Guides; setup only picks Seerr’s default. Both resolutions stay available for overrides.
 - **Request → library path:** Seerr in front of Radarr/Sonarr for a simple request UX, with hardlinks-friendly media layout for Jellyfin/Emby/Plex.
 - **VPN-first downloads:** Gluetun integration, download client traffic forced through the VPN context, `check-vpn` / start-time verification, and a vpn-watchdog for stalled routing.
-- **Operator CLI:** `start` / `stop` / `restart` / `status` / `health` / `logs`, `configure` / `reconfigure`, `backup` / `restore`, `update-containers` / `update-cli`, and a careful `uninstall` that preserves media unless you opt in.
+- **Operator CLI:** `start` / `stop` / `restart` / `status` / `health` / `logs`, `config` (show / edit / sync), `backup` / `restore`, `update-containers` / `update-cli`, and a careful `uninstall` that preserves media unless you opt in.
 - **Fail-safe backups:** CLI snapshots of configuration before risky updates so you can roll back without rebuilding from scratch.
 - **Secrets outside `.env`:** Service login and VPN credentials live under `secrets/`; runtime settings stay in `.assemblrr-config` and `.env`.
 - **Optional extras:** Lidarr, SABnzbd, Bazarr, Watchtower via custom compose — deployed, not auto-configured.
@@ -66,9 +66,10 @@ After install, the CLI is on your `PATH` as `assemblrr`. Run `assemblrr <command
 | `status` | Show container status |
 | `health` | Show healthcheck status of all services |
 | `logs [service]` | Follow logs (all services, or one) |
-| `config` | Show current configuration |
-| `configure` | Auto-configure APIs (Radarr, Prowlarr) using jq |
-| `reconfigure` | Re-run the setup wizard |
+| `config` | List config subcommands |
+| `config show` | Show current configuration |
+| `config edit` | Re-run the setup wizard (current values as defaults) |
+| `config sync` | Re-wire service APIs (Radarr, Sonarr, Prowlarr, Seerr, …) |
 | `backup /target/dir` | Snapshot configuration |
 | `restore /backup.tar.gz` | Restore from a backup archive |
 | `update-containers` | Pull latest images and restart (offers a backup first) |
@@ -117,7 +118,7 @@ That is expected community-guide churn — not a VPN or Docker failure.
    docker exec recyclarr recyclarr list quality-profiles sonarr
    ```
 3. Update the relevant pack under `templates/recyclarr/includes/` (or the live copies in your install’s `config/recyclarr/includes/`) with the new trash IDs. Root config is `templates/recyclarr/recyclarr.yml`.
-4. Re-run sync, then refresh Seerr: `assemblrr configure`
+4. Re-run Recyclarr, then refresh app wiring: `assemblrr config sync`
 
 We try to keep templates current, but **plan on occasional manual updates** if you rely on TRaSH-backed profiles long-term. Official docs: [Recyclarr](https://recyclarr.dev/) · [TRaSH Guides](https://trash-guides.info/).
 

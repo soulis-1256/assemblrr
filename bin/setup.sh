@@ -248,7 +248,7 @@ copy_configuration_files() {
         ["templates/recyclarr/includes/sonarr-soft-cfs.yml"]="templates/recyclarr/includes/sonarr-soft-cfs.yml"
         ["branding.conf"]="branding.conf"
         ["bin/cli.sh"]="cli.sh"
-        ["bin/configure.sh"]="configure.sh"
+        ["bin/config.sh"]="config.sh"
         ["bin/setup.sh"]="setup.sh"
         ["bin/docker-install.sh"]="docker-install.sh"
         ["scripts/jellyfin-refresh.sh"]="scripts/jellyfin-refresh.sh"
@@ -660,12 +660,14 @@ if ! run_docker compose "${COMPOSE_ARGS[@]}" --profile "$media_service" up -d; t
     log_error "Failed to start ${APP_DISPLAY_NAME} services"
 fi
 
-# Auto-configure services (Radarr, Prowlarr, etc.)
-if [ -f "$install_directory/configure.sh" ]; then
-    if ! bash "$install_directory/configure.sh"; then
-        log_warning "Auto-configuration had issues. You can re-run: $APP_CLI_NAME configure"
+# Wire services (Radarr, Prowlarr, etc.)
+if [ -f "$install_directory/config.sh" ]; then
+    if ! bash "$install_directory/config.sh"; then
+        log_warning "Auto-configuration had issues. You can re-run: $APP_CLI_NAME config sync"
     fi
 fi
+# Drop legacy name if an older install left it behind
+rm -f "$install_directory/configure.sh" 2>/dev/null || true
 
 # Install CLI and set permissions
 echo

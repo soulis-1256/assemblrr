@@ -1,9 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
-# assemblrr Service Auto-Configuration
-# Configures Radarr, Prowlarr, and related services after initial deployment
-# Called by setup.sh after containers start, or via: assemblrr configure
+# assemblrr service wiring (config sync)
+# Wires Radarr, Prowlarr, and related services after initial deployment
+# Called by setup.sh after containers start, or via: assemblrr config sync
 # Uses jq for JSON parsing
 
 # --- Config discovery ---

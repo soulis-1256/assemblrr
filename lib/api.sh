@@ -1,5 +1,5 @@
 #!/bin/bash
-# assemblrr API helpers — sourced by configure.sh
+# assemblrr API helpers — sourced by config.sh
 # Provides: jq helpers, API request wrappers, API key discovery, wait_for_api
 # Requires: lib/core.sh already sourced (for logging), API_HOST and INSTALL_DIR set
 

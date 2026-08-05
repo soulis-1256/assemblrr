@@ -67,11 +67,9 @@ declare -A COMMANDS=(
     ["restore"]="restores from a backup archive"
     ["update-containers"]="updates all containers"
     ["update-cli"]="updates the CLI script to the latest version"
-    ["reconfigure"]="re-runs the setup wizard to change configuration"
     ["logs"]="shows container logs (optionally specify service name)"
     ["health"]="checks health status of all services"
-    ["config"]="shows current configuration"
-    ["configure"]="auto-configures Radarr, Prowlarr, and indexers"
+    ["config"]="configuration: show options, or run show / edit / sync"
 )
 
 # log_error_inline — same as log_error but without exit (used by check_health)
@@ -104,7 +102,10 @@ show_help() {
     echo "  ${APP_CLI_NAME} logs jellyfin       # View specific service logs"
     echo "  ${APP_CLI_NAME} health              # Check health of all services"
     echo "  ${APP_CLI_NAME} update-cli          # Update CLI to latest version"
-    echo "  ${APP_CLI_NAME} reconfigure         # Re-run setup wizard"
+    echo "  ${APP_CLI_NAME} config              # List config subcommands"
+    echo "  ${APP_CLI_NAME} config show         # Show current configuration"
+    echo "  ${APP_CLI_NAME} config edit         # Re-run setup wizard"
+    echo "  ${APP_CLI_NAME} config sync         # Re-wire service APIs"
 }
 
 wait_for_services() {
@@ -478,6 +479,78 @@ show_config() {
     done
 }
 
+show_config_help() {
+    echo "Usage: ${APP_CLI_NAME} config [subcommand]"
+    echo
+    echo "Subcommands:"
+    printf "  %-12s %s\n" "show" "Show current configuration"
+    printf "  %-12s %s\n" "edit" "Re-run the setup wizard (current values as defaults)"
+    printf "  %-12s %s\n" "sync" "Re-wire service APIs (Radarr, Sonarr, Prowlarr, Seerr, …)"
+    echo
+    echo "Examples:"
+    echo "  ${APP_CLI_NAME} config           # List config options"
+    echo "  ${APP_CLI_NAME} config show      # Show configuration"
+    echo "  ${APP_CLI_NAME} config edit      # Change install choices"
+    echo "  ${APP_CLI_NAME} config sync      # Repair / re-apply app wiring"
+}
+
+# Re-run setup wizard (write files, restart stack, wire apps)
+config_edit() {
+    echo "Re-running ${APP_DISPLAY_NAME} setup wizard..."
+    echo "Current configuration will be used as defaults."
+    echo
+
+    local setup_script
+    if [ -f "$INSTALL_DIR/setup.sh" ]; then
+        setup_script="$INSTALL_DIR/setup.sh"
+    else
+        local tmp_dir
+        tmp_dir=$(mktemp -d)
+        if ! git clone --depth=1 "${APP_REPO_URL}" "$tmp_dir/assemblrr" 2>/dev/null; then
+            log_error "Failed to clone ${APP_REPO_URL}. Check your internet connection and repository access."
+        fi
+        setup_script="$tmp_dir/assemblrr/bin/setup.sh"
+    fi
+
+    bash "$setup_script"
+}
+
+# Re-wire service APIs only (post-install automation)
+config_sync() {
+    if [ -f "$INSTALL_DIR/config.sh" ]; then
+        bash "$INSTALL_DIR/config.sh"
+    elif [ -f "$INSTALL_DIR/configure.sh" ]; then
+        # Legacy install name
+        bash "$INSTALL_DIR/configure.sh"
+    else
+        log_error "config.sh not found in $INSTALL_DIR"
+    fi
+}
+
+config_cmd() {
+    local sub=${1:-}
+    case "$sub" in
+        "")
+            show_config_help
+            ;;
+        show)
+            show_config
+            ;;
+        edit)
+            config_edit
+            ;;
+        sync)
+            config_sync
+            ;;
+        --help|-h|help)
+            show_config_help
+            ;;
+        *)
+            log_error "Unknown config subcommand: $sub\nRun '${APP_CLI_NAME} config' for usage"
+            ;;
+    esac
+}
+
 restore_app() {
     local backup_file="$1"
 
@@ -594,27 +667,6 @@ update_cli() {
     [ -n "$tmp_dir" ] && rm -rf "$tmp_dir"
 }
 
-reconfigure_app() {
-    echo "Re-running ${APP_DISPLAY_NAME} setup wizard..."
-    echo "Current configuration will be used as defaults."
-    echo
-
-    # Find the setup script — could be in install dir or need to be cloned
-    local setup_script
-    if [ -f "$INSTALL_DIR/setup.sh" ]; then
-        setup_script="$INSTALL_DIR/setup.sh"
-    else
-        local tmp_dir
-        tmp_dir=$(mktemp -d)
-        if ! git clone --depth=1 "${APP_REPO_URL}" "$tmp_dir/assemblrr" 2>/dev/null; then
-            log_error "Failed to clone ${APP_REPO_URL}. Check your internet connection and repository access."
-        fi
-        setup_script="$tmp_dir/assemblrr/bin/setup.sh"
-    fi
-
-    bash "$setup_script"
-}
-
 main() {
     local command=${1:-"--help"}
     local destination=${2:-.}
@@ -661,9 +713,6 @@ main() {
         update-cli)
             update_cli
             ;;
-        reconfigure)
-            reconfigure_app
-            ;;
         logs)
             show_logs "$@"
             ;;
@@ -671,14 +720,16 @@ main() {
             check_health
             ;;
         config)
-            show_config
+            config_cmd "${2:-}"
+            ;;
+        # Deprecated aliases (hidden from help)
+        reconfigure)
+            log_warning "'reconfigure' is deprecated — use: ${APP_CLI_NAME} config edit"
+            config_edit
             ;;
         configure)
-            if [ -f "$INSTALL_DIR/configure.sh" ]; then
-                bash "$INSTALL_DIR/configure.sh"
-            else
-                log_error "configure.sh not found in $INSTALL_DIR"
-            fi
+            log_warning "'configure' is deprecated — use: ${APP_CLI_NAME} config sync"
+            config_sync
             ;;
         *)
             log_error "Unknown command: $command\nRun '${APP_CLI_NAME} --help' for usage information"
