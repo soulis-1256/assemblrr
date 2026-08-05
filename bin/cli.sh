@@ -351,6 +351,11 @@ uninstall_app() {
     done
     rmdir "$HOME/.local/bin/lib" 2>/dev/null || true
 
+    # Setup writes this cheat-sheet under $HOME (outside the install dir)
+    if [ -n "${APP_SERVICE_FILE:-}" ]; then
+        rm -f "$HOME/${APP_SERVICE_FILE}" 2>/dev/null || true
+    fi
+
     log_success "${APP_DISPLAY_NAME} has been uninstalled!"
     log_info "Docker images were left on disk — see docs/uninstall.md to remove them."
 }

@@ -37,24 +37,17 @@ No named Docker volumes are used — all state lives in the two directories abov
 
 ```bash
 assemblrr backup ~/my-backup        # optional, but recommended first
-assemblrr uninstall                 # interactive: asks before deleting anything
+assemblrr uninstall                 # interactive prompts — read them before confirming
 ```
 
-The interactive uninstall:
-
-- stops and removes all containers, volumes, and the Docker network
-- asks before deleting the install directory (type the full path to confirm)
-- asks before deleting the media directory (type the full path to confirm)
-
-Variants:
+Non-interactive:
 
 ```bash
-assemblrr uninstall --force         # no prompts; deletes everything EXCEPT media
-assemblrr uninstall --force --media # no prompts; deletes everything INCLUDING media
+assemblrr uninstall --force         # no prompts; keeps media
+assemblrr uninstall --force --media # no prompts; deletes media too
 ```
 
-`--force` never deletes your media directory unless you also pass `--media` —
-media is your actual content and is treated as opt-in deletion.
+`--force` alone never deletes your media directory; pass `--media` to opt in.
 
 ## Option 2 — CLI missing from PATH (install is otherwise complete)
 
