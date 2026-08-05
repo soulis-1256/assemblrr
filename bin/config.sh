@@ -1,10 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
-# assemblrr service wiring (config sync)
-# Wires Radarr, Prowlarr, and related services after initial deployment
-# Called by setup.sh after containers start, or via: assemblrr config sync
-# Uses jq for JSON parsing
+# assemblrr service wiring — setup + `assemblrr config sync`
+# Exit 0 if all required steps succeed; exit 1 if any required step fails.
+# Required failures are counted and the script keeps going so you see a full report.
 
 # --- Config discovery ---
 
@@ -65,12 +64,39 @@ CONFIGURE_LOG="/tmp/${APP_NAME}-configure-$(date '+%Y%m%d-%H%M%S').log"
 # Extended logging for configure (step markers on top of lib/core.sh base, tee to log file)
 _cfg_log_info() { echo "  $1" | tee -a "$CONFIGURE_LOG"; }
 
-# Track step counts for end-of-run summary
+# Step markers for the summary line (exit code uses _wire_critical_fail)
 _configure_total=0
 _configure_ok=0
 _configure_fail=0
 log_step() { echo -e " ${GREEN}✓${NC} $1" | tee -a "$CONFIGURE_LOG"; _configure_ok=$((_configure_ok + 1)); _configure_total=$((_configure_total + 1)); }
 log_step_fail() { echo -e " ${RED}✗${NC} $1" | tee -a "$CONFIGURE_LOG"; _configure_fail=$((_configure_fail + 1)); _configure_total=$((_configure_total + 1)); }
+
+_wire_critical_fail=0
+_wire_optional_fail=0
+
+# Required step: on failure count and continue
+run_critical() {
+    set +e
+    "$@"
+    local rc=$?
+    set -e
+    if [ "$rc" -ne 0 ]; then
+        _wire_critical_fail=$((_wire_critical_fail + 1))
+    fi
+    return 0
+}
+
+# Nice-to-have step: never fails the overall run
+run_optional() {
+    set +e
+    "$@"
+    local rc=$?
+    set -e
+    if [ "$rc" -ne 0 ]; then
+        _wire_optional_fail=$((_wire_optional_fail + 1))
+    fi
+    return 0
+}
 
 # Prompt for custom indexers (fzf TUI)
 source "$_lib_dir/fzf-tui.sh"
@@ -86,88 +112,107 @@ source "$_lib_dir/seerr.sh"
 # --- Main ---
 
 echo
-_cfg_log_info "Auto-configuring ${APP_DISPLAY_NAME} services..."
+_cfg_log_info "Wiring ${APP_DISPLAY_NAME} services..."
 echo
 
-# Read API keys from config.xml (created by services on first start)
-RADARR_API_KEY=$(read_api_key "radarr") || RADARR_API_KEY=""
-SONARR_API_KEY=$(read_api_key "sonarr") || SONARR_API_KEY=""
-PROWLARR_API_KEY=$(read_api_key "prowlarr") || PROWLARR_API_KEY=""
+# API keys from config.xml (services write these on first start)
+RADARR_API_KEY=""
+SONARR_API_KEY=""
+PROWLARR_API_KEY=""
 
-if [ -z "$RADARR_API_KEY" ]; then
-    log_step_fail "Cannot read Radarr API key — skipping Radarr configuration"
+if ! RADARR_API_KEY=$(read_api_key "radarr"); then
+    RADARR_API_KEY=""
+    _wire_critical_fail=$((_wire_critical_fail + 1))
 fi
 
-if [ -z "$SONARR_API_KEY" ]; then
-    log_step_fail "Cannot read Sonarr API key — skipping Sonarr configuration"
+if ! SONARR_API_KEY=$(read_api_key "sonarr"); then
+    SONARR_API_KEY=""
+    _wire_critical_fail=$((_wire_critical_fail + 1))
 fi
 
-if [ -z "$PROWLARR_API_KEY" ]; then
-    log_step_fail "Cannot read Prowlarr API key — skipping Prowlarr configuration"
+if ! PROWLARR_API_KEY=$(read_api_key "prowlarr"); then
+    PROWLARR_API_KEY=""
+    _wire_critical_fail=$((_wire_critical_fail + 1))
 fi
 
-# Wait for APIs to be fully ready
+# Drop key if API never becomes ready so later steps skip that service
 if [ -n "$RADARR_API_KEY" ]; then
-    wait_for_api "Radarr" "7878" "$RADARR_API_KEY" || true
+    if ! wait_for_api "Radarr" "7878" "$RADARR_API_KEY"; then
+        _wire_critical_fail=$((_wire_critical_fail + 1))
+        RADARR_API_KEY=""
+    fi
 fi
 
 if [ -n "$SONARR_API_KEY" ]; then
-    wait_for_api "Sonarr" "8989" "$SONARR_API_KEY" || true
+    if ! wait_for_api "Sonarr" "8989" "$SONARR_API_KEY"; then
+        _wire_critical_fail=$((_wire_critical_fail + 1))
+        SONARR_API_KEY=""
+    fi
 fi
 
 if [ -n "$PROWLARR_API_KEY" ]; then
-    wait_for_api "Prowlarr" "9696" "$PROWLARR_API_KEY" "/api/v1/system/status" || true
-    configure_indexers "$PROWLARR_API_KEY"
+    if wait_for_api "Prowlarr" "9696" "$PROWLARR_API_KEY" "/api/v1/system/status"; then
+        run_optional configure_indexers "$PROWLARR_API_KEY"
+    else
+        _wire_critical_fail=$((_wire_critical_fail + 1))
+        PROWLARR_API_KEY=""
+    fi
 fi
 
-# Set qBittorrent credentials once (before configuring any *arr service)
 if [ -n "$RADARR_API_KEY" ] || [ -n "$SONARR_API_KEY" ]; then
-    qbit_set_credentials || true
+    run_critical qbit_set_credentials
 fi
 
-# Configure services
 if [ -n "$RADARR_API_KEY" ]; then
-    configure_radarr "$RADARR_API_KEY" || true
+    run_critical configure_radarr "$RADARR_API_KEY"
 fi
 
 if [ -n "$SONARR_API_KEY" ]; then
-    configure_sonarr "$SONARR_API_KEY" || true
+    run_critical configure_sonarr "$SONARR_API_KEY"
 fi
 
 if [ -n "$PROWLARR_API_KEY" ]; then
-    configure_prowlarr "$PROWLARR_API_KEY" "$RADARR_API_KEY" "$SONARR_API_KEY" || true
+    run_critical configure_prowlarr "$PROWLARR_API_KEY" "$RADARR_API_KEY" "$SONARR_API_KEY"
 fi
 
 if [ "${MEDIA_SERVICE:-}" = "jellyfin" ]; then
-    configure_jellyfin || true
-    configure_jellyfin_notifications || true
+    run_critical configure_jellyfin
+    run_optional configure_jellyfin_notifications
 fi
 
-# Configure Recyclarr (must run before Seerr so quality profiles exist in Radarr/Sonarr)
-configure_recyclarr || true
+# Recyclarr before Seerr (profiles must exist for Seerr defaults)
+run_critical configure_recyclarr
 
-# Enforce minSize=0 and record preferred quality profiles after Recyclarr sync.
 if [ -n "$RADARR_API_KEY" ]; then
-    relax_quality_sizes "Radarr" "7878" "$RADARR_API_KEY" || true
-    set_default_quality_profile "Radarr" "7878" "$RADARR_API_KEY" "lookup_radarr_profile" || true
+    run_critical relax_quality_sizes "Radarr" "7878" "$RADARR_API_KEY"
+    run_critical set_default_quality_profile "Radarr" "7878" "$RADARR_API_KEY" "lookup_radarr_profile"
 fi
 if [ -n "$SONARR_API_KEY" ]; then
-    relax_quality_sizes "Sonarr" "8989" "$SONARR_API_KEY" || true
-    set_default_quality_profile "Sonarr" "8989" "$SONARR_API_KEY" "lookup_sonarr_profile" || true
+    run_critical relax_quality_sizes "Sonarr" "8989" "$SONARR_API_KEY"
+    run_critical set_default_quality_profile "Sonarr" "8989" "$SONARR_API_KEY" "lookup_sonarr_profile"
 fi
 
-# Configure Seerr (must run after media server is configured AND Recyclarr has synced profiles)
-configure_seerr || true
+run_critical configure_seerr
 
-# Show compact summary
-if [ "${_configure_fail:-0}" -gt 0 ]; then
+echo
+if [ "$_wire_critical_fail" -gt 0 ]; then
+    echo -e "  ${RED}Wiring failed: ${_wire_critical_fail} required step(s)${NC}" | tee -a "$CONFIGURE_LOG"
+    if [ "$_configure_ok" -gt 0 ] || [ "$_configure_fail" -gt 0 ]; then
+        echo -e "  ${YELLOW}${_configure_ok} ok, ${_configure_fail} failed (see markers above)${NC}" | tee -a "$CONFIGURE_LOG"
+    fi
+    echo -e "  ${YELLOW}Log: $CONFIGURE_LOG${NC}" | tee -a "$CONFIGURE_LOG"
     echo
-    echo -e "  ${YELLOW}${_configure_ok} succeeded, ${_configure_fail} failed${NC}"
-    echo -e "  ${YELLOW}Details: $CONFIGURE_LOG${NC}"
+    _cfg_log_info "Fix issues, then: ${APP_CLI_NAME:-assemblrr} config sync"
+    echo
+    exit 1
+fi
+
+if [ "$_configure_fail" -gt 0 ] || [ "$_wire_optional_fail" -gt 0 ]; then
+    echo -e "  ${GREEN}Required wiring succeeded${NC}" | tee -a "$CONFIGURE_LOG"
+    echo -e "  ${YELLOW}Some optional steps had issues — log: $CONFIGURE_LOG${NC}" | tee -a "$CONFIGURE_LOG"
     echo
 else
-    echo
-    echo -e "  ${GREEN}All ${_configure_ok} steps succeeded${NC}"
+    echo -e "  ${GREEN}All ${_configure_ok} steps succeeded${NC}" | tee -a "$CONFIGURE_LOG"
     echo
 fi
 
@@ -185,3 +230,5 @@ echo
 if [ -n "$AUTH_USERNAME" ]; then
     _cfg_log_info "Login credentials: $AUTH_USERNAME / (the password you set during setup)"
 fi
+
+exit 0

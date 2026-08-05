@@ -16,13 +16,15 @@ set_arr_auth() {
     local api_version="${4:-v3}"
 
     if [ -z "$AUTH_USERNAME" ] || [ -z "$AUTH_PASSWORD" ]; then
-        return
+        log_step_fail "${service_name}: auth credentials missing — cannot enable forms auth"
+        return 1
     fi
 
     local host_config
     host_config=$(api_get "$port" "/api/${api_version}/config/host" "$apikey")
     if [ -z "$host_config" ]; then
-        return
+        log_step_fail "${service_name}: failed to read host config for authentication"
+        return 1
     fi
 
     local host_id
@@ -33,17 +35,19 @@ set_arr_auth() {
     updated_config=$(echo "$host_config" | jq --arg hid "$host_id" --arg user "$AUTH_USERNAME" --arg pass "$AUTH_PASSWORD" \
         '.id = ($hid | tonumber) | .authenticationMethod = "forms" | .authenticationRequired = "enabled" | .username = $user | .password = $pass | .passwordConfirmation = $pass' 2>/dev/null || echo "")
 
-    if [ -n "$updated_config" ]; then
-        local auth_result
-        auth_result=$(api_put "$port" "/api/${api_version}/config/host" "$apikey" "$updated_config")
-        if jq_json_has_key "$auth_result" "id"; then
-            log_step "${service_name}: set authentication (username: $AUTH_USERNAME)"
-        else
-            log_step_fail "${service_name}: failed to set authentication"
-        fi
-    else
+    if [ -z "$updated_config" ]; then
         log_step_fail "${service_name}: failed to build auth config payload"
+        return 1
     fi
+
+    local auth_result
+    auth_result=$(api_put "$port" "/api/${api_version}/config/host" "$apikey" "$updated_config")
+    if jq_json_has_key "$auth_result" "id"; then
+        log_step "${service_name}: set authentication (username: $AUTH_USERNAME)"
+        return 0
+    fi
+    log_step_fail "${service_name}: failed to set authentication"
+    return 1
 }
 
 # --- qBittorrent helpers ---
@@ -128,25 +132,28 @@ qbit_create_category() {
         "http://${API_HOST}:${qbit_port}/api/v2/auth/login" 2>/dev/null >/dev/null || true
     local qbit_sid
     qbit_sid=$(qbit_cookie_sid "$qbit_cookie_jar")
-    if [ -n "$qbit_sid" ]; then
-        # createCategory + editCategory so savePath is set whether the category is new or existing
-        curl -s --connect-timeout 10 \
-            "http://${API_HOST}:${qbit_port}/api/v2/torrents/createCategory" \
-            -b "$qbit_cookie_jar" \
-            -H "Referer: http://${API_HOST}:${qbit_port}" \
-            -d "category=${category}&savePath=${save_path}" \
-            2>/dev/null >/dev/null || true
-        curl -s --connect-timeout 10 \
-            "http://${API_HOST}:${qbit_port}/api/v2/torrents/editCategory" \
-            -b "$qbit_cookie_jar" \
-            -H "Referer: http://${API_HOST}:${qbit_port}" \
-            -d "category=${category}&savePath=${save_path}" \
-            2>/dev/null >/dev/null || true
-        log_step "${service_name}: qBittorrent '${category}' category → ${save_path}"
-    else
+    if [ -z "$qbit_sid" ]; then
         log_step_fail "${service_name}: could not login to qBittorrent to create categories"
+        rm -f "$qbit_cookie_jar"
+        return 1
     fi
+
+    # createCategory + editCategory so savePath is set whether the category is new or existing
+    curl -s --connect-timeout 10 \
+        "http://${API_HOST}:${qbit_port}/api/v2/torrents/createCategory" \
+        -b "$qbit_cookie_jar" \
+        -H "Referer: http://${API_HOST}:${qbit_port}" \
+        -d "category=${category}&savePath=${save_path}" \
+        2>/dev/null >/dev/null || true
+    curl -s --connect-timeout 10 \
+        "http://${API_HOST}:${qbit_port}/api/v2/torrents/editCategory" \
+        -b "$qbit_cookie_jar" \
+        -H "Referer: http://${API_HOST}:${qbit_port}" \
+        -d "category=${category}&savePath=${save_path}" \
+        2>/dev/null >/dev/null || true
+    log_step "${service_name}: qBittorrent '${category}' category → ${save_path}"
     rm -f "$qbit_cookie_jar"
+    return 0
 }
 
 # --- Shared *arr service configuration ---
@@ -170,6 +177,7 @@ configure_arr_service() {
     local category_path="$6"
     local unmonitor_field="$7"
     local naming_jq="$8"
+    local critical_errors=0
 
     # 1. Add root folder
     local root_folders
@@ -184,6 +192,7 @@ configure_arr_service() {
             log_step "${service_name}: added ${root_path} as root folder"
         else
             log_step_fail "${service_name}: failed to add root folder"
+            critical_errors=$((critical_errors + 1))
         fi
     else
         log_step "${service_name}: root folder ${root_path} already exists"
@@ -248,16 +257,20 @@ configure_arr_service() {
                 log_step "${service_name}: added qBittorrent as download client (host: ${QBITTORRENT_HOST})"
             else
                 log_step_fail "${service_name}: failed to add qBittorrent download client"
+                critical_errors=$((critical_errors + 1))
             fi
         else
             log_step_fail "${service_name}: failed to build qBittorrent payload"
+            critical_errors=$((critical_errors + 1))
         fi
     else
         log_step "${service_name}: qBittorrent download client already exists"
     fi
 
     # 2b. Create qBittorrent category with correct save path
-    qbit_create_category "$service_name" "$category_name" "$category_path"
+    if ! qbit_create_category "$service_name" "$category_name" "$category_path"; then
+        critical_errors=$((critical_errors + 1))
+    fi
 
     # 2c. Enable hardlinks in Media Management
     local mediamgmt
@@ -276,7 +289,7 @@ configure_arr_service() {
         fi
     fi
 
-    # 3. Set naming convention (if jq expression provided)
+    # 3. Set naming convention
     if [ -n "$naming_jq" ]; then
         local naming
         naming=$(api_get "$port" "/api/v3/config/naming" "$apikey")
@@ -298,7 +311,11 @@ configure_arr_service() {
     fi
 
     # 4. Set authentication
-    set_arr_auth "$service_name" "$port" "$apikey"
+    if ! set_arr_auth "$service_name" "$port" "$apikey"; then
+        critical_errors=$((critical_errors + 1))
+    fi
+
+    [ "$critical_errors" -eq 0 ]
 }
 
 # --- Quality sizes & default profiles ---
@@ -577,8 +594,9 @@ configure_prowlarr() {
     local apikey="$1"
     local radarr_apikey="$2"
     local sonarr_apikey="${3:-}"
+    local critical_errors=0
 
-    # 1) App profile once — so new fullSync prefers min seeders 0
+    # 1) App profile min seeders (best-effort)
     prowlarr_set_app_profile_min_seeders "$apikey" || true
 
     # 2. Add Radarr as connected application
@@ -586,27 +604,34 @@ configure_prowlarr() {
     apps=$(api_get "9696" "/api/v1/applications" "$apikey")
     local existing_impls
     existing_impls=$(jq_json_list_values "$apps" "implementationName")
+    local app_schema=""
 
     if ! echo "$existing_impls" | grep -q "Radarr"; then
-        # Get the Radarr application schema first to get correct field names
-        local app_schema
-        app_schema=$(api_get "9696" "/api/v1/applications/schema" "$apikey")
-        local app_payload
-        app_payload=$(echo "$app_schema" | jq --arg prowlarr_url "$PROWLARR_DOCKER_URL" --arg radarr_url "$RADARR_DOCKER_URL" --arg radarr_key "$radarr_apikey" '
-            [.[] | select(.implementationName == "Radarr")][0] |
-            .fields = [.fields[] | if .name == "prowlarrUrl" then .value = $prowlarr_url elif .name == "baseUrl" then .value = $radarr_url elif .name == "apiKey" then .value = $radarr_key elif .name == "syncCategories" then .value = [2000] elif .name == "syncRejectBlocklistedTorrentHashesWhileGrabbing" then .value = false else . end] |
-            .enable = true | .syncLevel = "fullSync" | .name = "Radarr" | .priority = (.priority // 25) | .tags = []
-        ' 2>/dev/null || echo "")
-        if [ -z "$app_payload" ]; then
-            log_step_fail "Prowlarr: Radarr application schema not found"
-            return 0
-        fi
-        local app_result
-        app_result=$(api_post_force "9696" "/api/v1/applications" "$apikey" "$app_payload")
-        if jq_json_has_key "$app_result" "id"; then
-            log_step "Prowlarr: added Radarr as connected application"
+        if [ -z "$radarr_apikey" ]; then
+            log_step_fail "Prowlarr: Radarr API key missing — cannot connect application"
+            critical_errors=$((critical_errors + 1))
         else
-            log_step_fail "Prowlarr: failed to add Radarr application"
+            # Get application schema once for Radarr/Sonarr field names
+            app_schema=$(api_get "9696" "/api/v1/applications/schema" "$apikey")
+            local app_payload
+            app_payload=$(echo "$app_schema" | jq --arg prowlarr_url "$PROWLARR_DOCKER_URL" --arg radarr_url "$RADARR_DOCKER_URL" --arg radarr_key "$radarr_apikey" '
+                [.[] | select(.implementationName == "Radarr")][0] |
+                .fields = [.fields[] | if .name == "prowlarrUrl" then .value = $prowlarr_url elif .name == "baseUrl" then .value = $radarr_url elif .name == "apiKey" then .value = $radarr_key elif .name == "syncCategories" then .value = [2000] elif .name == "syncRejectBlocklistedTorrentHashesWhileGrabbing" then .value = false else . end] |
+                .enable = true | .syncLevel = "fullSync" | .name = "Radarr" | .priority = (.priority // 25) | .tags = []
+            ' 2>/dev/null || echo "")
+            if [ -z "$app_payload" ]; then
+                log_step_fail "Prowlarr: Radarr application schema not found"
+                critical_errors=$((critical_errors + 1))
+            else
+                local app_result
+                app_result=$(api_post_force "9696" "/api/v1/applications" "$apikey" "$app_payload")
+                if jq_json_has_key "$app_result" "id"; then
+                    log_step "Prowlarr: added Radarr as connected application"
+                else
+                    log_step_fail "Prowlarr: failed to add Radarr application"
+                    critical_errors=$((critical_errors + 1))
+                fi
+            fi
         fi
     else
         log_step "Prowlarr: Radarr application already connected"
@@ -615,6 +640,9 @@ configure_prowlarr() {
     # 1b. Add Sonarr as connected application
     if [ -n "$sonarr_apikey" ]; then
         if ! echo "$existing_impls" | grep -q "Sonarr"; then
+            if [ -z "$app_schema" ]; then
+                app_schema=$(api_get "9696" "/api/v1/applications/schema" "$apikey")
+            fi
             local sonarr_app_payload
             sonarr_app_payload=$(echo "$app_schema" | jq --arg prowlarr_url "$PROWLARR_DOCKER_URL" --arg sonarr_url "$SONARR_DOCKER_URL" --arg sonarr_key "$sonarr_apikey" '
                 [.[] | select(.implementationName == "Sonarr")][0] |
@@ -623,6 +651,7 @@ configure_prowlarr() {
             ' 2>/dev/null || echo "")
             if [ -z "$sonarr_app_payload" ]; then
                 log_step_fail "Prowlarr: Sonarr application schema not found"
+                critical_errors=$((critical_errors + 1))
             else
                 local sonarr_app_result
                 sonarr_app_result=$(api_post_force "9696" "/api/v1/applications" "$apikey" "$sonarr_app_payload")
@@ -630,6 +659,7 @@ configure_prowlarr() {
                     log_step "Prowlarr: added Sonarr as connected application"
                 else
                     log_step_fail "Prowlarr: failed to add Sonarr application"
+                    critical_errors=$((critical_errors + 1))
                 fi
             fi
         else
@@ -637,79 +667,89 @@ configure_prowlarr() {
         fi
     fi
 
-    # 2. Add selected indexers
-    echo "Adding ${#SELECTED_INDEXERS[@]} indexer(s) to Prowlarr" >&2
+    # 2. Selected indexers (optional; can add later in UI)
     local indexer_schemas
     indexer_schemas=$(api_get "9696" "/api/v1/indexer/schema" "$apikey")
 
     if [ -z "$indexer_schemas" ]; then
         log_step_fail "Prowlarr: failed to fetch indexer schemas"
-        return 0
-    fi
-
-    # Get existing indexers to avoid duplicates
-    local existing_indexers
-    existing_indexers=$(api_get "9696" "/api/v1/indexer" "$apikey")
-    local existing_names
-    existing_names=$(jq_json_list_values "$existing_indexers" "name")
-
-    for indexer_name in ${SELECTED_INDEXERS[@]+"${SELECTED_INDEXERS[@]}"}; do
-        # Skip if already added
-        if echo "$existing_names" | grep -q -F -x "$indexer_name"; then
-            log_step "Prowlarr: ${indexer_name} indexer already exists"
-            continue
+    else
+        local selected_indexers=()
+        if [ -n "${SELECTED_INDEXERS+x}" ] && [ "${#SELECTED_INDEXERS[@]}" -gt 0 ]; then
+            selected_indexers=("${SELECTED_INDEXERS[@]}")
+            echo "Adding ${#selected_indexers[@]} indexer(s) to Prowlarr" >&2
         fi
 
-        # Build the indexer payload using jq to safely extract from schema
-        # Cardigann indexers use 'name' field to match, not implementationName
-        # Skip empty field values — Prowlarr uses Cardigann definition defaults
-        # Add as disabled for Cloudflare-protected indexers (need FlareSolverr)
-        local indexer_payload
-        indexer_payload=$(echo "$indexer_schemas" | jq --arg idx "$indexer_name" '
-            [.[] | select(.name == $idx or (.name | ascii_downcase | startswith($idx | ascii_downcase)))][0] |
-            .fields = [.fields[] | select(.value != "") | {name: .name, value: .value}] |
-            .enable = true | .enableAutoSearch = true | .appProfileId = 1 | .priority = (.priority // 25)
-        ' 2>/dev/null || echo "")
+        # Get existing indexers to avoid duplicates
+        local existing_indexers
+        existing_indexers=$(api_get "9696" "/api/v1/indexer" "$apikey")
+        local existing_names
+        existing_names=$(jq_json_list_values "$existing_indexers" "name")
 
-        if [ -z "$indexer_payload" ]; then
-            log_step_fail "Prowlarr: ${indexer_name} schema not found"
-            continue
-        fi
+        local indexer_name
+        for indexer_name in "${selected_indexers[@]+"${selected_indexers[@]}"}"; do
+            # Skip if already added
+            if echo "$existing_names" | grep -q -F -x "$indexer_name"; then
+                log_step "Prowlarr: ${indexer_name} indexer already exists"
+                continue
+            fi
 
-        # Try adding with forceSave to bypass connectivity validation
-        # If that fails (e.g. Cloudflare), retry with enable=false
-        local idx_result
-        idx_result=$(curl -s --connect-timeout 5 -X POST \
-            -H "Content-Type: application/json" \
-            -d "$indexer_payload" \
-            "http://${API_HOST}:9696/api/v1/indexer?apikey=${apikey}&forceSave=true" 2>/dev/null)
-        if jq_json_has_key "$idx_result" "id"; then
-            log_step "Prowlarr: added ${indexer_name} indexer"
-        else
-            # Retry with enable=false
-            local disabled_payload
-            disabled_payload=$(echo "$indexer_payload" | jq -c '.enable = false' 2>/dev/null || echo "")
+            # Build the indexer payload using jq to safely extract from schema
+            # Cardigann indexers use 'name' field to match, not implementationName
+            # Skip empty field values — Prowlarr uses Cardigann definition defaults
+            local indexer_payload
+            indexer_payload=$(echo "$indexer_schemas" | jq --arg idx "$indexer_name" '
+                [.[] | select(.name == $idx or (.name | ascii_downcase | startswith($idx | ascii_downcase)))][0] |
+                .fields = [.fields[] | select(.value != "") | {name: .name, value: .value}] |
+                .enable = true | .enableAutoSearch = true | .appProfileId = 1 | .priority = (.priority // 25)
+            ' 2>/dev/null || echo "")
+
+            if [ -z "$indexer_payload" ]; then
+                log_step_fail "Prowlarr: ${indexer_name} schema not found"
+                continue
+            fi
+
+            # Try adding with forceSave to bypass connectivity validation
+            # If that fails (e.g. Cloudflare), retry with enable=false
+            local idx_result
             idx_result=$(curl -s --connect-timeout 5 -X POST \
                 -H "Content-Type: application/json" \
-                -d "$disabled_payload" \
+                -d "$indexer_payload" \
                 "http://${API_HOST}:9696/api/v1/indexer?apikey=${apikey}&forceSave=true" 2>/dev/null)
             if jq_json_has_key "$idx_result" "id"; then
-                log_step "Prowlarr: added ${indexer_name} indexer (disabled — needs FlareSolverr for Cloudflare)"
+                log_step "Prowlarr: added ${indexer_name} indexer"
             else
-                log_step_fail "Prowlarr: failed to add ${indexer_name} indexer"
+                # Retry with enable=false
+                local disabled_payload
+                disabled_payload=$(echo "$indexer_payload" | jq -c '.enable = false' 2>/dev/null || echo "")
+                idx_result=$(curl -s --connect-timeout 5 -X POST \
+                    -H "Content-Type: application/json" \
+                    -d "$disabled_payload" \
+                    "http://${API_HOST}:9696/api/v1/indexer?apikey=${apikey}&forceSave=true" 2>/dev/null)
+                if jq_json_has_key "$idx_result" "id"; then
+                    log_step "Prowlarr: added ${indexer_name} indexer (disabled — needs FlareSolverr for Cloudflare)"
+                else
+                    log_step_fail "Prowlarr: failed to add ${indexer_name} indexer"
+                fi
             fi
+        done
+        if [ "${#selected_indexers[@]}" -gt 0 ]; then
+            echo >&2
+            log_success "Indexer setup finished (check markers above for any failures)" >&2
         fi
-    done
-    echo >&2
-    log_success "Indexers added to Prowlarr!" >&2
+    fi
 
-    # 3) Patch *arr once after fullSync has created indexers (profile alone is not enough)
+    # 3) After fullSync, set min seeders on *arr indexers (best-effort)
     wait_for_arr_indexer_sync "$radarr_apikey" || true
     arr_set_indexer_min_seeders "Radarr" "7878" "$radarr_apikey" || true
     arr_set_indexer_min_seeders "Sonarr" "8989" "$sonarr_apikey" || true
 
     # 4. Set authentication
-    set_arr_auth "Prowlarr" "9696" "$apikey" "v1"
+    if ! set_arr_auth "Prowlarr" "9696" "$apikey" "v1"; then
+        critical_errors=$((critical_errors + 1))
+    fi
+
+    [ "$critical_errors" -eq 0 ]
 }
 
 # --- Sonarr configuration ---

@@ -296,12 +296,14 @@ configure_seerr() {
 
             echo "Connecting Seerr services" >&2
 
+            local connect_errors=0
             if [ -n "$RADARR_API_KEY" ]; then
                 local radarr_id
                 radarr_id=$(seerr_service_id "radarr" "$seerr_cookie_jar" || true)
                 if ! seerr_connect_service "radarr" 7878 "$RADARR_API_KEY" "lookup_radarr_profile" \
                     "/data/media/movies" "${SEERR_IS_4K:-false}" "$seerr_cookie_jar" "$radarr_id"; then
                     log_step_fail "Seerr: failed to configure Radarr (re-run to retry)"
+                    connect_errors=$((connect_errors + 1))
                 fi
             fi
 
@@ -311,12 +313,14 @@ configure_seerr() {
                 if ! seerr_connect_service "sonarr" 8989 "$SONARR_API_KEY" "lookup_sonarr_profile" \
                     "/data/media/tv" "false" "$seerr_cookie_jar" "$sonarr_id"; then
                     log_step_fail "Seerr: failed to configure Sonarr (re-run to retry)"
+                    connect_errors=$((connect_errors + 1))
                 fi
             fi
 
             echo >&2
             rm -f "$seerr_cookie_jar"
-            return 0
+            [ "$connect_errors" -eq 0 ]
+            return $?
         fi
     fi
 

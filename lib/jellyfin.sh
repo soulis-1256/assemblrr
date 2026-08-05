@@ -47,9 +47,10 @@ configure_jellyfin() {
         if [ "$wizard_complete" = "True" ] || [ "$wizard_complete" = "true" ]; then
             log_step "Jellyfin: startup wizard already completed"
             echo "Configuring Jellyfin libraries" >&2
-            configure_jellyfin_libraries
+            local lib_rc=0
+            configure_jellyfin_libraries || lib_rc=$?
             echo >&2
-            return 0
+            return "$lib_rc"
         fi
     fi
 
@@ -152,8 +153,10 @@ configure_jellyfin() {
 
     # Step 8: Add media libraries
     echo "Configuring Jellyfin libraries" >&2
-    configure_jellyfin_libraries
+    local lib_rc=0
+    configure_jellyfin_libraries || lib_rc=$?
     echo >&2
+    return "$lib_rc"
 }
 
 configure_jellyfin_xml_fallback() {
@@ -273,6 +276,7 @@ configure_jellyfin_libraries() {
             "http://${API_HOST}:${jellyfin_port}/Library/VirtualFolders" 2>/dev/null || echo "[]")
     fi
 
+    local critical_errors=0
     for i in "${!lib_names[@]}"; do
         local lib_name="${lib_names[$i]}"
         local lib_type="${lib_types[$i]}"
@@ -303,6 +307,9 @@ configure_jellyfin_libraries() {
             log_step "Jellyfin: added ${lib_name} library (${lib_path})"
         else
             log_step_fail "Jellyfin: failed to add ${lib_name} library (HTTP $add_code)"
+            if [ "$lib_type" = "movies" ] || [ "$lib_type" = "tvshows" ]; then
+                critical_errors=$((critical_errors + 1))
+            fi
         fi
     done
 
@@ -375,6 +382,8 @@ configure_jellyfin_libraries() {
     else
         log_step_fail "Jellyfin: failed to create API key (HTTP $key_create_code)"
     fi
+
+    [ "$critical_errors" -eq 0 ]
 }
 
 # --- Jellyfin notification connections (Radarr/Sonarr → Jellyfin) ---
@@ -388,16 +397,19 @@ configure_jellyfin_notifications() {
         return 1
     fi
 
-    local jf_host="jellyfin"
-    local jf_port=8096
-
     # NOTE: The MediaBrowser/Emby notification type calls /Library/Media/Updated which
     # only refreshes EXISTING items in Jellyfin's DB — it cannot discover NEW files.
     # We use a CustomScript that calls POST /Library/Refresh instead, which performs a
     # full library scan and discovers newly downloaded movies/episodes.
 
-    add_jellyfin_refresh_notif "Radarr" "7878" "$RADARR_API_KEY"
-    add_jellyfin_refresh_notif "Sonarr" "8989" "$SONARR_API_KEY"
+    local errors=0
+    if ! add_jellyfin_refresh_notif "Radarr" "7878" "$RADARR_API_KEY"; then
+        errors=$((errors + 1))
+    fi
+    if ! add_jellyfin_refresh_notif "Sonarr" "8989" "$SONARR_API_KEY"; then
+        errors=$((errors + 1))
+    fi
+    [ "$errors" -eq 0 ]
 }
 
 # Add a CustomScript notification to an *arr app that triggers Jellyfin library refresh.
@@ -446,13 +458,14 @@ add_jellyfin_refresh_notif() {
     result=$(api_post_force "$port" "/api/v3/notification" "$apikey" "$payload")
     if jq_json_has_key "$result" "id"; then
         log_step "${app_name}: added Jellyfin Refresh script (auto-scan on import)"
-    else
-        local err_msg
-        err_msg=$(echo "$result" | jq -r 'if type == "array" then .[0].errorMessage // empty else .errorMessage // empty end' 2>/dev/null || echo "")
-        if [ -n "$err_msg" ]; then
-            log_step_fail "${app_name}: failed to add Jellyfin Refresh script (${err_msg})"
-        else
-            log_step_fail "${app_name}: failed to add Jellyfin Refresh script"
-        fi
+        return 0
     fi
+    local err_msg
+    err_msg=$(echo "$result" | jq -r 'if type == "array" then .[0].errorMessage // empty else .errorMessage // empty end' 2>/dev/null || echo "")
+    if [ -n "$err_msg" ]; then
+        log_step_fail "${app_name}: failed to add Jellyfin Refresh script (${err_msg})"
+    else
+        log_step_fail "${app_name}: failed to add Jellyfin Refresh script"
+    fi
+    return 1
 }

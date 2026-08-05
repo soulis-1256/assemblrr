@@ -661,40 +661,42 @@ if ! run_docker compose "${COMPOSE_ARGS[@]}" --profile "$media_service" up -d; t
 fi
 
 # Wire services (Radarr, Prowlarr, etc.)
+local wiring_ok=1
 if [ -f "$install_directory/config.sh" ]; then
     if ! bash "$install_directory/config.sh"; then
-        log_warning "Auto-configuration had issues. You can re-run: $APP_CLI_NAME config sync"
+        wiring_ok=0
+        log_warning "Service wiring had critical failures. Containers are still running."
+        log_warning "Fix the issues above, then re-run: $APP_CLI_NAME config sync"
     fi
 fi
 # Drop legacy name if an older install left it behind
 rm -f "$install_directory/configure.sh" 2>/dev/null || true
 
-# Install CLI and set permissions
+# Install CLI (needed for config sync even if wiring failed)
 echo
 log_info "Installing CLI and configuring permissions..."
 install_cli
 set_permissions
 
-log_success "All done! Enjoy ${APP_DISPLAY_NAME}!"
-log_info "You can check the installation in $install_directory"
-log_info "========================================================"
-log_info "Everything should be running now! To check everything running, go to:"
 echo
-
 running_services_location
-
 echo
-log_info "All the service locations are also saved in ~/${APP_SERVICE_FILE}"
+log_info "Service locations also saved in ~/${APP_SERVICE_FILE}"
 running_services_location > ~/"${APP_SERVICE_FILE}"
 
 log_info "========================================================"
-echo
-log_info "To configure ${APP_DISPLAY_NAME}, check the documentation at"
-log_info "${APP_REPO_URL}"
-echo
-log_info "========================================================"
+if [ "$wiring_ok" -eq 1 ]; then
+    log_success "All done! Enjoy ${APP_DISPLAY_NAME}!"
+    log_info "Install directory: $install_directory"
+    log_info "Docs: ${APP_REPO_URL}"
+    exit 0
+fi
 
-exit 0
+log_warning "Setup finished, but service wiring failed."
+log_warning "Install directory: $install_directory"
+log_warning "Re-run wiring: $APP_CLI_NAME config sync"
+log_info "Docs: ${APP_REPO_URL}"
+exit 1
 }
 
 main "$@"

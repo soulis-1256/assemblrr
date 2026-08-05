@@ -15,6 +15,7 @@ Self-hosted media automation, set up in minutes, not a weekend.
 - **Auto-wired services:** Post-install wiring connects Radarr, Sonarr, Prowlarr, qBittorrent, Seerr, Recyclarr, and Jellyfin (libraries, auth, root folders, download clients) instead of a manual weekend of clicking.
 - **Quality profiles that ship ready:** Recyclarr syncs assemblrr-named HD and UHD (and TV) profiles from TRaSH Guides; setup only picks Seerr’s default. Both resolutions stay available for overrides.
 - **Request → library path:** Seerr in front of Radarr/Sonarr for a simple request UX, with hardlinks-friendly media layout for Jellyfin/Emby/Plex.
+- **Jellyfin auto-scan on import:** When Jellyfin is selected, Radarr/Sonarr run a small hook after each import that tells Jellyfin to rescan the library — new movies/episodes show up without a manual scan.
 - **VPN-first downloads:** Gluetun integration, download client traffic forced through the VPN context, `check-vpn` / start-time verification, and a vpn-watchdog for stalled routing.
 - **Operator CLI:** `start` / `stop` / `restart` / `status` / `health` / `logs`, `config` (show / edit / sync), `backup` / `restore`, `update-containers` / `update-cli`, and a careful `uninstall` that preserves media unless you opt in.
 - **Fail-safe backups:** CLI snapshots of configuration before risky updates so you can roll back without rebuilding from scratch.
