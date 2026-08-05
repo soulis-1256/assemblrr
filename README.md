@@ -10,8 +10,7 @@ Self-hosted media automation, set up in minutes, not a weekend.
 
 ## Features & Philosophy
 
-- **100% Docker Native:** No messy host installations. Uses native Docker Compose overlays instead of finicky sed replacements.
-- **Built for Stability:** Bash scripts enforce strict safety (set -euo pipefail), active dependency checking, and shared VPN orchestration loops.
+- **100% Docker Native**
 - **Fail-Safe Backups:** Built-in CLI backup & restore features snapshot your configuration before merging to prevent data corruption.
 - **Secure Networking:** First-class Gluetun VPN integration. All traffic from download clients strictly routes through the VPN context.
 
