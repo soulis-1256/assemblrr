@@ -6,7 +6,7 @@
 >
 > Future directions and ideas shall be discussed with the community **[here](https://github.com/soulis-1256/assemblrr/discussions/1)**
 
-A lightweight media server stack via Docker. Cross-platform, VPN-aware, and built with failsafe shell scripting.
+Self-hosted media automation, set up in minutes, not a weekend.
 
 ## Features & Philosophy
 
