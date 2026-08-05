@@ -1,9 +1,13 @@
 # Uninstall & Complete Removal
 
-assemblrr installs entirely into your home directory by default, uses no system
-packages, and needs no sudo to remove. Everything it creates is listed below, so
-you can always verify what belongs to it — and remove it completely, by hand,
-even if the installation itself is broken.
+assemblrr installs into your home directory by default and uses no system
+packages. Everything it creates is listed below so you can verify ownership
+and remove a complete or half-finished install by hand.
+
+A **finished** install can usually be removed without sudo (Option 1–2).
+A **failed setup** that already started Gluetun can leave `~/assemblrr/config`
+root-owned; plain `rm -rf` then fails — use the Docker removal step in Option 3
+(no sudo if your user is in the `docker` group).
 
 ## What an installation creates
 
@@ -15,11 +19,19 @@ even if the installation itself is broken.
 | Media directory (your movies/TV/downloads) | `~/assemblrr-media` |
 | CLI command | `~/.local/bin/assemblrr` |
 | CLI library modules | `~/.local/bin/lib/{core,branding,compose,vpn}.sh` |
-| Runtime config | `~/assemblrr/.assemblrr-config` (inside the install directory) |
+| Runtime config | `~/assemblrr/.assemblrr-config` (written near the end of setup) |
 | Service URL cheat-sheet | `~/assemblrr_services.txt` |
 | Logs | `/tmp/assemblrr-*.log` |
 
 No named Docker volumes are used — all state lives in the two directories above.
+
+### Which option applies?
+
+| Situation | Use |
+|---|---|
+| Setup finished; `assemblrr` is on your PATH | Option 1 |
+| Setup finished; CLI missing from PATH but `~/assemblrr/cli.sh` and `.assemblrr-config` exist | Option 2 |
+| Setup failed mid-way, no `.assemblrr-config`, `Permission denied` on `config/`, or CLI cannot find the install | Option 3 |
 
 ## Option 1 — Normal uninstall (CLI works)
 
@@ -44,20 +56,21 @@ assemblrr uninstall --force --media # no prompts; deletes everything INCLUDING m
 `--force` never deletes your media directory unless you also pass `--media` —
 media is your actual content and is treated as opt-in deletion.
 
-## Option 2 — CLI missing or installation broken
+## Option 2 — CLI missing from PATH (install is otherwise complete)
 
-Setup copies the CLI into the install directory, so you can run it directly
-without anything being on your PATH (works from fish too):
+Setup copies the CLI into the install directory. If `.assemblrr-config` exists:
 
 ```bash
 bash ~/assemblrr/cli.sh uninstall
 ```
 
-If the install directory itself is gone or unreadable, use Option 3.
+If that errors with “could not find installation” or there is no
+`.assemblrr-config`, setup never finished — use Option 3.
 
-## Option 3 — Manual removal (nothing else works)
+## Option 3 — Manual removal (failed or incomplete setup)
 
-Every step is independent; run whichever apply.
+Every step is independent; run whichever apply. **Media is left alone** unless
+you deliberately remove it in step 3.
 
 **1. Remove containers and the network:**
 
@@ -67,10 +80,26 @@ docker rm -f jellyfin emby plex qbittorrent sonarr radarr prowlarr \
 docker network rm assemblrr_network 2>/dev/null
 ```
 
-**2. Delete the install directory (configuration, secrets, compose files):**
+**2. Delete the install directory:**
+
+If you own the tree:
 
 ```bash
 rm -rf ~/assemblrr
+```
+
+If you see `Permission denied` under `config/` (common after a VPN test that
+created bind mounts as root), remove via Docker instead — same effect, no sudo,
+requires membership in the `docker` group:
+
+```bash
+docker run --rm -v "$HOME:/target" alpine rm -rf /target/assemblrr
+```
+
+Or with sudo:
+
+```bash
+sudo rm -rf ~/assemblrr
 ```
 
 **3. Delete the media directory — only if you really want your content gone:**
@@ -79,7 +108,7 @@ rm -rf ~/assemblrr
 rm -rf ~/assemblrr-media    # WARNING: this is your movies/TV/downloads
 ```
 
-**4. Remove the CLI files:**
+**4. Remove the CLI files** (only if setup got far enough to install them):
 
 ```bash
 rm -f ~/.local/bin/assemblrr
