@@ -1,5 +1,5 @@
 #!/bin/bash
-# Assemblrr core library — sourced by all other lib modules and entry points
+# assemblrr core library — sourced by all other lib modules and entry points
 # Provides: color codes, logging, safe_source, find_install_directory,
 #           path utilities, directory helpers, dot_inline
 

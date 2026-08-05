@@ -1,4 +1,4 @@
-# Assemblrr Windows Bootstrap
+# assemblrr Windows Bootstrap
 # Clones the repository, copies to WSL2, and launches setup.sh
 
 $ErrorActionPreference = "Stop"

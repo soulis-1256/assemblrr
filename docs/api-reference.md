@@ -1,6 +1,6 @@
-# Assemblrr API Reference
+# assemblrr API Reference
 
-This document aggregates the official API documentation for all services used by Assemblrr.
+This document aggregates the official API documentation for all services used by assemblrr.
 
 ## Media Services
 

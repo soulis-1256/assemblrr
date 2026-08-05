@@ -1,5 +1,5 @@
 #!/bin/bash
-# Assemblrr Jellyfin configuration — sourced by configure.sh
+# assemblrr Jellyfin configuration — sourced by configure.sh
 # Provides: configure_jellyfin, configure_jellyfin_xml_fallback,
 #           configure_jellyfin_libraries, configure_jellyfin_notifications
 # Requires: lib/core.sh (logging), lib/api.sh (api_get/post helpers),

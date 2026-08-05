@@ -1,5 +1,5 @@
 #!/bin/bash
-# Assemblrr *arr service configuration — sourced by configure.sh
+# assemblrr *arr service configuration — sourced by configure.sh
 # Provides: set_arr_auth, qbit helpers, configure_arr_service, profile lookups,
 #           configure_radarr, configure_sonarr, configure_prowlarr
 # Requires: lib/core.sh (logging), lib/api.sh (api_get/post/put/delete helpers),

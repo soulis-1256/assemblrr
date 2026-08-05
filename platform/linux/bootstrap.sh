@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# Assemblrr Bootstrap Script
+# assemblrr Bootstrap Script
 # Clones the repository and launches setup.sh
 # Usage (bash/zsh): bash <(curl -fsSL https://raw.githubusercontent.com/soulis-1256/assemblrr/main/platform/linux/bootstrap.sh)
 # Usage (fish):     bash (curl -fsSL https://raw.githubusercontent.com/soulis-1256/assemblrr/main/platform/linux/bootstrap.sh | psub)

@@ -1,6 +1,6 @@
 # Uninstall & Complete Removal
 
-Assemblrr installs entirely into your home directory by default, uses no system
+assemblrr installs entirely into your home directory by default, uses no system
 packages, and needs no sudo to remove. Everything it creates is listed below, so
 you can always verify what belongs to it — and remove it completely, by hand,
 even if the installation itself is broken.

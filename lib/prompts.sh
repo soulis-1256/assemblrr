@@ -1,5 +1,5 @@
 #!/bin/bash
-# Assemblrr setup prompts — sourced by setup.sh
+# assemblrr setup prompts — sourced by setup.sh
 # Provides: interactive prompt functions for service configuration
 # Requires: lib/core.sh (logging, read_masked, expand_path, directory helpers),
 #           SETUP_MODE, SUPPORTED_MEDIA_SERVICES, APP_DEFAULT_INSTALL_DIR,

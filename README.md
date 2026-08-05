@@ -2,7 +2,7 @@
 
 > [!NOTE]
 > **Developer’s note — vision & roadmap**  
-> Assemblrr is infrastructure for self-hosted media *automation* (install, wire services, operate the stack). It does **not** provide media, indexers, or content. What you request, download, and host is entirely your responsibility and must comply with the laws that apply to you.
+> assemblrr is infrastructure for self-hosted media *automation* (install, wire services, operate the stack). It does **not** provide media, indexers, or content. What you request, download, and host is entirely your responsibility and must comply with the laws that apply to you.
 >
 > Future directions and ideas shall be discussed with the community **[here](https://github.com/soulis-1256/assemblrr/discussions/1)**
 
@@ -129,7 +129,7 @@ Live integration mutates a running stack — requires `ASSEMBLRR_ALLOW_LIVE_TEST
 
 ## Acknowledgments
 
-Originally inspired by [YAMS](https://yams.media/) ([rogsme/yams](https://github.com/rogsme/yams)); Assemblrr has since been rewritten and expanded into its own project.
+Originally inspired by [YAMS](https://yams.media/) ([rogsme/yams](https://github.com/rogsme/yams)); assemblrr has since been rewritten and expanded into its own project.
 
 ### License
 GNU General Public License v3.0

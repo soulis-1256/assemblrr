@@ -22,7 +22,7 @@ else
     log_success() { echo -e "\033[0;32m$1\033[0m"; }
     load_branding() {
         APP_NAME="assemblrr"
-        APP_DISPLAY_NAME="Assemblrr"
+        APP_DISPLAY_NAME="assemblrr"
         APP_CLI_NAME="assemblrr"
     }
 fi

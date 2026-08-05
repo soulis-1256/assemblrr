@@ -1,5 +1,5 @@
 #!/bin/bash
-# Assemblrr VPN helpers — sourced by entry points that handle VPN orchestration
+# assemblrr VPN helpers — sourced by entry points that handle VPN orchestration
 # Requires: lib/core.sh (for logging, safe_source)
 
 # Guard against double-sourcing

@@ -11,7 +11,7 @@ if [ -f "$SCRIPT_DIR/../lib/core.sh" ]; then
 elif [ -f "$SCRIPT_DIR/lib/core.sh" ]; then
     APP_ROOT="$SCRIPT_DIR"
 else
-    echo -e "\033[0;31mError: lib/core.sh not found. Re-run setup from a complete Assemblrr tree.\033[0m" >&2
+    echo -e "\033[0;31mError: lib/core.sh not found. Re-run setup from a complete assemblrr tree.\033[0m" >&2
     exit 1
 fi
 

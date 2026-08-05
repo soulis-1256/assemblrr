@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# Assemblrr CLI — manages your media server
+# assemblrr CLI — manages your media server
 # This file is installed to ~/.local/bin/<APP_CLI_NAME> during setup
 
 # Source shared library (safe_source, find_install_directory, logging, colors)

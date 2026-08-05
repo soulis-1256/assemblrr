@@ -1,4 +1,4 @@
-# Assemblrr Dev Bootstrap
+# assemblrr Dev Bootstrap
 # Copies local project files to WSL2 and runs setup.sh
 # Alternative to bootstrap.ps1 — skips git clone, uses local files instead
 # Usage:
@@ -25,7 +25,7 @@ $AppName = "assemblrr"
 
 function Show-Help {
     Write-Host ""
-    Write-Host "Assemblrr Dev Bootstrap" -ForegroundColor Cyan
+    Write-Host "assemblrr Dev Bootstrap" -ForegroundColor Cyan
     Write-Host "========================" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "Copies local project files to WSL2 for development." -ForegroundColor White

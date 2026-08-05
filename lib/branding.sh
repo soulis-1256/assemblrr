@@ -1,5 +1,5 @@
 #!/bin/bash
-# Assemblrr branding loader — sourced by entry points that need branding
+# assemblrr branding loader — sourced by entry points that need branding
 # Requires: lib/core.sh (for safe_source)
 
 if [ -n "${_ASSEMBLRR_BRANDING_SOURCED:-}" ]; then
@@ -15,7 +15,7 @@ load_branding() {
         safe_source "$_branding_dir/branding.conf"
     else
         APP_NAME="assemblrr"
-        APP_DISPLAY_NAME="Assemblrr"
+        APP_DISPLAY_NAME="assemblrr"
         APP_CLI_NAME="assemblrr"
         APP_NETWORK_NAME="assemblrr_network"
         APP_BACKUP_PREFIX="assemblrr-backup"

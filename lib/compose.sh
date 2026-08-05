@@ -1,5 +1,5 @@
 #!/bin/bash
-# Assemblrr Docker Compose builder — sourced by entry points that manage containers
+# assemblrr Docker Compose builder — sourced by entry points that manage containers
 # Requires: nothing beyond bash builtins
 
 if [ -n "${_ASSEMBLRR_COMPOSE_SOURCED:-}" ]; then
