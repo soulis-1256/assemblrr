@@ -146,6 +146,16 @@ fi
 # Configure Recyclarr (must run before Seerr so quality profiles exist in Radarr/Sonarr)
 configure_recyclarr || true
 
+# Enforce minSize=0 and record preferred quality profiles after Recyclarr sync.
+if [ -n "$RADARR_API_KEY" ]; then
+    relax_quality_sizes "Radarr" "7878" "$RADARR_API_KEY" || true
+    set_default_quality_profile "Radarr" "7878" "$RADARR_API_KEY" "lookup_radarr_profile" || true
+fi
+if [ -n "$SONARR_API_KEY" ]; then
+    relax_quality_sizes "Sonarr" "8989" "$SONARR_API_KEY" || true
+    set_default_quality_profile "Sonarr" "8989" "$SONARR_API_KEY" "lookup_sonarr_profile" || true
+fi
+
 # Configure Seerr (must run after media server is configured AND Recyclarr has synced profiles)
 configure_seerr || true
 

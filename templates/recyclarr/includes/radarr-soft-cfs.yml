@@ -1,0 +1,14 @@
+# Soften hard-block custom formats on assemblrr Radarr profiles
+
+custom_formats:
+  - trash_ids:
+      - 90a6f9a284dff5103f6346090e6280c8  # LQ
+      - e204b80c87be9497a8a6eaff48f72905  # LQ (Release Title)
+      - dc98083864ea246d05a42df0d05f81cc  # x265 (HD)
+      - 839bea857ed2c0a8e084f3cbdbd65ecb  # x265 (no HDR/DV)
+      - b8cd450cbfa689c0259a01d9e29ba3d6  # 3D
+    assign_scores_to:
+      - name: assemblrr HD Bluray + WEB
+        score: 0
+      - name: assemblrr UHD Bluray + WEB
+        score: 0

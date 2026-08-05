@@ -7,8 +7,9 @@
 
 set -euo pipefail
 
-# --- Shared helper: connect a service (Radarr/Sonarr) to Seerr ---
-# Usage: seerr_connect_service <service_type> <port> <api_key> <profile_func> <active_dir> <is_4k> <cookie_jar>
+# --- Shared helper: connect or update a service (Radarr/Sonarr) in Seerr ---
+# Usage: seerr_connect_service <service_type> <port> <api_key> <profile_func> <active_dir> <is_4k> <cookie_jar> [existing_id]
+# With existing_id: PUT update; without: POST create.
 # Example: seerr_connect_service "radarr" 7878 "$RADARR_API_KEY" "lookup_radarr_profile" "/data/media/movies" "true" "$cookie_jar"
 seerr_connect_service() {
     local service_type="$1"
@@ -18,6 +19,7 @@ seerr_connect_service() {
     local active_dir="$5"
     local is_4k="$6"
     local cookie_jar="$7"
+    local existing_id="${8:-}"
 
     if [ -z "$api_key" ]; then
         log_step_fail "Seerr: ${service_type} API key not provided"
@@ -29,13 +31,12 @@ seerr_connect_service() {
         return 1
     fi
 
-    # Look up quality profile from the service (created by Recyclarr)
     local profile
     profile=$($profile_func "$api_key")
     local profile_id="${profile%%:*}"
     local profile_name="${profile##*:}"
 
-    # Build the service payload
+    # id is read-only on PUT — omit it from the body
     local payload
     payload=$(cat <<EOF
 {
@@ -62,15 +63,29 @@ EOF
         payload=$(echo "$payload" | jq '.enableSeasonFolders = true' 2>/dev/null || echo "$payload")
     fi
 
-    # POST to Seerr
     local http_code
+    if [ -n "$existing_id" ]; then
+        http_code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 -X PUT -b "$cookie_jar" \
+            -H "Content-Type: application/json" \
+            -d "$payload" \
+            "http://${API_HOST}:5055/api/v1/settings/${service_type}/${existing_id}" 2>/dev/null || echo "000")
+        if [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]; then
+            log_step "Seerr: updated ${service_type^} profile → ${profile_name}"
+            return 0
+        else
+            log_step_fail "Seerr: failed to update ${service_type} (HTTP $http_code)"
+            return 1
+        fi
+    fi
+
+    # POST new connection
     http_code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 -X POST -b "$cookie_jar" \
         -H "Content-Type: application/json" \
         -d "$payload" \
         "http://${API_HOST}:5055/api/v1/settings/${service_type}" 2>/dev/null || echo "000")
 
     if [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]; then
-        log_step "Seerr: connected ${service_type^}"
+        log_step "Seerr: connected ${service_type^} (profile: ${profile_name})"
         return 0
     else
         log_step_fail "Seerr: failed to connect ${service_type} (HTTP $http_code)"
@@ -97,6 +112,24 @@ seerr_service_connected() {
     count=$(echo "$svc_list" | jq 'length' 2>/dev/null || echo "0")
     echo "$count"
     return 0
+}
+
+# --- Shared helper: first existing Seerr server id for a service (or empty) ---
+# Usage: seerr_service_id <service_type> <cookie_jar>
+seerr_service_id() {
+    local service_type="$1"
+    local cookie_jar="$2"
+
+    local settings
+    settings=$(curl -sf --connect-timeout 5 -b "$cookie_jar" \
+        "http://${API_HOST}:5055/api/v1/settings/${service_type}" 2>/dev/null || echo "")
+
+    if [ -z "$settings" ] || [ "$settings" = "[]" ]; then
+        echo ""
+        return 1
+    fi
+
+    echo "$settings" | jq -r '.[0].id // empty' 2>/dev/null || echo ""
 }
 
 # --- Shared helper: get Seerr session cookie ---
@@ -158,42 +191,60 @@ EOF
 
 configure_recyclarr() {
     local recyclarr_config_dir="$INSTALL_DIR/config/recyclarr"
-    mkdir -p "$recyclarr_config_dir"
+    local template_root="$INSTALL_DIR/templates/recyclarr"
+    mkdir -p "$recyclarr_config_dir/includes"
 
     if [ ! -w "$recyclarr_config_dir" ]; then
         log_step_fail "Recyclarr: config directory not writable (${recyclarr_config_dir})"
         return 1
     fi
 
-    # Export variables for envsubst
+    # Only substitute known vars so $schema in YAML comments is left alone
     export RADARR_API_KEY SONARR_API_KEY
 
-    # Pick the right template based on user's 4K choice
-    local template_file="recyclarr-full_hd.yml"  # default: 1080p
-    local profile_label="HD Bluray + WEB"
+    local default_label="assemblrr HD Bluray + WEB"
     if [ "${SEERR_IS_4K}" = "true" ]; then
-        template_file="recyclarr-ultra_hd.yml"    # 4K
-        profile_label="UHD Bluray + WEB"
+        default_label="assemblrr UHD Bluray + WEB"
     fi
 
-    if [ -f "$INSTALL_DIR/templates/${template_file}" ]; then
-        if envsubst < "$INSTALL_DIR/templates/${template_file}" > "$recyclarr_config_dir/recyclarr.yml"; then
-            log_step "Recyclarr: generated config (${profile_label} profile)"
-        else
-            log_step_fail "Recyclarr: failed to write config (${recyclarr_config_dir}/recyclarr.yml)"
-            return 1
-        fi
-    else
-        log_step_fail "Recyclarr: template ${template_file} not found"
+    if [ ! -f "$template_root/recyclarr.yml" ]; then
+        log_step_fail "Recyclarr: template root not found (${template_root}/recyclarr.yml)"
         return 1
     fi
 
-    # Trigger a sync
+    if ! envsubst '${RADARR_API_KEY} ${SONARR_API_KEY}' \
+        < "$template_root/recyclarr.yml" \
+        > "$recyclarr_config_dir/recyclarr.yml"; then
+        log_step_fail "Recyclarr: failed to write config (${recyclarr_config_dir}/recyclarr.yml)"
+        return 1
+    fi
+
+    # Include packs (no secrets). Replace the directory contents with the template set.
+    local include_src="$template_root/includes"
+    if [ ! -d "$include_src" ]; then
+        log_step_fail "Recyclarr: includes directory not found (${include_src})"
+        return 1
+    fi
+    rm -f "$recyclarr_config_dir/includes"/*.yml 2>/dev/null || true
+    if ! cp "$include_src"/*.yml "$recyclarr_config_dir/includes/"; then
+        log_step_fail "Recyclarr: failed to copy include packs"
+        return 1
+    fi
+
+    local pack_count
+    pack_count=$(find "$recyclarr_config_dir/includes" -maxdepth 1 -name '*.yml' | wc -l | tr -d ' ')
+    log_step "Recyclarr: generated config (${pack_count} include packs; Seerr default: ${default_label})"
+
     _cfg_log_info "Recyclarr: syncing TRaSH Guides to Radarr and Sonarr... this might take a moment"
-    if docker exec recyclarr recyclarr sync > /dev/null 2>&1; then
+    local sync_out
+    if sync_out=$(docker exec recyclarr recyclarr sync 2>&1); then
         log_step "Recyclarr: synced Custom Formats and Quality Profiles successfully"
     else
-        log_step_fail "Recyclarr: failed to sync to Radarr/Sonarr (check docker logs recyclarr)"
+        log_step_fail "Recyclarr: failed to sync to Radarr/Sonarr"
+        echo "$sync_out" | grep -E '•|Error|error|Invalid|YAML' | head -5 | while IFS= read -r line; do
+            _cfg_log_info "  $line"
+        done
+        return 1
     fi
 }
 
@@ -245,31 +296,21 @@ configure_seerr() {
 
             echo "Connecting Seerr services" >&2
 
-            # Connect Radarr if not already connected
             if [ -n "$RADARR_API_KEY" ]; then
-                local radarr_count
-                radarr_count=$(seerr_service_connected "radarr" "$seerr_cookie_jar") || radarr_count=0
-                if [ "$radarr_count" -eq 0 ]; then
-                    if ! seerr_connect_service "radarr" 7878 "$RADARR_API_KEY" "lookup_radarr_profile" \
-                        "/data/media/movies" "${SEERR_IS_4K:-false}" "$seerr_cookie_jar"; then
-                        log_step_fail "Seerr: failed to connect Radarr (re-run to retry)"
-                    fi
-                else
-                    log_step "Seerr: Radarr already connected"
+                local radarr_id
+                radarr_id=$(seerr_service_id "radarr" "$seerr_cookie_jar" || true)
+                if ! seerr_connect_service "radarr" 7878 "$RADARR_API_KEY" "lookup_radarr_profile" \
+                    "/data/media/movies" "${SEERR_IS_4K:-false}" "$seerr_cookie_jar" "$radarr_id"; then
+                    log_step_fail "Seerr: failed to configure Radarr (re-run to retry)"
                 fi
             fi
 
-            # Connect Sonarr if not already connected
             if [ -n "$SONARR_API_KEY" ]; then
-                local sonarr_count
-                sonarr_count=$(seerr_service_connected "sonarr" "$seerr_cookie_jar") || sonarr_count=0
-                if [ "$sonarr_count" -eq 0 ]; then
-                    if ! seerr_connect_service "sonarr" 8989 "$SONARR_API_KEY" "lookup_sonarr_profile" \
-                        "/data/media/tv" "false" "$seerr_cookie_jar"; then
-                        log_step_fail "Seerr: failed to connect Sonarr (re-run to retry)"
-                    fi
-                else
-                    log_step "Seerr: Sonarr already connected"
+                local sonarr_id
+                sonarr_id=$(seerr_service_id "sonarr" "$seerr_cookie_jar" || true)
+                if ! seerr_connect_service "sonarr" 8989 "$SONARR_API_KEY" "lookup_sonarr_profile" \
+                    "/data/media/tv" "false" "$seerr_cookie_jar" "$sonarr_id"; then
+                    log_step_fail "Seerr: failed to configure Sonarr (re-run to retry)"
                 fi
             fi
 
@@ -350,8 +391,7 @@ EOF
         return 1
     fi
 
-    # Check for error in response — "hostname already configured" means media server
-    # was connected by a previous run, which is fine (admin user already exists)
+    # "already configured" is success when re-running against an initialized Seerr
     local auth_error
     auth_error=$(echo "$auth_response" | jq -r '.error // ""' 2>/dev/null || echo "")
     if [ -n "$auth_error" ]; then
@@ -365,7 +405,6 @@ EOF
             return 1
         fi
     else
-        # Successful auth — verify admin user was created
         local auth_id
         auth_id=$(echo "$auth_response" | jq -r '.id // ""' 2>/dev/null || echo "")
         if [ -n "$auth_id" ]; then
@@ -377,12 +416,10 @@ EOF
         fi
     fi
 
-    # Step 5: Get a session cookie for subsequent API calls
+    # Step 5: session cookie for subsequent API calls
     local seerr_cookie_jar="/tmp/seerr_cookie_jar_$$_${seerr_port}"
 
-    # Get session cookie (with hostname for initial setup)
     if ! seerr_get_cookie "$seerr_cookie_jar" "true"; then
-        # Retry with login-only if first attempt fails (hostname already configured)
         if ! seerr_get_cookie "$seerr_cookie_jar" "false"; then
             log_step_fail "Seerr: failed to get session cookie"
             rm -f "$seerr_cookie_jar"
@@ -390,10 +427,7 @@ EOF
         fi
     fi
 
-    # Note: Library sync is skipped here — Jellyfin hasn't indexed anything yet on first setup.
-    # Seerr will auto-sync libraries periodically (every 24h) once content exists.
-
-    # Step 6: Initialize Seerr (mark setup as complete)
+    # Step 6: mark setup complete
     local init_code
     init_code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 -X POST -b "$seerr_cookie_jar" \
         -H "Content-Type: application/json" \

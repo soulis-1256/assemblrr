@@ -250,7 +250,9 @@ cp /tmp/$AppName/compose/base.yaml /tmp/$AppName/compose/vpn.yaml /tmp/$AppName/
 mkdir -p "`$INSTALL_DIR/compose/examples"
 cp /tmp/$AppName/compose/examples/custom.yaml.example "`$INSTALL_DIR/compose/examples/" 2>/dev/null || true
 cp /tmp/$AppName/.env.example "`$INSTALL_DIR/" 2>/dev/null || true
-cp /tmp/$AppName/templates/recyclarr-full_hd.yml /tmp/$AppName/templates/recyclarr-ultra_hd.yml "`$INSTALL_DIR/templates/"
+mkdir -p "`$INSTALL_DIR/templates/recyclarr/includes"
+cp /tmp/$AppName/templates/recyclarr/recyclarr.yml "`$INSTALL_DIR/templates/recyclarr/"
+cp /tmp/$AppName/templates/recyclarr/includes/*.yml "`$INSTALL_DIR/templates/recyclarr/includes/"
 mkdir -p "`$INSTALL_DIR/scripts"
 cp /tmp/$AppName/scripts/* "`$INSTALL_DIR/scripts/"
 echo "Files synced to install directory"

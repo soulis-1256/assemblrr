@@ -245,7 +245,7 @@ prepare_install_dirs() {
         "scripts"
     )
 
-    # Reclaim install root if a previous run left it root-owned
+    # Ensure install root is owned by the target user
     if [ -d "$install_dir" ] && [ ! -w "$install_dir" ]; then
         ensure_owned "$install_dir" "$(id -u)" "$(id -g)"
     fi

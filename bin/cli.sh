@@ -337,7 +337,7 @@ uninstall_app() {
             log_info "Media directory preserved at $MEDIA_DIRECTORY"
         fi
     else
-        log_info "Media directory preserved at $MEDIA_DIRECTORY (pass --media with --force to delete it)"
+        log_info "Media directory preserved at $MEDIA_DIRECTORY"
     fi
 
     echo "Removing CLI..."

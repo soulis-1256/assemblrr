@@ -1,0 +1,8 @@
+# Include: Sonarr 1080p profile (guide-backed WEB-1080p)
+
+quality_profiles:
+  - trash_id: 72dae194fc92bf828f32cde7744e51a1  # WEB-1080p
+    name: assemblrr WEB-1080p
+    reset_unmatched_scores:
+      enabled: true
+    min_format_score: -1000

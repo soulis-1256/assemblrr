@@ -7,7 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/../helpers.sh"
 
-# Ubuntu 22.04 desktop infohash + public trackers
+# Ubuntu 22.04 desktop infohash (official FOSS image)
 TARGET_HASH="3b245504cf5f11bbdbe1201cea6a6bf45aee1bc0"
 MAGNET="magnet:?xt=urn:btih:${TARGET_HASH}&dn=ubuntu-22.04.4-desktop-amd64.iso&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Ftracker.openbittorrent.com%3A6969%2Fannounce"
 

@@ -48,14 +48,13 @@ set_arr_auth() {
 
 # --- qBittorrent helpers ---
 
-# Set qBittorrent credentials and save path using the temp password from container logs
-# Called once before configuring any *arr service.
-# On re-runs, tries the final credentials first to avoid triggering brute-force bans.
+# Set qBittorrent WebUI credentials and default save paths.
+# Prefer final credentials when already configured (avoids brute-force lockouts).
 qbit_set_credentials() {
     local qbit_port=8081
     local qbit_cookie_jar="/tmp/qb_cookie_jar_init_$$_${qbit_port}"
 
-    # Try logging in with the final credentials first (already set from a previous run)
+    # Idempotent: succeed if final credentials already work
     if [ -n "$AUTH_USERNAME" ] && [ -n "$AUTH_PASSWORD" ]; then
         curl -s --connect-timeout 5 -c "$qbit_cookie_jar" \
             -H "Referer: http://${API_HOST}:${qbit_port}" \
@@ -64,7 +63,6 @@ qbit_set_credentials() {
         local qbit_sid
         qbit_sid=$(qbit_cookie_sid "$qbit_cookie_jar")
         if [ -n "$qbit_sid" ]; then
-            # Credentials already set — ensure save path is configured
             curl -s --connect-timeout 5 \
                 "http://${API_HOST}:${qbit_port}/api/v2/app/setPreferences" \
                 -b "$qbit_cookie_jar" \
@@ -77,7 +75,7 @@ qbit_set_credentials() {
         fi
     fi
 
-    # Credentials not set yet — use temp password from container logs
+    # First-time setup: temporary password from container logs
     local wait_time=0
     local max_wait=60
 
@@ -116,7 +114,7 @@ qbit_set_credentials() {
     return 1
 }
 
-# Create a qBittorrent category with a save path
+# Create or update a qBittorrent category with a save path
 qbit_create_category() {
     local service_name="$1"
     local category="$2"
@@ -131,13 +129,20 @@ qbit_create_category() {
     local qbit_sid
     qbit_sid=$(qbit_cookie_sid "$qbit_cookie_jar")
     if [ -n "$qbit_sid" ]; then
+        # createCategory + editCategory so savePath is set whether the category is new or existing
         curl -s --connect-timeout 10 \
             "http://${API_HOST}:${qbit_port}/api/v2/torrents/createCategory" \
             -b "$qbit_cookie_jar" \
             -H "Referer: http://${API_HOST}:${qbit_port}" \
             -d "category=${category}&savePath=${save_path}" \
             2>/dev/null >/dev/null || true
-        log_step "${service_name}: created qBittorrent '${category}' category (${save_path})"
+        curl -s --connect-timeout 10 \
+            "http://${API_HOST}:${qbit_port}/api/v2/torrents/editCategory" \
+            -b "$qbit_cookie_jar" \
+            -H "Referer: http://${API_HOST}:${qbit_port}" \
+            -d "category=${category}&savePath=${save_path}" \
+            2>/dev/null >/dev/null || true
+        log_step "${service_name}: qBittorrent '${category}' category → ${save_path}"
     else
         log_step_fail "${service_name}: could not login to qBittorrent to create categories"
     fi
@@ -184,16 +189,16 @@ configure_arr_service() {
         log_step "${service_name}: root folder ${root_path} already exists"
     fi
 
-    # 1b. Remove stale auto-detected root folders
+    # Keep only the configured root folder
     local all_root_folders
     all_root_folders=$(api_get "$port" "/api/v3/rootfolder" "$apikey")
-    local stale_ids
-    stale_ids=$(echo "$all_root_folders" | jq -r --arg rp "$root_path" '.[] | select(.path != $rp) | .id' 2>/dev/null || echo "")
+    local extra_ids
+    extra_ids=$(echo "$all_root_folders" | jq -r --arg rp "$root_path" '.[] | select(.path != $rp) | .id' 2>/dev/null || echo "")
 
-    for stale_id in $stale_ids; do
-        if [ -n "$stale_id" ]; then
-            api_delete "$port" "/api/v3/rootfolder/${stale_id}" "$apikey" >/dev/null || true
-            log_step "${service_name}: removed stale root folder (id: ${stale_id})"
+    for extra_id in $extra_ids; do
+        if [ -n "$extra_id" ]; then
+            api_delete "$port" "/api/v3/rootfolder/${extra_id}" "$apikey" >/dev/null || true
+            log_step "${service_name}: removed extra root folder (id: ${extra_id})"
         fi
     done
 
@@ -296,6 +301,81 @@ configure_arr_service() {
     set_arr_auth "$service_name" "$port" "$apikey"
 }
 
+# --- Quality sizes & default profiles ---
+
+# Set minSize=0 on every quality definition (no minimum file-size filter).
+# Values live in the *arr DB; they only change when written via this API.
+relax_quality_sizes() {
+    local service_name="$1"
+    local port="$2"
+    local apikey="$3"
+
+    local defs
+    defs=$(api_get "$port" "/api/v3/qualitydefinition" "$apikey")
+    if [ -z "$defs" ] || [ "$defs" = "[]" ]; then
+        log_step_fail "${service_name}: no quality definitions to update"
+        return 1
+    fi
+
+    # Only minSize is cleared; leave max/preferred alone (bulk update is picky about nulls).
+    local payload
+    payload=$(echo "$defs" | jq '[.[] | .minSize = 0]' 2>/dev/null || echo "")
+    if [ -z "$payload" ]; then
+        log_step_fail "${service_name}: failed to build quality definition payload"
+        return 1
+    fi
+
+    local result
+    result=$(api_put "$port" "/api/v3/qualitydefinition/update" "$apikey" "$payload")
+    if echo "$result" | jq -e 'type == "array"' >/dev/null 2>&1; then
+        log_step "${service_name}: quality minSize set to 0"
+        return 0
+    fi
+    # Fallback: one PUT per definition
+    local ok=0 total=0
+    while IFS= read -r row; do
+        [ -z "$row" ] && continue
+        total=$((total + 1))
+        local id
+        id=$(echo "$row" | jq -r '.id // empty')
+        [ -z "$id" ] && continue
+        if api_put "$port" "/api/v3/qualitydefinition/${id}" "$apikey" "$row" >/dev/null 2>&1; then
+            ok=$((ok + 1))
+        fi
+    done < <(echo "$payload" | jq -c '.[]' 2>/dev/null || true)
+
+    if [ "$ok" -gt 0 ]; then
+        log_step "${service_name}: quality minSize set to 0 (${ok}/${total})"
+        return 0
+    fi
+    log_step_fail "${service_name}: failed to update quality definitions"
+    return 1
+}
+
+# Record the preferred quality profile id/name for this install (setup choice).
+set_default_quality_profile() {
+    local service_name="$1"
+    local port="$2"
+    local apikey="$3"
+    local profile_func="$4"
+
+    local profile profile_id
+    profile=$($profile_func "$apikey")
+    profile_id="${profile%%:*}"
+    local profile_name="${profile##*:}"
+
+    if [ -z "$profile_id" ] || [ "$profile_id" = "1" ] && [ "$profile_name" = "Any" ]; then
+        log_step "${service_name}: preferred quality profile → Any"
+        return 0
+    fi
+
+    if [ -n "${INSTALL_DIR:-}" ]; then
+        mkdir -p "$INSTALL_DIR/config"
+        echo "${profile_id}:${profile_name}" > "$INSTALL_DIR/config/.${service_name,,}-default-quality-profile" 2>/dev/null || true
+    fi
+    log_step "${service_name}: preferred quality profile → ${profile_name} (id ${profile_id})"
+}
+
 # --- Quality profile lookup ---
 
 lookup_radarr_profile() {
@@ -308,27 +388,42 @@ lookup_radarr_profile() {
         return
     fi
 
-    # Recyclarr creates profiles with names like "Ultra-HD" or "HD Bluray + WEB"
-    # Match by keyword since the exact name depends on TRaSH Guide version
-    # Default Radarr profiles to skip: Any, SD, HD-720p, HD-1080p, HD - 720p/1080p
-    local target_keyword
+    # Prefer assemblrr-named Recyclarr profiles; fall back to stock *arr names.
+    local target_name=""
+    local stock_fallback=""
+
     if [ "${SEERR_IS_4K:-false}" = "true" ]; then
-        target_keyword="Ultra"
+        target_name="assemblrr UHD Bluray + WEB"
+        stock_fallback="Ultra-HD"
     elif [ "${SEERR_DEFAULT_PROFILE:-1}" != "1" ]; then
-        target_keyword="Bluray + WEB"
+        target_name="assemblrr HD Bluray + WEB"
+        stock_fallback="HD-1080p"
     else
         echo "1:Any"
         return
     fi
 
     local matched
-    matched=$(echo "$profiles_json" | jq -r --arg kw "$target_keyword" '.[] | select(.name | contains($kw)) | select(.name as $n | ["Any","SD","HD-720p","HD-1080p","HD - 720p/1080p"] | index($n) | not) | "\(.id):\(.name)"' 2>/dev/null | head -1 || echo "")
+    matched=$(echo "$profiles_json" | jq -r --arg name "$target_name" '
+        .[] | select(.name == $name) | "\(.id):\(.name)"
+    ' 2>/dev/null | head -1 || echo "")
 
     if [ -n "$matched" ]; then
         echo "$matched"
-    else
-        echo "1:Any"
+        return
     fi
+
+    if [ -n "$stock_fallback" ]; then
+        matched=$(echo "$profiles_json" | jq -r --arg name "$stock_fallback" '
+            .[] | select(.name == $name) | "\(.id):\(.name)"
+        ' 2>/dev/null | head -1 || echo "")
+        if [ -n "$matched" ]; then
+            echo "$matched"
+            return
+        fi
+    fi
+
+    echo "1:Any"
 }
 
 lookup_sonarr_profile() {
@@ -337,28 +432,43 @@ lookup_sonarr_profile() {
     profiles_json=$(api_get "8989" "/api/v3/qualityprofile" "$apikey")
 
     if [ -z "$profiles_json" ]; then
-        echo "1:Default"
+        echo "1:Any"
         return
     fi
 
-    # Recyclarr creates profiles with names like "Ultra-HD" or "WEB-1080p"
-    # Match by keyword since the exact name depends on TRaSH Guide version
-    # Default Sonarr profiles to skip: Any, SD, HD-720p, HD-1080p, HD - 720p/1080p
-    local target_keyword
-    if [ "${SEERR_IS_4K:-false}" = "true" ]; then
-        target_keyword="Ultra"
-    else
-        target_keyword="WEB"
-    fi
+    # Default TV profile is assemblrr WEB-1080p (movies 4K choice does not change this).
+    local target_name="assemblrr WEB-1080p"
+    local stock_fallback="HD-1080p"
 
     local matched
-    matched=$(echo "$profiles_json" | jq -r --arg kw "$target_keyword" '.[] | select(.name | contains($kw)) | select(.name as $n | ["Any","SD","HD-720p","HD-1080p","HD - 720p/1080p"] | index($n) | not) | "\(.id):\(.name)"' 2>/dev/null | head -1 || echo "")
+    matched=$(echo "$profiles_json" | jq -r --arg name "$target_name" '
+        .[] | select(.name == $name) | "\(.id):\(.name)"
+    ' 2>/dev/null | head -1 || echo "")
 
     if [ -n "$matched" ]; then
         echo "$matched"
-    else
-        echo "1:Default"
+        return
     fi
+
+    matched=$(echo "$profiles_json" | jq -r '
+        .[] | select(.name | test("^assemblrr.*WEB.*1080"; "i")) | "\(.id):\(.name)"
+    ' 2>/dev/null | head -1 || echo "")
+    if [ -n "$matched" ]; then
+        echo "$matched"
+        return
+    fi
+
+    if [ -n "$stock_fallback" ]; then
+        matched=$(echo "$profiles_json" | jq -r --arg name "$stock_fallback" '
+            .[] | select(.name == $name) | "\(.id):\(.name)"
+        ' 2>/dev/null | head -1 || echo "")
+        if [ -n "$matched" ]; then
+            echo "$matched"
+            return
+        fi
+    fi
+
+    echo "1:Any"
 }
 
 # --- Radarr configuration ---
@@ -373,6 +483,58 @@ configure_radarr() {
 }
 
 # --- Prowlarr configuration ---
+
+# Set minimumSeeders=0 on Prowlarr app profiles and *arr indexers.
+# Peer counts from indexers are often incomplete; requiring seeders>=1 blocks valid grabs.
+relax_minimum_seeders() {
+    local prowlarr_key="$1"
+    local radarr_key="${2:-}"
+    local sonarr_key="${3:-}"
+
+    local profiles
+    profiles=$(api_get "9696" "/api/v1/appprofile" "$prowlarr_key")
+    if [ -n "$profiles" ] && [ "$profiles" != "[]" ]; then
+        local profile_id profile_payload
+        while IFS= read -r row; do
+            [ -z "$row" ] && continue
+            profile_id=$(echo "$row" | jq -r '.id // empty')
+            [ -z "$profile_id" ] && continue
+            profile_payload=$(echo "$row" | jq '.minimumSeeders = 0' 2>/dev/null || echo "")
+            [ -z "$profile_payload" ] && continue
+            if api_put "9696" "/api/v1/appprofile/${profile_id}" "$prowlarr_key" "$profile_payload" >/dev/null 2>&1; then
+                log_step "Prowlarr: app profile '${profile_id}' minimumSeeders → 0"
+            fi
+        done < <(echo "$profiles" | jq -c '.[]' 2>/dev/null || true)
+    fi
+
+    local port key name
+    for port_key_name in "7878:${radarr_key}:Radarr" "8989:${sonarr_key}:Sonarr"; do
+        port="${port_key_name%%:*}"
+        rest="${port_key_name#*:}"
+        key="${rest%%:*}"
+        name="${rest#*:}"
+        [ -z "$key" ] && continue
+
+        local indexers
+        indexers=$(api_get "$port" "/api/v3/indexer" "$key")
+        [ -z "$indexers" ] || [ "$indexers" = "[]" ] && continue
+
+        while IFS= read -r idx; do
+            [ -z "$idx" ] && continue
+            local idx_id idx_payload
+            idx_id=$(echo "$idx" | jq -r '.id // empty')
+            [ -z "$idx_id" ] && continue
+            idx_payload=$(echo "$idx" | jq '
+                .fields = [.fields[] |
+                    if .name == "minimumSeeders" then .value = 0 else . end
+                ]
+            ' 2>/dev/null || echo "")
+            [ -z "$idx_payload" ] && continue
+            api_put "$port" "/api/v3/indexer/${idx_id}" "$key" "$idx_payload" >/dev/null 2>&1 || true
+        done < <(echo "$indexers" | jq -c '.[]' 2>/dev/null || true)
+        log_step "${name}: indexer minimumSeeders → 0"
+    done
+}
 
 configure_prowlarr() {
     local apikey="$1"
@@ -436,8 +598,8 @@ configure_prowlarr() {
         fi
     fi
 
-    # 2. Add public indexers
-    echo "Adding ${#PUBLIC_INDEXERS[@]} indexer(s) to Prowlarr" >&2
+    # 2. Add selected indexers
+    echo "Adding ${#SELECTED_INDEXERS[@]} indexer(s) to Prowlarr" >&2
     local indexer_schemas
     indexer_schemas=$(api_get "9696" "/api/v1/indexer/schema" "$apikey")
 
@@ -452,7 +614,7 @@ configure_prowlarr() {
     local existing_names
     existing_names=$(jq_json_list_values "$existing_indexers" "name")
 
-    for indexer_name in ${PUBLIC_INDEXERS[@]+"${PUBLIC_INDEXERS[@]}"}; do
+    for indexer_name in ${SELECTED_INDEXERS[@]+"${SELECTED_INDEXERS[@]}"}; do
         # Skip if already added
         if echo "$existing_names" | grep -q -F -x "$indexer_name"; then
             log_step "Prowlarr: ${indexer_name} indexer already exists"
@@ -502,7 +664,9 @@ configure_prowlarr() {
     echo >&2
     log_success "Indexers added to Prowlarr!" >&2
 
-    # 3. Set authentication
+    relax_minimum_seeders "$apikey" "$radarr_apikey" "${sonarr_apikey:-}"
+
+    # 4. Set authentication
     set_arr_auth "Prowlarr" "9696" "$apikey" "v1"
 }
 

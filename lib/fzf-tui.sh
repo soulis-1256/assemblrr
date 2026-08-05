@@ -1,12 +1,12 @@
 #!/bin/bash
 # fzf-based TUI for selections (Prowlarr indexers, Jellyfin languages)
 # Provides reusable fzf selection patterns for assemblrr.
-# Sets PUBLIC_INDEXERS array for indexers.
+# Sets SELECTED_INDEXERS array for Prowlarr.
 # Usage: source lib/fzf-tui.sh; configure_indexers "$api_key"
 
 set -euo pipefail
 
-PUBLIC_INDEXERS=()
+SELECTED_INDEXERS=()
 
 # --- TTY detection (reused across functions) ---
 _fzf_has_tty() {
@@ -73,8 +73,8 @@ fzf_single_select() {
 }
 
 # --- Generic multi-select fzf (for indexers) ---
-# Args: $1 = data_source (jq expression or curl), $2 = awk filter
-# Sets PUBLIC_INDEXERS array
+# Args: $1 = tab-separated list lines
+# Sets SELECTED_INDEXERS array
 fzf_multi_select() {
     local data="$1"
     local has_tty=false
@@ -104,20 +104,20 @@ fzf_multi_select() {
 
         if [ -n "$selected" ]; then
             while IFS= read -r idx; do
-                [ -n "$idx" ] && PUBLIC_INDEXERS+=("$idx")
+                [ -n "$idx" ] && SELECTED_INDEXERS+=("$idx")
             done <<< "$selected"
-            echo "Selected ${#PUBLIC_INDEXERS[@]} indexer(s): $(IFS=,; echo "${PUBLIC_INDEXERS[*]}")" >&2
+            echo "Selected ${#SELECTED_INDEXERS[@]} indexer(s): $(IFS=,; echo "${SELECTED_INDEXERS[*]}")" >&2
         else
             echo "No indexers selected." >&2
         fi
     else
-        # No TTY or no fzf — show top public indexers and prompt
-        echo "No interactive terminal available — listing popular public indexers." >&2
-        echo "$data" | jq -r 'sort_by(.name | ascii_downcase) | .[0:20][] | "  \(.name)"' 2>/dev/null >&2
+        # No TTY or no fzf — list options and prompt
+        echo "No interactive terminal available — listing available indexers." >&2
+        echo "$data" | cut -f1 | head -20 | sed 's/^/  /' >&2
         echo "Enter indexer names separated by spaces (or blank to skip):" >&2
         read -r input_line || true
         for idx in $input_line; do
-            PUBLIC_INDEXERS+=("$idx")
+            SELECTED_INDEXERS+=("$idx")
         done
     fi
 }

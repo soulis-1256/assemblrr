@@ -1,0 +1,8 @@
+# Include: Sonarr 4K profile (guide-backed WEB-2160p)
+
+quality_profiles:
+  - trash_id: d1498e7d189fbe6c7110ceaabb7473e6  # WEB-2160p
+    name: assemblrr WEB-2160p
+    reset_unmatched_scores:
+      enabled: true
+    min_format_score: -1000

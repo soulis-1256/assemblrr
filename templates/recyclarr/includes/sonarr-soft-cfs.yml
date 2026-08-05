@@ -1,0 +1,14 @@
+# Soften hard-block custom formats on assemblrr Sonarr profiles
+
+custom_formats:
+  - trash_ids:
+      - 9c11cd3f07101cdba90a2d81cf0e56b4  # LQ
+      - e2315f990da2e2cbfc9fa5b7a6fcfe48  # LQ (Release Title)
+      - 47435ece6b99a0b477caf360e79ba0bb  # x265 (HD)
+      - 9b64dff695c2115facf1b6ea59c9bd07  # x265 (no HDR/DV)
+      - c9eafd50846d299b862ca9bb6ea91950  # x265
+    assign_scores_to:
+      - name: assemblrr WEB-1080p
+        score: 0
+      - name: assemblrr WEB-2160p
+        score: 0
