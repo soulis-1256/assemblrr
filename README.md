@@ -74,11 +74,6 @@ After install, the CLI is on your `PATH` as `assemblrr`. Run `assemblrr <command
 | `check-vpn` | Poll VPN health |
 | `uninstall` | Remove everything (asks before deleting data) |
 
-## Uninstall
-
-`assemblrr uninstall` stops and removes the containers, network, CLI, and installation directory. Your media is kept unless you explicitly delete it. If the CLI is missing or the installation is broken, you can still run the bundled CLI directly (`bash ~/assemblrr/cli.sh uninstall`) or remove everything by hand.
-
-See [docs/uninstall.md](docs/uninstall.md) for the complete removal guide, including a full inventory of what an installation creates.
 
 ## Configuration & Architecture
 
