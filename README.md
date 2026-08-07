@@ -29,6 +29,8 @@ Self-hosted media automation, set up in minutes, not a weekend.
 
 ### Linux / WSL2
 
+*Note: `bash` must be installed to run the setup script.*
+
 bash / zsh:
 
 ```bash
@@ -91,6 +93,8 @@ Configuration lives in your installation directory (default: `~/assemblrr`).
 ## Documentation
 
 - **[TRaSH Guides & Quality Profiles](docs/trash-guides.md):** Details on how assemblrr handles quality profiles and what to do when community guide IDs change.
+- **[Uninstall Guide](docs/uninstall.md):** Complete removal guide, including a full inventory of what an installation creates.
+- **[API Reference](docs/api-reference.md):** Official API documentation links for all services in the stack.
 
 ## Development
 
