@@ -8,19 +8,13 @@
 
 Self-hosted media automation, set up in minutes, not a weekend.
 
-## Features & Philosophy
+## Features
 
-- **Docker-native stack:** One Compose project, overlays for VPN vs direct access, optional services via `compose/custom.yaml` — no host package installs for the *arr suite.
-- **Guided install, multi-platform:** Interactive wizard (or express defaults) for Linux, WSL2, and Windows (PowerShell → WSL). Fail-fast VPN check before the rest of setup when VPN is enabled.
-- **Auto-wired services:** Post-install wiring connects Radarr, Sonarr, Prowlarr, qBittorrent, Seerr, Recyclarr, and Jellyfin (libraries, auth, root folders, download clients) instead of a manual weekend of clicking.
-- **Quality profiles that ship ready:** Recyclarr syncs assemblrr-named HD and UHD (and TV) profiles from TRaSH Guides; setup only picks Seerr’s default. Both resolutions stay available for overrides.
-- **Request → library path:** Seerr in front of Radarr/Sonarr for a simple request UX, with hardlinks-friendly media layout for Jellyfin/Emby/Plex.
-- **Jellyfin auto-scan on import:** When Jellyfin is selected, Radarr/Sonarr run a small hook after each import that tells Jellyfin to rescan the library — new movies/episodes show up without a manual scan.
-- **VPN-first downloads:** Gluetun integration, download client traffic forced through the VPN context, `check-vpn` / start-time verification, and a vpn-watchdog for stalled routing.
-- **Operator CLI:** `start` / `stop` / `restart` / `status` / `health` / `logs`, `config` (show / edit / sync), `backup` / `restore`, `update-containers` / `update-cli`, and a careful `uninstall` that preserves media unless you opt in.
-- **Fail-safe backups:** CLI snapshots of configuration before risky updates so you can roll back without rebuilding from scratch.
-- **Secrets outside `.env`:** Service login and VPN credentials live under `secrets/`; runtime settings stay in `.assemblrr-config` and `.env`.
-- **Optional extras:** Lidarr, SABnzbd, Bazarr, Watchtower via custom compose — deployed, not auto-configured.
+- **Guided Multi-Platform Install:** Interactive wizard for Linux or Windows (via WSL2).
+- **Automated Service Wiring:** Automatically configures and connects Radarr, Sonarr, Prowlarr, qBittorrent, Seerr, Recyclarr, and your media server post-install.
+- **VPN-First Architecture:** Gluetun integration forces download client traffic through the VPN, complete with start-time verification and a stalled-routing watchdog.
+- **Built-in Operator CLI:** Manage the stack (`start`, `stop`, `status`), edit configurations, snapshot backups, and update containers from the command line.
+- **Optimized Media Layout:** Built-in hardlinks-friendly structure for Jellyfin/Emby/Plex with out-of-the-box TRaSH Guides quality profiles.
 
 ## The Stack
 - **Media Server:** Jellyfin (recommended), Emby, or Plex
@@ -94,34 +88,9 @@ Configuration lives in your installation directory (default: `~/assemblrr`).
 - `compose/custom.yaml`: Optional services (from the example under `compose/examples/`).
 - `config/`: Persistent service data.
 
-## Quality Profiles & TRaSH Guides
+## Documentation
 
-assemblrr uses [Recyclarr](https://recyclarr.dev/) to sync [TRaSH Guides](https://trash-guides.info/) quality profiles and custom formats into Radarr and Sonarr.
-
-**Both resolutions are always installed** as assemblrr-named profiles (movies: **assemblrr HD Bluray + WEB** + **assemblrr UHD Bluray + WEB**; TV: **assemblrr WEB-1080p** + **assemblrr WEB-2160p**). The setup question only picks Seerr’s *default* for movie requests — the other profile stays available in the quality dropdown. Stock Radarr/Sonarr profiles (Any, HD-1080p, …) also appear there; that is normal.
-
-assemblrr deliberately **does not** apply TRaSH quality min-size limits (they can reject smaller legitimate releases), and softens hard-block custom formats (LQ / x265 / 3D scores set to 0). Tier preferences from the guides still apply when better releases exist.
-
-**Those guides change over time.** Trash IDs, profile names, and Recyclarr YAML schema can all break without warning. When that happens you may see:
-
-- Recyclarr sync errors (`Invalid quality profile trash_id`, `YAML error`, etc.)
-- Seerr defaulting to **Any** instead of your chosen quality
-- Missing Recyclarr profiles in Radarr/Sonarr (only stock profiles like Any / HD-1080p)
-
-That is expected community-guide churn — not a VPN or Docker failure.
-
-### What to do when it breaks
-
-1. Check Recyclarr: `docker logs recyclarr` and/or `docker exec recyclarr recyclarr sync`
-2. List current guide IDs from inside the container:
-   ```bash
-   docker exec recyclarr recyclarr list quality-profiles radarr
-   docker exec recyclarr recyclarr list quality-profiles sonarr
-   ```
-3. Update the relevant pack under `templates/recyclarr/includes/` (or the live copies in your install’s `config/recyclarr/includes/`) with the new trash IDs. Root config is `templates/recyclarr/recyclarr.yml`.
-4. Re-run Recyclarr, then refresh app wiring: `assemblrr config sync`
-
-We try to keep templates current, but **plan on occasional manual updates** if you rely on TRaSH-backed profiles long-term. Official docs: [Recyclarr](https://recyclarr.dev/) · [TRaSH Guides](https://trash-guides.info/).
+- **[TRaSH Guides & Quality Profiles](docs/trash-guides.md):** Details on how assemblrr handles quality profiles and what to do when community guide IDs change.
 
 ## Development
 
