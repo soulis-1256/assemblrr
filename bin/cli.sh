@@ -28,6 +28,9 @@ source "$_lib_dir/core.sh"
 source "$_lib_dir/branding.sh"
 source "$_lib_dir/compose.sh"
 source "$_lib_dir/vpn.sh"
+if [ -f "$_lib_dir/services.sh" ]; then
+    source "$_lib_dir/services.sh"
+fi
 # Upgrade engine (optional on older installs until first upgrade copies these)
 if [ -f "$_lib_dir/managed_files.sh" ]; then
     source "$_lib_dir/managed_files.sh"
@@ -66,7 +69,7 @@ declare -A COMMANDS=(
     ["restart"]="restarts services (can specify service names)"
     ["stop"]="stops all services (can specify service names)"
     ["start"]="starts services (can specify service names)"
-    ["status"]="checks services status"
+    ["status"]="service dashboard (URLs + health); --docker for raw compose ps"
     ["destroy"]="destroys services so you can start from scratch (can specify service names)"
     ["uninstall"]="completely removes the stack (keeps media unless confirmed) — see docs/uninstall.md"
     ["check-vpn"]="checks if the VPN is working as expected"
@@ -113,6 +116,8 @@ show_help() {
     echo "  ${APP_CLI_NAME} upgrade             # Upgrade from git main (backup first)"
     echo "  ${APP_CLI_NAME} upgrade --from DIR  # Upgrade from a local source tree"
     echo "  ${APP_CLI_NAME} upgrade --check     # Dry-run upgrade plan"
+    echo "  ${APP_CLI_NAME} status             # URLs + health for all services"
+    echo "  ${APP_CLI_NAME} status --docker    # Raw docker compose ps"
     echo "  ${APP_CLI_NAME} config              # List config subcommands"
     echo "  ${APP_CLI_NAME} config show         # Show current configuration"
     echo "  ${APP_CLI_NAME} config edit         # Re-run setup wizard"
@@ -357,15 +362,14 @@ uninstall_app() {
         rm -f "$HOME/.local/bin/$APP_CLI_NAME" "/usr/local/bin/$APP_CLI_NAME" 2>/dev/null || true
     fi
     local _lib_module
-    for _lib_module in core branding compose vpn managed_files upgrade; do
+    for _lib_module in core branding compose vpn managed_files upgrade services; do
         rm -f "$HOME/.local/bin/lib/${_lib_module}.sh" 2>/dev/null || true
     done
     rmdir "$HOME/.local/bin/lib" 2>/dev/null || true
 
     # Setup writes this cheat-sheet under $HOME (outside the install dir)
-    if [ -n "${APP_SERVICE_FILE:-}" ]; then
-        rm -f "$HOME/${APP_SERVICE_FILE}" 2>/dev/null || true
-    fi
+    # Legacy setup wrote ~/assemblrr_services.txt — remove if present
+    rm -f "$HOME/assemblrr_services.txt" 2>/dev/null || true
 
     log_success "${APP_DISPLAY_NAME} has been uninstalled!"
     log_info "Docker images were left on disk — see docs/uninstall.md to remove them."
@@ -431,8 +435,155 @@ stop_app() {
     log_success "Services stopped successfully"
 }
 
+# Parse compose ps into associative-ish lines: service -> "state|health"
+# Uses Service name (compose key), not container name.
+_status_compose_rows() {
+    # format: service<TAB>state<TAB>health  (health may be empty)
+    "${DC[@]}" ps --format '{{.Service}}\t{{.State}}\t{{.Health}}' 2>/dev/null
+}
+
+_status_normalize() {
+    # stdin: state, health → stdout: short token + color category
+    local state="${1:-}" health="${2:-}"
+    state=$(echo "$state" | tr '[:upper:]' '[:lower:]')
+    health=$(echo "$health" | tr '[:upper:]' '[:lower:]')
+
+    if [ "$health" = "healthy" ]; then
+        echo "healthy"
+    elif [ "$health" = "unhealthy" ]; then
+        echo "unhealthy"
+    elif [ "$health" = "starting" ]; then
+        echo "starting"
+    elif [ "$state" = "running" ]; then
+        echo "running"
+    elif [ -z "$state" ]; then
+        echo "missing"
+    else
+        echo "$state"
+    fi
+}
+
 check_status() {
-    "${DC[@]}" ps || log_error "Failed to check services"
+    local raw_docker=0
+    local arg
+    for arg in "$@"; do
+        case "$arg" in
+            --docker|-d) raw_docker=1 ;;
+            -h|--help)
+                echo "Usage: ${APP_CLI_NAME} status [--docker]"
+                echo "  Default: operator dashboard (name, state, URL)."
+                echo "  --docker: raw docker compose ps table."
+                return 0
+                ;;
+        esac
+    done
+
+    if [ "$raw_docker" = "1" ]; then
+        "${DC[@]}" ps || log_error "Failed to check services"
+        return 0
+    fi
+
+    if ! type list_service_catalog >/dev/null 2>&1; then
+        log_warning "Service catalog not loaded — falling back to docker compose ps"
+        "${DC[@]}" ps || log_error "Failed to check services"
+        return 0
+    fi
+
+    # Load live state: service -> state|health
+    declare -A st_state=()
+    declare -A st_health=()
+    local svc state health line
+    while IFS=$'\t' read -r svc state health; do
+        [ -z "$svc" ] && continue
+        st_state["$svc"]="$state"
+        st_health["$svc"]="$health"
+    done < <(_status_compose_rows)
+
+    local media="${MEDIA_SERVICE:-jellyfin}"
+    local vpn="${VPN_ENABLED:-n}"
+    local vpn_label="off"
+    [ "$vpn" = "y" ] && vpn_label="on"
+
+    echo "${APP_DISPLAY_NAME}  ·  media=${media}  ·  VPN ${vpn_label}"
+    echo "Install: ${INSTALL_DIR}"
+    echo
+    printf "  %-14s %-12s %s\n" "SERVICE" "STATE" "URL / NOTE"
+    printf "  %-14s %-12s %s\n" "--------------" "------------" "---------------------------"
+
+    local label port path kind token url note
+    local seen=""
+    local unhealthy=0
+    local total=0
+
+    while IFS='|' read -r svc label port path kind; do
+        [ -z "$svc" ] && continue
+        total=$((total + 1))
+        seen="${seen}|${svc}|"
+        state="${st_state[$svc]:-}"
+        health="${st_health[$svc]:-}"
+        token=$(_status_normalize "$state" "$health")
+        if [ "$token" = "unhealthy" ] || [ "$token" = "missing" ] || [ "$token" = "exited" ] || [ "$token" = "dead" ]; then
+            unhealthy=$((unhealthy + 1))
+        fi
+
+        url=""
+        note=""
+        if [ "$kind" = "ui" ]; then
+            url=$(service_ui_url "$port" "$path" "localhost")
+            if [ "$token" = "missing" ] || [ "$token" = "exited" ]; then
+                note="(down)"
+            fi
+        else
+            note="(internal)"
+        fi
+
+        # STATE column without color for width, then rewrite — use plain token padded + color on same width
+        printf "  %-14s " "$label"
+        case "$token" in
+            healthy)   printf "${GREEN}%-12s${NC}" "healthy" ;;
+            running)   printf "${GREEN}%-12s${NC}" "running" ;;
+            starting)  printf "${YELLOW}%-12s${NC}" "starting" ;;
+            unhealthy) printf "${RED}%-12s${NC}" "unhealthy" ;;
+            missing)   printf "${RED}%-12s${NC}" "missing" ;;
+            exited)    printf "${RED}%-12s${NC}" "exited" ;;
+            *)         printf "${YELLOW}%-12s${NC}" "$token" ;;
+        esac
+        if [ -n "$url" ]; then
+            printf " %s" "$url"
+            [ -n "$note" ] && printf " %s" "$note"
+            printf "\n"
+        else
+            printf " %s\n" "${note:-(no UI)}"
+        fi
+    done < <(list_service_catalog)
+
+    # Any compose services not in the catalog (custom overlays)
+    while IFS=$'\t' read -r svc state health; do
+        [ -z "$svc" ] && continue
+        [[ "$seen" == *"|${svc}|"* ]] && continue
+        total=$((total + 1))
+        token=$(_status_normalize "$state" "$health")
+        if [ "$token" = "unhealthy" ] || [ "$token" = "missing" ] || [ "$token" = "exited" ] || [ "$token" = "dead" ]; then
+            unhealthy=$((unhealthy + 1))
+        fi
+        printf "  %-14s " "$svc"
+        case "$token" in
+            healthy)   printf "${GREEN}%-12s${NC}" "healthy" ;;
+            running)   printf "${GREEN}%-12s${NC}" "running" ;;
+            starting)  printf "${YELLOW}%-12s${NC}" "starting" ;;
+            unhealthy) printf "${RED}%-12s${NC}" "unhealthy" ;;
+            *)         printf "${YELLOW}%-12s${NC}" "$token" ;;
+        esac
+        printf " (custom / unlisted)\n"
+    done < <(_status_compose_rows)
+
+    echo
+    if [ "$unhealthy" -gt 0 ]; then
+        log_warning "${unhealthy} service(s) need attention (${total} listed)."
+        return 1
+    fi
+    log_success "All ${total} listed services look good."
+    return 0
 }
 
 update_containers() {
@@ -631,34 +782,39 @@ show_logs() {
 }
 
 check_health() {
+    # Compact pass/fail over compose health (exit 1 if any unhealthy/missing expected UI service)
     echo "${APP_DISPLAY_NAME} Health Check:"
     echo
     local unhealthy=0
+    local svc state health token
 
-    while IFS= read -r line; do
-        local name status health
-        name=$(echo "$line" | awk '{print $1}')
-        status=$(echo "$line" | awk '{print $2}')
-        health=$(echo "$line" | awk '{print $3}')
-
-        if [ "$health" = "healthy" ]; then
-            log_success "  $name: $health"
-        elif [ "$status" = "Up" ] && [ -z "$health" ]; then
-            log_warning "  $name: running (no healthcheck defined)"
-        elif [ "$health" = "starting" ]; then
-            log_warning "  $name: starting..."
-        else
-            log_error_inline "  $name: $health"
-            ((unhealthy++))
-        fi
-    done < <("${DC[@]}" ps --format '{{.Name}} {{.Status}}' 2>/dev/null | sed 's/(/ /;s/)/ /' | awk '{print $1, $2, $3}')
+    while IFS=$'\t' read -r svc state health; do
+        [ -z "$svc" ] && continue
+        token=$(_status_normalize "$state" "$health")
+        case "$token" in
+            healthy)
+                log_success "  $svc: healthy"
+                ;;
+            running)
+                log_warning "  $svc: running (no healthcheck)"
+                ;;
+            starting)
+                log_warning "  $svc: starting..."
+                ;;
+            *)
+                log_error_inline "  $svc: $token"
+                unhealthy=$((unhealthy + 1))
+                ;;
+        esac
+    done < <(_status_compose_rows)
 
     echo
-    if [ $unhealthy -gt 0 ]; then
+    if [ "$unhealthy" -gt 0 ]; then
         log_warning "$unhealthy service(s) are unhealthy"
-    else
-        log_success "All services are healthy"
+        return 1
     fi
+    log_success "All services are healthy"
+    return 0
 }
 
 update_cli() {
@@ -671,7 +827,7 @@ update_cli() {
     fi
 
     mkdir -p "$HOME/.local/bin/lib"
-    for _m in core branding compose vpn managed_files upgrade; do
+    for _m in core branding compose vpn managed_files upgrade services; do
         if [ -f "$tmp_dir/assemblrr/lib/${_m}.sh" ]; then
             cp "$tmp_dir/assemblrr/lib/${_m}.sh" "$HOME/.local/bin/lib/${_m}.sh"
         fi
@@ -706,7 +862,7 @@ main() {
             start_app "${@:2}"
             ;;
         status)
-            check_status
+            check_status "${@:2}"
             ;;
         check-vpn)
             check_vpn

@@ -328,31 +328,19 @@ configure_timezone() {
     export tz
 }
 
-running_services_location() {
-    # Always use localhost so the cheat-sheet stays valid after DHCP / network changes.
-    # (LAN IPs go stale; same-machine ctrl+click is the primary use case.)
-    local host_ip="localhost"
-
-    local -A services=(
-        ["qBittorrent"]="8081"
-        ["Radarr"]="7878"
-        ["Sonarr"]="8989"
-        ["Prowlarr"]="9696"
-        ["Seerr"]="5055"
-        ["Bazarr"]="6767"
-        ["$media_service"]="$media_service_port"
-        ["Portainer"]="9000"
-    )
-
-    echo -e "Service URLs:"
-    for service in "${!services[@]}"; do
-        if [ "$service" = "plex" ]; then
-            echo "$service: http://$host_ip:${services[$service]}/web"
-        else
-            echo "$service: http://$host_ip:${services[$service]}/"
+# running_services_location lives in lib/services.sh (sourced by setup via core path
+# or explicitly). Keep a thin wrapper if services.sh not loaded yet.
+if ! type running_services_location >/dev/null 2>&1; then
+    running_services_location() {
+        if [ -f "${_lib_dir:-}/services.sh" ]; then
+            # shellcheck source=/dev/null
+            source "${_lib_dir}/services.sh"
+            running_services_location
+            return
         fi
-    done
-}
+        echo "Service URLs: run ${APP_CLI_NAME:-assemblrr} status"
+    }
+fi
 
 get_user_info() {
     # Express mode: use current user

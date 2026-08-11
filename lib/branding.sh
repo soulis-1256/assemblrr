@@ -19,6 +19,5 @@ load_branding() {
         APP_CLI_NAME="assemblrr"
         APP_NETWORK_NAME="assemblrr_network"
         APP_BACKUP_PREFIX="assemblrr-backup"
-        APP_SERVICE_FILE="assemblrr_services.txt"
     fi
 }

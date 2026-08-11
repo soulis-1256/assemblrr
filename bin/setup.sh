@@ -220,6 +220,7 @@ check_dependencies() {
 # Requires: lib/core.sh already sourced, constants defined above
 # fzf-tui helpers (fzf_single_select, fzf_multi_select) must be sourced before prompts
 source "$APP_ROOT/lib/fzf-tui.sh"
+source "$APP_ROOT/lib/services.sh"
 source "$APP_ROOT/lib/prompts.sh"
 
 copy_configuration_files() {
@@ -237,6 +238,7 @@ copy_configuration_files() {
         ["lib/fzf-tui.sh"]="lib/fzf-tui.sh"
         ["lib/managed_files.sh"]="lib/managed_files.sh"
         ["lib/upgrade.sh"]="lib/upgrade.sh"
+        ["lib/services.sh"]="lib/services.sh"
         ["compose/base.yaml"]="compose/base.yaml"
         ["compose/direct-access.yaml"]="compose/direct-access.yaml"
         ["compose/vpn.yaml"]="compose/vpn.yaml"
@@ -550,7 +552,7 @@ install_cli() {
 
     mkdir -p "$HOME/.local/bin/lib"
     # Copy lib modules (CLI sources them from lib/ subdirectory)
-    for _lib_module in core branding compose vpn managed_files upgrade; do
+    for _lib_module in core branding compose vpn managed_files upgrade services; do
         if [ -f "$install_directory/lib/${_lib_module}.sh" ]; then
             cp "$install_directory/lib/${_lib_module}.sh" "$HOME/.local/bin/lib/${_lib_module}.sh"
         fi
@@ -706,10 +708,26 @@ install_cli
 set_permissions
 
 echo
-running_services_location
-echo
-log_info "Service locations also saved in ~/${APP_SERVICE_FILE}"
-running_services_location > ~/"${APP_SERVICE_FILE}"
+# Live dashboard (no stale ~/…_services.txt)
+if [ -f "$install_directory/lib/services.sh" ]; then
+    # shellcheck source=/dev/null
+    source "$install_directory/lib/services.sh"
+fi
+if [ -x "$HOME/.local/bin/$APP_CLI_NAME" ]; then
+    log_info "Service dashboard:"
+    # Use install CLI if present; fall back to URL list
+    if bash "$install_directory/cli.sh" status 2>/dev/null; then
+        :
+    else
+        running_services_location
+        log_info "Run: $APP_CLI_NAME status"
+    fi
+else
+    running_services_location
+    log_info "After install, run: $APP_CLI_NAME status"
+fi
+# Drop legacy cheat-sheet if an older setup left one behind
+rm -f "$HOME/assemblrr_services.txt" 2>/dev/null || true
 
 log_info "========================================================"
 if [ "$wiring_ok" -eq 1 ]; then

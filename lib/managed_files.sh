@@ -24,6 +24,7 @@ lib/prompts.sh|lib/prompts.sh
 lib/fzf-tui.sh|lib/fzf-tui.sh
 lib/managed_files.sh|lib/managed_files.sh
 lib/upgrade.sh|lib/upgrade.sh
+lib/services.sh|lib/services.sh
 compose/base.yaml|compose/base.yaml
 compose/direct-access.yaml|compose/direct-access.yaml
 compose/vpn.yaml|compose/vpn.yaml

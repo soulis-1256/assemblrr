@@ -61,8 +61,8 @@ After install, the CLI is on your `PATH` as `assemblrr`. Run `assemblrr <command
 | `start` | Start all services (with VPN verification) |
 | `stop` | Stop all services |
 | `restart` | Restart all services |
-| `status` | Show container status |
-| `health` | Show healthcheck status of all services |
+| `status` | Operator dashboard: service state + URLs (`--docker` for raw compose ps) |
+| `health` | Compact healthcheck pass/fail for all containers |
 | `logs [service]` | Follow logs (all services, or one) |
 | `config` | List config subcommands |
 | `config show` | Show current configuration |

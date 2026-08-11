@@ -1,5 +1,5 @@
 #!/bin/bash
-# Unit tests for upgrade helpers (no live stack)
+# Unit tests for upgrade helpers + service catalog (no live stack)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -11,11 +11,14 @@ source "$REPO_ROOT/lib/core.sh"
 source "$REPO_ROOT/lib/managed_files.sh"
 # shellcheck disable=SC1091
 source "$REPO_ROOT/lib/bazarr.sh"
+# shellcheck disable=SC1091
+source "$REPO_ROOT/lib/services.sh"
 
 test_suite "list_managed_files includes Bazarr and upgrade engine"
 list=$(list_managed_files)
 assert_true "has lib/bazarr.sh" "echo \"\$list\" | grep -q 'lib/bazarr.sh|lib/bazarr.sh'"
 assert_true "has lib/upgrade.sh" "echo \"\$list\" | grep -q 'lib/upgrade.sh|lib/upgrade.sh'"
+assert_true "has lib/services.sh" "echo \"\$list\" | grep -q 'lib/services.sh|lib/services.sh'"
 assert_true "has compose/base.yaml" "echo \"\$list\" | grep -q 'compose/base.yaml|compose/base.yaml'"
 assert_true "cli maps bin/cli.sh to cli.sh" "echo \"\$list\" | grep -q 'bin/cli.sh|cli.sh'"
 
@@ -27,7 +30,7 @@ assert_eq "en" "$(_bazarr_lang_code2 '')" "empty → en"
 
 test_suite "migration 001 skip when custom.yaml has bazarr"
 tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
+trap 'rm -rf "$tmp" "$tmp2"' EXIT
 mkdir -p "$tmp/compose"
 cat >"$tmp/compose/custom.yaml" <<'EOF'
 services:
@@ -48,7 +51,6 @@ test_suite "migration 001 does not skip empty install"
 tmp2=$(mktemp -d)
 mkdir -p "$tmp2/compose"
 echo "services: {}" >"$tmp2/compose/base.yaml"
-# re-source migration
 unset -f migration_should_skip migration_apply 2>/dev/null || true
 # shellcheck source=/dev/null
 source "$REPO_ROOT/migrations/001_add_bazarr.sh"
@@ -59,5 +61,15 @@ else
     _TEST_PASSES=$((_TEST_PASSES + 1))
     echo "  PASS: empty install is not skipped"
 fi
+
+test_suite "service catalog has UI URLs for core apps"
+MEDIA_SERVICE=jellyfin
+VPN_ENABLED=y
+cat=$(list_service_catalog)
+assert_contains "$cat" "bazarr|Bazarr|6767" "bazarr in catalog"
+assert_contains "$cat" "jellyfin|Jellyfin|8096" "jellyfin in catalog"
+assert_contains "$cat" "gluetun|" "gluetun when VPN on"
+url=$(service_ui_url 6767 / localhost)
+assert_eq "http://localhost:6767/" "$url" "bazarr url"
 
 test_summary

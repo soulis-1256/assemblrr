@@ -18,10 +18,10 @@ root-owned; plain `rm -rf` then fails — use the Docker removal step in Option 
 | Install directory (config, secrets, compose files) | `~/assemblrr` |
 | Media directory (your movies/TV/downloads) | `~/assemblrr-media` |
 | CLI command | `~/.local/bin/assemblrr` |
-| CLI library modules | `~/.local/bin/lib/{core,branding,compose,vpn}.sh` |
+| CLI library modules | `~/.local/bin/lib/*.sh` |
 | Runtime config | `~/assemblrr/.assemblrr-config` (written near the end of setup) |
-| Service URL cheat-sheet | `~/assemblrr_services.txt` |
 | Logs | `/tmp/assemblrr-*.log` |
+| Legacy (old installs) | `~/assemblrr_services.txt` — unused; safe to delete; `uninstall` removes it |
 
 No named Docker volumes are used — all state lives in the two directories above.
 
@@ -105,10 +105,9 @@ rm -rf ~/assemblrr-media    # WARNING: this is your movies/TV/downloads
 
 ```bash
 rm -f ~/.local/bin/assemblrr
-rm -f ~/.local/bin/lib/core.sh ~/.local/bin/lib/branding.sh \
-      ~/.local/bin/lib/compose.sh ~/.local/bin/lib/vpn.sh
+rm -f ~/.local/bin/lib/*.sh
 rmdir ~/.local/bin/lib 2>/dev/null    # only removed if now empty
-rm -f ~/assemblrr_services.txt
+rm -f ~/assemblrr_services.txt 2>/dev/null   # legacy cheat-sheet
 ```
 
 **5. Optional — remove the Docker images:**

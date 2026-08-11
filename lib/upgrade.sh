@@ -239,7 +239,7 @@ refresh_user_cli() {
     local install_dir="$1"
     mkdir -p "$HOME/.local/bin/lib"
     local m
-    for m in core branding compose vpn managed_files upgrade; do
+    for m in core branding compose vpn managed_files upgrade services; do
         if [ -f "$install_dir/lib/${m}.sh" ]; then
             cp "$install_dir/lib/${m}.sh" "$HOME/.local/bin/lib/${m}.sh"
         fi
