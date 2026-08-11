@@ -762,3 +762,273 @@ configure_sonarr() {
         "autoUnmonitorPreviouslyDownloadedEpisodes" \
         '.renameEpisodes = true | .replaceIllegalCharacters = true | .standardEpisodeFormat = "{Series Title} - S{season:00}E{episode:00} - {Episode Title} {Quality Full}" | .dailyEpisodeFormat = "{Series Title} - {Air-Date} - {Episode Title} {Quality Full}" | .animeEpisodeFormat = "{Series Title} - S{season:00}E{episode:00} - {Episode Title} {Quality Full}" | .seriesFolderFormat = "{Series Title}" | .seasonFolderFormat = "Season {season}" | .multiEpisodeStyle = 5 | .colonReplacementFormat = 4'
 }
+
+# --- Import existing media (unmapped folders) into *arr ---
+# Netflix-like: files already on disk under root folders should appear in
+# Radarr/Sonarr (and thus Bazarr) without a redownload.
+
+_folder_year() {
+    local name="$1"
+    if [[ "$name" =~ \(([0-9]{4})\)$ ]]; then
+        echo "${BASH_REMATCH[1]}"
+    fi
+}
+
+_folder_title_guess() {
+    local name="$1"
+    # Strip trailing " (YYYY)"
+    echo "$name" | sed -E 's/[[:space:]]*\([0-9]{4}\)[[:space:]]*$//'
+}
+
+# Import Radarr unmapped movie folders. Uses default quality profile; no search.
+import_radarr_existing_media() {
+    local apikey="$1"
+    local port=7878
+    local root_json unmapped profile_info profile_id
+    local added=0 skipped=0 failed=0
+    local folder_path folder_name year title_guess
+    local lookup_json match payload result movie_id
+
+    root_json=$(api_get "$port" "/api/v3/rootfolder" "$apikey")
+    if [ -z "$root_json" ] || [ "$root_json" = "[]" ]; then
+        log_step_fail "Radarr: no root folders — skip existing media import"
+        return 1
+    fi
+
+    profile_info=$(lookup_radarr_profile "$apikey")
+    profile_id=${profile_info%%:*}
+    profile_id=${profile_id:-1}
+
+    # Collect unmapped folder paths
+    while IFS=$'\t' read -r folder_path folder_name; do
+        [ -z "$folder_path" ] && continue
+        year=$(_folder_year "$folder_name")
+        title_guess=$(_folder_title_guess "$folder_name")
+
+        # Already in library at this path?
+        if api_get "$port" "/api/v3/movie" "$apikey" | jq -e --arg p "$folder_path" '
+            any(.[]; .path == $p)
+        ' >/dev/null 2>&1; then
+            skipped=$((skipped + 1))
+            continue
+        fi
+
+        # Lookup by title (+ year in query when known)
+        local term="$title_guess"
+        [ -n "$year" ] && term="${title_guess} ${year}"
+        lookup_json=$(curl -sG --connect-timeout 15 \
+            --data-urlencode "term=${term}" \
+            "http://${API_HOST}:${port}/api/v3/movie/lookup?apikey=${apikey}" 2>/dev/null || echo "[]")
+
+        if [ -z "$lookup_json" ] || [ "$lookup_json" = "[]" ]; then
+            log_step_fail "Radarr: no match for '${folder_name}'"
+            failed=$((failed + 1))
+            continue
+        fi
+
+        # Prefer exact year match when folder has a year
+        match=$(echo "$lookup_json" | jq -c --argjson y "${year:-0}" '
+            if $y > 0 then
+                ([.[] | select(.year == $y)] | .[0]) // .[0]
+            else
+                .[0]
+            end
+        ' 2>/dev/null || echo "")
+
+        if [ -z "$match" ] || [ "$match" = "null" ]; then
+            log_step_fail "Radarr: could not pick match for '${folder_name}'"
+            failed=$((failed + 1))
+            continue
+        fi
+
+        payload=$(echo "$match" | jq -c \
+            --argjson qid "$profile_id" \
+            --arg path "$folder_path" \
+            --arg root "/data/media/movies" \
+            '
+            {
+              title: .title,
+              tmdbId: .tmdbId,
+              year: .year,
+              qualityProfileId: $qid,
+              monitored: true,
+              minimumAvailability: (.minimumAvailability // "announced"),
+              rootFolderPath: $root,
+              path: $path,
+              addOptions: { searchForMovie: false }
+            }
+            ' 2>/dev/null || echo "")
+
+        if [ -z "$payload" ]; then
+            failed=$((failed + 1))
+            continue
+        fi
+
+        result=$(api_post "$port" "/api/v3/movie" "$apikey" "$payload")
+        movie_id=$(echo "$result" | jq -r '.id // empty' 2>/dev/null || echo "")
+        if [ -z "$movie_id" ]; then
+            # Already exists (tmdb) is not a hard failure
+            if echo "$result" | jq -e '.message' 2>/dev/null | grep -qi 'exist\|already' 2>/dev/null; then
+                skipped=$((skipped + 1))
+            else
+                log_step_fail "Radarr: import failed for '${folder_name}'"
+                failed=$((failed + 1))
+            fi
+            continue
+        fi
+
+        # Link files already on disk
+        api_post "$port" "/api/v3/command" "$apikey" \
+            "{\"name\":\"RescanMovie\",\"movieId\":${movie_id}}" >/dev/null 2>&1 || true
+        added=$((added + 1))
+        log_step "Radarr: imported existing '${folder_name}' (id ${movie_id}, profile ${profile_id})"
+    done < <(echo "$root_json" | jq -r '
+        .[] | .unmappedFolders[]? | "\(.path)\t\(.name)"
+    ' 2>/dev/null || true)
+
+    if [ "$added" -eq 0 ] && [ "$failed" -eq 0 ]; then
+        log_step "Radarr: no unmapped movie folders to import"
+        return 0
+    fi
+    log_step "Radarr: existing media import done (added=${added}, skipped=${skipped}, failed=${failed})"
+    [ "$failed" -eq 0 ]
+}
+
+# Import Sonarr unmapped series folders. No automatic search.
+import_sonarr_existing_media() {
+    local apikey="$1"
+    local port=8989
+    local root_json profile_info profile_id
+    local added=0 skipped=0 failed=0
+    local folder_path folder_name title_guess
+    local lookup_json match payload result series_id language_profile_id
+
+    root_json=$(api_get "$port" "/api/v3/rootfolder" "$apikey")
+    if [ -z "$root_json" ] || [ "$root_json" = "[]" ]; then
+        log_step_fail "Sonarr: no root folders — skip existing media import"
+        return 1
+    fi
+
+    profile_info=$(lookup_sonarr_profile "$apikey")
+    profile_id=${profile_info%%:*}
+    profile_id=${profile_id:-1}
+
+    # Language profile (required by modern Sonarr)
+    language_profile_id=$(api_get "$port" "/api/v3/languageprofile" "$apikey" | jq -r '.[0].id // 1' 2>/dev/null || echo "1")
+
+    while IFS=$'\t' read -r folder_path folder_name; do
+        [ -z "$folder_path" ] && continue
+        title_guess=$(_folder_title_guess "$folder_name")
+
+        if api_get "$port" "/api/v3/series" "$apikey" | jq -e --arg p "$folder_path" '
+            any(.[]; .path == $p)
+        ' >/dev/null 2>&1; then
+            skipped=$((skipped + 1))
+            continue
+        fi
+
+        lookup_json=$(curl -sG --connect-timeout 15 \
+            --data-urlencode "term=${title_guess}" \
+            "http://${API_HOST}:${port}/api/v3/series/lookup?apikey=${apikey}" 2>/dev/null || echo "[]")
+
+        if [ -z "$lookup_json" ] || [ "$lookup_json" = "[]" ]; then
+            log_step_fail "Sonarr: no match for '${folder_name}'"
+            failed=$((failed + 1))
+            continue
+        fi
+
+        match=$(echo "$lookup_json" | jq -c '.[0]' 2>/dev/null || echo "")
+        if [ -z "$match" ] || [ "$match" = "null" ]; then
+            failed=$((failed + 1))
+            continue
+        fi
+
+        payload=$(echo "$match" | jq -c \
+            --argjson qid "$profile_id" \
+            --argjson lid "$language_profile_id" \
+            --arg path "$folder_path" \
+            --arg root "/data/media/tv" \
+            '
+            . + {
+              qualityProfileId: $qid,
+              languageProfileId: $lid,
+              rootFolderPath: $root,
+              path: $path,
+              monitored: true,
+              seasonFolder: true,
+              addOptions: {
+                searchForMissingEpisodes: false,
+                searchForCutoffUnmetEpisodes: false,
+                monitor: "all"
+              }
+            } | del(.id, .statistics, .episodesChanged)
+            ' 2>/dev/null || echo "")
+
+        if [ -z "$payload" ]; then
+            failed=$((failed + 1))
+            continue
+        fi
+
+        result=$(api_post "$port" "/api/v3/series" "$apikey" "$payload")
+        series_id=$(echo "$result" | jq -r '.id // empty' 2>/dev/null || echo "")
+        if [ -z "$series_id" ]; then
+            log_step_fail "Sonarr: import failed for '${folder_name}'"
+            failed=$((failed + 1))
+            continue
+        fi
+
+        api_post "$port" "/api/v3/command" "$apikey" \
+            "{\"name\":\"RescanSeries\",\"seriesId\":${series_id}}" >/dev/null 2>&1 || true
+        added=$((added + 1))
+        log_step "Sonarr: imported existing '${folder_name}' (id ${series_id}, profile ${profile_id})"
+    done < <(echo "$root_json" | jq -r '
+        .[] | .unmappedFolders[]? | "\(.path)\t\(.name)"
+    ' 2>/dev/null || true)
+
+    if [ "$added" -eq 0 ] && [ "$failed" -eq 0 ]; then
+        log_step "Sonarr: no unmapped series folders to import"
+        return 0
+    fi
+    log_step "Sonarr: existing media import done (added=${added}, skipped=${skipped}, failed=${failed})"
+    [ "$failed" -eq 0 ]
+}
+
+# Trigger Bazarr library sync after *arr imports (best-effort)
+trigger_bazarr_library_sync() {
+    local bazarr_key=""
+    local cfg
+    for cfg in \
+        "$INSTALL_DIR/config/bazarr/config/config.yaml" \
+        "$INSTALL_DIR/config/bazarr/config/config.ini"
+    do
+        [ -f "$cfg" ] || continue
+        if [[ "$cfg" == *.yaml ]]; then
+            bazarr_key=$(awk '
+                /^auth:[[:space:]]*$/ { in_auth=1; next }
+                in_auth && /^[^[:space:]]/ { in_auth=0 }
+                in_auth && /^[[:space:]]+apikey:[[:space:]]*/ {
+                    sub(/^[[:space:]]+apikey:[[:space:]]*/, "")
+                    gsub(/["\047]/, "")
+                    print; exit
+                }
+            ' "$cfg" 2>/dev/null | head -1)
+        else
+            bazarr_key=$(sed -n 's/^[[:space:]]*apikey[[:space:]]*=[[:space:]]*//p' "$cfg" 2>/dev/null | head -1)
+        fi
+        [ -n "$bazarr_key" ] && break
+    done
+    [ -z "$bazarr_key" ] && [ -f "$INSTALL_DIR/secrets/bazarr_api_key.txt" ] && \
+        bazarr_key=$(cat "$INSTALL_DIR/secrets/bazarr_api_key.txt" 2>/dev/null || echo "")
+
+    if [ -z "$bazarr_key" ]; then
+        return 0
+    fi
+
+    curl -s -o /dev/null --connect-timeout 5 -X POST -F "taskid=update_movies" \
+        "http://${API_HOST}:6767/api/system/tasks?apikey=${bazarr_key}" 2>/dev/null || true
+    curl -s -o /dev/null --connect-timeout 5 -X POST -F "taskid=update_series" \
+        "http://${API_HOST}:6767/api/system/tasks?apikey=${bazarr_key}" 2>/dev/null || true
+    log_step "Bazarr: triggered library sync with Sonarr/Radarr"
+    return 0
+}
+

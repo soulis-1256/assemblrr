@@ -198,6 +198,16 @@ if [ -n "$SONARR_API_KEY" ]; then
     run_critical set_default_quality_profile "Sonarr" "8989" "$SONARR_API_KEY" "lookup_sonarr_profile"
 fi
 
+# Existing files under media roots → *arr library (so Bazarr/Seerr see them)
+if [ -n "$RADARR_API_KEY" ]; then
+    run_critical import_radarr_existing_media "$RADARR_API_KEY"
+fi
+if [ -n "$SONARR_API_KEY" ]; then
+    run_critical import_sonarr_existing_media "$SONARR_API_KEY"
+fi
+# After imports, pull *arr library into Bazarr
+run_optional trigger_bazarr_library_sync
+
 run_critical configure_seerr
 
 echo
