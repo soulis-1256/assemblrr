@@ -288,13 +288,9 @@ configure_timezone() {
 }
 
 running_services_location() {
-    local host_ip
-    # Get the IP of the default route interface (avoids Docker bridges, VPN tunnels)
-    host_ip=$(ip -4 route show default 2>/dev/null | awk '/src/ {for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1 || true)
-    if [ -z "$host_ip" ]; then
-        host_ip=$(hostname -I 2>/dev/null | awk '{ print $1 }' || true)
-    fi
-    host_ip=${host_ip:-"localhost"}
+    # Always use localhost so the cheat-sheet stays valid after DHCP / network changes.
+    # (LAN IPs go stale; same-machine ctrl+click is the primary use case.)
+    local host_ip="localhost"
 
     local -A services=(
         ["qBittorrent"]="8081"
