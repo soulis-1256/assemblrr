@@ -9,10 +9,12 @@ BAZARR_PORT=6767
 
 # --- helpers ---
 
-# Resolve Bazarr config.ini (linuxserver layout is usually config/config/config.ini)
-_bazarr_config_ini() {
+# Resolve Bazarr config file (v1.x uses config.yaml; older used config.ini)
+_bazarr_config_file() {
     local candidates=(
+        "$INSTALL_DIR/config/bazarr/config/config.yaml"
         "$INSTALL_DIR/config/bazarr/config/config.ini"
+        "$INSTALL_DIR/config/bazarr/config.yaml"
         "$INSTALL_DIR/config/bazarr/config.ini"
     )
     local f
@@ -25,16 +27,46 @@ _bazarr_config_ini() {
     return 1
 }
 
+# Extract auth.apikey from yaml or ini
+_bazarr_extract_apikey() {
+    local cfg="$1"
+    local key=""
+    case "$cfg" in
+        *.yaml|*.yml)
+            # Prefer yq if present; else awk under the auth: section
+            if command -v yq >/dev/null 2>&1; then
+                key=$(yq -r '.auth.apikey // empty' "$cfg" 2>/dev/null || true)
+            fi
+            if [ -z "$key" ]; then
+                key=$(awk '
+                    /^auth:[[:space:]]*$/ { in_auth=1; next }
+                    in_auth && /^[^[:space:]]/ { in_auth=0 }
+                    in_auth && /^[[:space:]]+apikey:[[:space:]]*/ {
+                        sub(/^[[:space:]]+apikey:[[:space:]]*/, "")
+                        gsub(/["\047]/, "")
+                        print
+                        exit
+                    }
+                ' "$cfg" 2>/dev/null | head -1 | tr -d '\r')
+            fi
+            ;;
+        *.ini)
+            key=$(sed -n 's/^[[:space:]]*apikey[[:space:]]*=[[:space:]]*//p' "$cfg" 2>/dev/null | head -1 | tr -d '\r')
+            ;;
+    esac
+    echo "$key"
+}
+
 read_bazarr_api_key() {
     local max_wait=180
     local wait_time=0
-    local ini key
+    local cfg key
 
     echo -n "Waiting for Bazarr to initialize" >&2
     while [ $wait_time -lt $max_wait ]; do
-        if ini=$(_bazarr_config_ini 2>/dev/null); then
-            key=$(sed -n 's/^[[:space:]]*apikey[[:space:]]*=[[:space:]]*//p' "$ini" 2>/dev/null | head -1 | tr -d '\r')
-            if [ -n "$key" ]; then
+        if cfg=$(_bazarr_config_file 2>/dev/null); then
+            key=$(_bazarr_extract_apikey "$cfg")
+            if [ -n "$key" ] && [ "$key" != "null" ]; then
                 echo >&2
                 echo "$key"
                 return 0
@@ -45,7 +77,7 @@ read_bazarr_api_key() {
         dot_inline
     done
     echo >&2
-    log_step_fail "Bazarr: config.ini / ApiKey missing after ${max_wait}s"
+    log_step_fail "Bazarr: config.yaml/ini ApiKey missing after ${max_wait}s"
     return 1
 }
 

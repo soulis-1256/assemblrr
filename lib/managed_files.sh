@@ -7,10 +7,7 @@
 # SOURCE_REL is relative to the package source tree (repo root).
 # DEST_REL is relative to the install directory.
 
-if [ -n "${_ASSEMBLRR_MANAGED_FILES_SOURCED:-}" ]; then
-    return 0
-fi
-readonly _ASSEMBLRR_MANAGED_FILES_SOURCED=1
+# Re-sourceable: redefines list_managed_files from the active package tree.
 
 list_managed_files() {
     cat <<'EOF'

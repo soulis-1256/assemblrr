@@ -101,8 +101,7 @@ apply_managed_files() {
     local copied=0 skipped=0 missing=0
 
     UPGRADE_SOURCE_ROOT="$source_root"
-    # Prefer source tree manifest (may be newer than install). Force re-load.
-    unset _ASSEMBLRR_MANAGED_FILES_SOURCED
+    # Prefer source tree manifest (may be newer than install).
     # shellcheck source=/dev/null
     if [ -f "$source_root/lib/managed_files.sh" ]; then
         source "$source_root/lib/managed_files.sh"
