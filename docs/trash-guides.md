@@ -2,6 +2,8 @@
 
 assemblrr uses [Recyclarr](https://recyclarr.dev/) to sync [TRaSH Guides](https://trash-guides.info/) quality profiles and custom formats into Radarr and Sonarr.
 
+**Subtitles:** Bazarr is wired separately (not via Recyclarr). On `config sync` / first install, assemblrr applies [TRaSH Bazarr suggested scoring](https://trash-guides.info/Bazarr/Bazarr-suggested-scoring/) (series min score 90, movies 80, auto-sync thresholds 96/86) plus free multi-provider defaults and optional OpenSubtitles.com credentials from setup.
+
 **Both resolutions are always installed** as assemblrr-named profiles (movies: **assemblrr HD Bluray + WEB** + **assemblrr UHD Bluray + WEB**; TV: **assemblrr WEB-1080p** + **assemblrr WEB-2160p**). The setup question only picks Seerr’s *default* for movie requests — the other profile stays available in the quality dropdown. Stock Radarr/Sonarr profiles (Any, HD-1080p, …) also appear there; that is normal.
 
 assemblrr deliberately **does not** apply TRaSH quality min-size limits (they can reject smaller legitimate releases), and softens hard-block custom formats (LQ / x265 / 3D scores set to 0). Tier preferences from the guides still apply when better releases exist.

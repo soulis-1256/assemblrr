@@ -11,7 +11,7 @@ Self-hosted media automation, set up in minutes, not a weekend.
 ## Features
 
 - **Guided Multi-Platform Install:** Interactive wizard for Linux or Windows (via WSL2).
-- **Automated Service Wiring:** Automatically configures and connects Radarr, Sonarr, Prowlarr, qBittorrent, Seerr, Recyclarr, and your media server post-install.
+- **Automated Service Wiring:** Automatically configures and connects Radarr, Sonarr, Prowlarr, qBittorrent, Bazarr, Seerr, Recyclarr, and your media server post-install.
 - **VPN-First Architecture:** Gluetun integration forces download client traffic through the VPN, complete with start-time verification and a stalled-routing watchdog.
 - **Built-in Operator CLI:** Manage the stack (`start`, `stop`, `status`), edit configurations, snapshot backups, and update containers from the command line.
 - **Optimized Media Layout:** Built-in hardlinks-friendly structure for Jellyfin/Emby/Plex with out-of-the-box TRaSH Guides quality profiles.
@@ -20,6 +20,7 @@ Self-hosted media automation, set up in minutes, not a weekend.
 - **Media Server:** Jellyfin (recommended), Emby, or Plex
 - **Download Client:** qBittorrent
 - **Managers:** Sonarr, Radarr
+- **Subtitles:** Bazarr (auto-wired to Sonarr/Radarr; optional OpenSubtitles.com)
 - **Indexing:** Prowlarr
 - **Request Management:** Seerr
 - **Quality Profiles:** Recyclarr

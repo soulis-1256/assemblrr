@@ -17,6 +17,7 @@ This document aggregates the official API documentation for all services used by
 | **Prowlarr** | https://prowlarr.com/docs/api/ | OpenAPI/Swagger UI |
 | **Sonarr** | https://sonarr.tv/docs/api/ | v3 API covers v3 and v4 |
 | **Radarr** | https://radarr.video/docs/api/ | OpenAPI/Swagger UI |
+| **Bazarr** | https://wiki.bazarr.media/ | Companion subtitle manager; API via `/api/` with `apikey` |
 
 ### Servarr Wiki
 - **URL:** https://wiki.servarr.com/

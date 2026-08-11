@@ -232,6 +232,7 @@ copy_configuration_files() {
         ["lib/arr.sh"]="lib/arr.sh"
         ["lib/jellyfin.sh"]="lib/jellyfin.sh"
         ["lib/seerr.sh"]="lib/seerr.sh"
+        ["lib/bazarr.sh"]="lib/bazarr.sh"
         ["lib/prompts.sh"]="lib/prompts.sh"
         ["lib/fzf-tui.sh"]="lib/fzf-tui.sh"
         ["compose/base.yaml"]="compose/base.yaml"
@@ -373,6 +374,21 @@ write_auth_secrets() {
     echo -n "${auth_password:-}" > "$secrets_dir/auth_password.txt"
     chmod 600 "$secrets_dir/auth_username.txt" "$secrets_dir/auth_password.txt"
     log_success "Auth credentials written to $secrets_dir"
+}
+
+write_opensubtitles_secrets() {
+    local secrets_dir="$install_directory/secrets"
+    mkdir -p "$secrets_dir"
+
+    if [ "${opensubtitles_enabled:-n}" = "y" ] && [ -n "${opensubtitles_username:-}" ]; then
+        echo -n "${opensubtitles_username}" > "$secrets_dir/opensubtitles_username.txt"
+        echo -n "${opensubtitles_password:-}" > "$secrets_dir/opensubtitles_password.txt"
+        chmod 600 "$secrets_dir/opensubtitles_username.txt" "$secrets_dir/opensubtitles_password.txt"
+        log_success "OpenSubtitles.com credentials written to $secrets_dir"
+    else
+        # Clear stale creds if user opted out on re-run
+        rm -f "$secrets_dir/opensubtitles_username.txt" "$secrets_dir/opensubtitles_password.txt" 2>/dev/null || true
+    fi
 }
 
 write_qbittorrent_config() {
@@ -589,6 +605,7 @@ get_installation_paths
 configure_media_service
 configure_seerr_profile
 configure_subtitle_language
+configure_opensubtitles
 configure_timezone
 configure_auth
 
@@ -608,7 +625,12 @@ else
 fi
 echo "  Media service:     $media_service (port $media_service_port)"
 echo "  Seerr Profile:     $seerr_default_profile (4K=$seerr_is_4k)"
-echo "  Subtitle language: ${subtitle_language:-none}"
+echo "  Subtitle language: ${subtitle_language:-en (Bazarr default)}"
+if [ "${opensubtitles_enabled:-n}" = "y" ]; then
+    echo "  OpenSubtitles.com: yes (username=${opensubtitles_username})"
+else
+    echo "  OpenSubtitles.com: no (free providers only)"
+fi
 echo "  Timezone:          $tz"
 echo "  Service login:     $auth_username"
 echo "========================================================"
@@ -646,6 +668,7 @@ elif [ "${setup_vpn,,}" = "y" ]; then
 fi
 
 write_auth_secrets
+write_opensubtitles_secrets
 write_qbittorrent_config
 write_runtime_config
 

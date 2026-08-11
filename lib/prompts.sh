@@ -96,7 +96,7 @@ configure_subtitle_language() {
 
     echo
     echo
-    log_info "Select your preferred subtitle language for Jellyfin."
+    log_info "Select your preferred subtitle language (Jellyfin playback + Bazarr downloads)."
 
     # Use fzf single-select with fallback to "en"
     subtitle_language=$(fzf_single_select "$iso639_url" "$awk_filter" "")
@@ -104,9 +104,50 @@ configure_subtitle_language() {
     if [ -n "$subtitle_language" ]; then
         log_success "Subtitle language: $subtitle_language"
     else
-        log_success "Subtitle language: none (no preference)"
+        log_success "Subtitle language: none (Bazarr defaults to English)"
     fi
     export subtitle_language
+}
+
+# Optional OpenSubtitles.com account for Bazarr (free registration)
+configure_opensubtitles() {
+    opensubtitles_enabled="n"
+    opensubtitles_username=""
+    opensubtitles_password=""
+
+    if [ "${SETUP_MODE:-}" = "express" ]; then
+        log_success "OpenSubtitles.com: skipped (express mode — free providers only)"
+        export opensubtitles_enabled opensubtitles_username opensubtitles_password
+        return 0
+    fi
+
+    echo
+    echo
+    log_info "Bazarr can download subtitles without an account (multiple free providers)."
+    log_info "Optional: OpenSubtitles.com improves coverage (free account: https://www.opensubtitles.com/)."
+    read -p "Do you have OpenSubtitles.com credentials? (y/N) [Default = n]: " opensubtitles_enabled
+    opensubtitles_enabled=${opensubtitles_enabled:-n}
+
+    if [ "${opensubtitles_enabled,,}" != "y" ]; then
+        opensubtitles_enabled="n"
+        log_success "OpenSubtitles.com: not configured (free providers only)"
+        export opensubtitles_enabled opensubtitles_username opensubtitles_password
+        return 0
+    fi
+
+    opensubtitles_enabled="y"
+    while [ -z "$opensubtitles_username" ]; do
+        read -p "OpenSubtitles.com username (not email): " opensubtitles_username
+        [ -z "$opensubtitles_username" ] && log_warning "Username cannot be empty."
+    done
+    while [ -z "$opensubtitles_password" ]; do
+        read_masked "OpenSubtitles.com password: " opensubtitles_password
+        if [ -z "$opensubtitles_password" ]; then
+            log_warning "Password cannot be empty."
+        fi
+    done
+    log_success "OpenSubtitles.com: credentials will be stored under secrets/"
+    export opensubtitles_enabled opensubtitles_username opensubtitles_password
 }
 
 configure_vpn() {
@@ -298,6 +339,7 @@ running_services_location() {
         ["Sonarr"]="8989"
         ["Prowlarr"]="9696"
         ["Seerr"]="5055"
+        ["Bazarr"]="6767"
         ["$media_service"]="$media_service_port"
         ["Portainer"]="9000"
     )

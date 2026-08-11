@@ -235,6 +235,31 @@ services:
       assemblrr_network:
         ipv4_address: 172.60.0.18
 
+  # Bazarr — automatic subtitle management (Sonarr/Radarr companion)
+  bazarr:
+    image: lscr.io/linuxserver/bazarr
+    container_name: bazarr
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - ${MEDIA_DIRECTORY}:/data
+      - ${INSTALL_DIRECTORY}/config/bazarr:/config
+    ports:
+      - 6767:6767
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:6767/api/system/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      assemblrr_network:
+        ipv4_address: 172.60.0.22
+
 networks:
   assemblrr_network:
     name: assemblrr_network

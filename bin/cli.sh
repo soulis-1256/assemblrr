@@ -490,7 +490,7 @@ show_config_help() {
     echo "Subcommands:"
     printf "  %-12s %s\n" "show" "Show current configuration"
     printf "  %-12s %s\n" "edit" "Re-run the setup wizard (current values as defaults)"
-    printf "  %-12s %s\n" "sync" "Re-wire service APIs (Radarr, Sonarr, Prowlarr, Seerr, …)"
+    printf "  %-12s %s\n" "sync" "Re-wire service APIs (Radarr, Sonarr, Prowlarr, Bazarr, Seerr, …)"
     echo
     echo "Examples:"
     echo "  ${APP_CLI_NAME} config           # List config options"

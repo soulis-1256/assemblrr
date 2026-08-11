@@ -55,26 +55,8 @@ services:
   #     assemblrr_network:
   #       ipv4_address: 172.60.0.21
 
-  # --- Bazarr — Automatic subtitle management ---
-  # Requires: Radarr and/or Sonarr configured (configure manually)
-  # Web UI: http://<host>:6767
-  # bazarr:
-  #   image: lscr.io/linuxserver/bazarr
-  #   container_name: bazarr
-  #   environment:
-  #     - PUID=${PUID}
-  #     - PGID=${PGID}
-  #     - TZ=${TZ}
-  #   volumes:
-  #     - /etc/localtime:/etc/localtime:ro
-  #     - ${MEDIA_DIRECTORY}:/data
-  #     - ${INSTALL_DIRECTORY}/config/bazarr:/config
-  #   ports:
-  #     - 6767:6767
-  #   restart: unless-stopped
-  #   networks:
-  #     assemblrr_network:
-  #       ipv4_address: 172.60.0.22
+  # --- Bazarr ---
+  # Bazarr ships in compose/base.yaml (auto-wired by config.sh). Do not re-add it here.
 
   # --- Watchtower — Automatic container update notifications ---
   # MONITOR_ONLY=true: Notifies when updates are available, does NOT auto-update

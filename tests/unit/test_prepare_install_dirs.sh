@@ -28,6 +28,7 @@ for rel in \
     config/prowlarr \
     config/seerr \
     config/recyclarr \
+    config/bazarr \
     config/portainer \
     secrets \
     scripts

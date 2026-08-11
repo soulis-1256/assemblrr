@@ -108,6 +108,7 @@ source "$_lib_dir/api.sh"
 source "$_lib_dir/arr.sh"
 source "$_lib_dir/jellyfin.sh"
 source "$_lib_dir/seerr.sh"
+source "$_lib_dir/bazarr.sh"
 
 # --- Main ---
 
@@ -180,6 +181,11 @@ if [ "${MEDIA_SERVICE:-}" = "jellyfin" ]; then
     run_optional configure_jellyfin_notifications
 fi
 
+# Bazarr after *arr (+ Jellyfin key when available): auto-subs for Sonarr/Radarr library
+if [ -n "$RADARR_API_KEY" ] || [ -n "$SONARR_API_KEY" ]; then
+    run_critical configure_bazarr
+fi
+
 # Recyclarr before Seerr (profiles must exist for Seerr defaults)
 run_critical configure_recyclarr
 
@@ -220,11 +226,13 @@ _cfg_log_info "Next steps:"
 if [ "${MEDIA_SERVICE:-}" = "jellyfin" ]; then
     _cfg_log_info "  1. Open Jellyfin at http://${API_HOST}:8096"
     _cfg_log_info "  2. Open Seerr at http://${API_HOST}:5055 and request a movie"
-    _cfg_log_info "  3. It will download automatically via qBittorrent and appear in Jellyfin"
+    _cfg_log_info "  3. It will download via qBittorrent; Bazarr grabs subtitles; Jellyfin shows both"
+    _cfg_log_info "  4. Bazarr UI: http://${API_HOST}:6767"
 else
     _cfg_log_info "  1. Open Seerr at http://${API_HOST}:5055"
     _cfg_log_info "  2. Request a movie — it will download automatically via qBittorrent"
-    _cfg_log_info "  3. Your media service will pick it up from your media folder"
+    _cfg_log_info "  3. Bazarr downloads subtitles alongside media (http://${API_HOST}:6767)"
+    _cfg_log_info "  4. Your media service will pick up video + sidecar subs from your media folder"
 fi
 echo
 if [ -n "$AUTH_USERNAME" ]; then
