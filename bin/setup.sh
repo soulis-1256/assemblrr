@@ -235,6 +235,8 @@ copy_configuration_files() {
         ["lib/bazarr.sh"]="lib/bazarr.sh"
         ["lib/prompts.sh"]="lib/prompts.sh"
         ["lib/fzf-tui.sh"]="lib/fzf-tui.sh"
+        ["lib/managed_files.sh"]="lib/managed_files.sh"
+        ["lib/upgrade.sh"]="lib/upgrade.sh"
         ["compose/base.yaml"]="compose/base.yaml"
         ["compose/direct-access.yaml"]="compose/direct-access.yaml"
         ["compose/vpn.yaml"]="compose/vpn.yaml"
@@ -548,8 +550,10 @@ install_cli() {
 
     mkdir -p "$HOME/.local/bin/lib"
     # Copy lib modules (CLI sources them from lib/ subdirectory)
-    for _lib_module in core branding compose vpn; do
-        cp "$install_directory/lib/${_lib_module}.sh" "$HOME/.local/bin/lib/${_lib_module}.sh"
+    for _lib_module in core branding compose vpn managed_files upgrade; do
+        if [ -f "$install_directory/lib/${_lib_module}.sh" ]; then
+            cp "$install_directory/lib/${_lib_module}.sh" "$HOME/.local/bin/lib/${_lib_module}.sh"
+        fi
     done
     cp "$cli_source" "$HOME/.local/bin/$APP_CLI_NAME" && chmod +x "$HOME/.local/bin/$APP_CLI_NAME"
     if ! grep -q '.local/bin' "$HOME/.profile" 2>/dev/null; then

@@ -72,6 +72,8 @@ After install, the CLI is on your `PATH` as `assemblrr`. Run `assemblrr <command
 | `restore /backup.tar.gz` | Restore from a backup archive |
 | `update-containers` | Pull latest images and restart (offers a backup first) |
 | `update-cli` | Update the CLI to the latest version |
+| `upgrade` | Upgrade install files from git `main` (or `--from DIR`); backup + migrations |
+| `upgrade --check` | Dry-run: show which managed files and migrations would run |
 | `check-vpn` | Poll VPN health |
 | `uninstall` | Remove everything (asks before deleting data) |
 

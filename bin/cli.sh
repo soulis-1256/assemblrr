@@ -28,6 +28,13 @@ source "$_lib_dir/core.sh"
 source "$_lib_dir/branding.sh"
 source "$_lib_dir/compose.sh"
 source "$_lib_dir/vpn.sh"
+# Upgrade engine (optional on older installs until first upgrade copies these)
+if [ -f "$_lib_dir/managed_files.sh" ]; then
+    source "$_lib_dir/managed_files.sh"
+fi
+if [ -f "$_lib_dir/upgrade.sh" ]; then
+    source "$_lib_dir/upgrade.sh"
+fi
 
 INSTALL_DIR=$(find_install_directory)
 if [ -z "$INSTALL_DIR" ]; then
@@ -67,6 +74,7 @@ declare -A COMMANDS=(
     ["restore"]="restores from a backup archive"
     ["update-containers"]="updates all containers"
     ["update-cli"]="updates the CLI script to the latest version"
+    ["upgrade"]="upgrade install files from git (or --from DIR); runs migrations"
     ["logs"]="shows container logs (optionally specify service name)"
     ["health"]="checks health status of all services"
     ["config"]="configuration: show options, or run show / edit / sync"
@@ -102,6 +110,9 @@ show_help() {
     echo "  ${APP_CLI_NAME} logs jellyfin       # View specific service logs"
     echo "  ${APP_CLI_NAME} health              # Check health of all services"
     echo "  ${APP_CLI_NAME} update-cli          # Update CLI to latest version"
+    echo "  ${APP_CLI_NAME} upgrade             # Upgrade from git main (backup first)"
+    echo "  ${APP_CLI_NAME} upgrade --from DIR  # Upgrade from a local source tree"
+    echo "  ${APP_CLI_NAME} upgrade --check     # Dry-run upgrade plan"
     echo "  ${APP_CLI_NAME} config              # List config subcommands"
     echo "  ${APP_CLI_NAME} config show         # Show current configuration"
     echo "  ${APP_CLI_NAME} config edit         # Re-run setup wizard"
@@ -346,7 +357,7 @@ uninstall_app() {
         rm -f "$HOME/.local/bin/$APP_CLI_NAME" "/usr/local/bin/$APP_CLI_NAME" 2>/dev/null || true
     fi
     local _lib_module
-    for _lib_module in core branding compose vpn; do
+    for _lib_module in core branding compose vpn managed_files upgrade; do
         rm -f "$HOME/.local/bin/lib/${_lib_module}.sh" 2>/dev/null || true
     done
     rmdir "$HOME/.local/bin/lib" 2>/dev/null || true
@@ -660,10 +671,11 @@ update_cli() {
     fi
 
     mkdir -p "$HOME/.local/bin/lib"
-    cp "$tmp_dir/assemblrr/lib/core.sh" "$HOME/.local/bin/lib/core.sh"
-    cp "$tmp_dir/assemblrr/lib/branding.sh" "$HOME/.local/bin/lib/branding.sh"
-    cp "$tmp_dir/assemblrr/lib/compose.sh" "$HOME/.local/bin/lib/compose.sh"
-    cp "$tmp_dir/assemblrr/lib/vpn.sh" "$HOME/.local/bin/lib/vpn.sh"
+    for _m in core branding compose vpn managed_files upgrade; do
+        if [ -f "$tmp_dir/assemblrr/lib/${_m}.sh" ]; then
+            cp "$tmp_dir/assemblrr/lib/${_m}.sh" "$HOME/.local/bin/lib/${_m}.sh"
+        fi
+    done
     cp "$tmp_dir/assemblrr/bin/cli.sh" "$HOME/.local/bin/$APP_CLI_NAME" && chmod +x "$HOME/.local/bin/$APP_CLI_NAME"
     # Remove old system-wide install if it exists
     [ -n "${APP_CLI_NAME:-}" ] && rm -f "/usr/local/bin/$APP_CLI_NAME" 2>/dev/null
@@ -717,6 +729,12 @@ main() {
             ;;
         update-cli)
             update_cli
+            ;;
+        upgrade)
+            if ! type upgrade_app >/dev/null 2>&1; then
+                log_error "Upgrade engine not found. Update CLI from a current checkout: bash /path/to/repo/bin/cli.sh upgrade --from /path/to/repo"
+            fi
+            upgrade_app "${@:2}"
             ;;
         logs)
             show_logs "$@"

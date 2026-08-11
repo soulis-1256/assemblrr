@@ -83,13 +83,41 @@ _bazarr_post_form() {
         "$@" 2>/dev/null || echo "000"
 }
 
-# Map ISO 639-1 (setup) → Bazarr code2 (same for most languages)
+# Map setup / ISO 639-1 or 639-2 codes → Bazarr language filter code2 (ISO 639-1)
 _bazarr_lang_code2() {
     local code="${1:-en}"
-    # Setup stores 2-letter codes (en, el, …). Bazarr language filter uses code2.
+    code=${code%%$'\t'*}
+    code=${code// /}
     case "$code" in
-        ""|"none"|"None") echo "en" ;;
-        *) echo "$code" ;;
+        ""|"none"|"None") echo "en"; return ;;
+        # Already 2-letter
+        [a-z][a-z]) echo "$code"; return ;;
+        # Common ISO 639-2/B (and some T) → 639-1 (setup has stored "eng" etc.)
+        eng) echo "en" ;;
+        gre|ell) echo "el" ;;
+        deu|ger) echo "de" ;;
+        fra|fre) echo "fr" ;;
+        spa) echo "es" ;;
+        ita) echo "it" ;;
+        por) echo "pt" ;;
+        nld|dut) echo "nl" ;;
+        rus) echo "ru" ;;
+        jpn) echo "ja" ;;
+        zho|chi) echo "zh" ;;
+        kor) echo "ko" ;;
+        ara) echo "ar" ;;
+        tur) echo "tr" ;;
+        pol) echo "pl" ;;
+        swe) echo "sv" ;;
+        nor) echo "no" ;;
+        dan) echo "da" ;;
+        fin) echo "fi" ;;
+        heb) echo "he" ;;
+        hin) echo "hi" ;;
+        *)
+            # Unknown 3-letter: keep as-is (Bazarr may reject; better than inventing)
+            echo "$code"
+            ;;
     esac
 }
 
