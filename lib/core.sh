@@ -235,7 +235,6 @@ prepare_install_dirs() {
         "config/sonarr"
         "config/radarr"
         "config/prowlarr"
-        "config/portainer"
         "config/seerr"
         "config/recyclarr"
         "config/lidarr"

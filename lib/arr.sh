@@ -781,7 +781,7 @@ configure_prowlarr() {
         local selected_indexers=()
         if [ -n "${SELECTED_INDEXERS+x}" ] && [ "${#SELECTED_INDEXERS[@]}" -gt 0 ]; then
             selected_indexers=("${SELECTED_INDEXERS[@]}")
-            echo "Adding ${#selected_indexers[@]} indexer(s) to Prowlarr" >&2
+            echo "Applying ${#selected_indexers[@]} selected Prowlarr indexer(s)" >&2
         fi
 
         # Get existing indexers to avoid duplicates
@@ -839,7 +839,7 @@ configure_prowlarr() {
         done
         if [ "${#selected_indexers[@]}" -gt 0 ]; then
             echo >&2
-            log_success "Indexer setup finished (check markers above for any failures)" >&2
+            log_success "Prowlarr indexer configuration finished (check markers above for any failures)" >&2
         fi
     fi
 

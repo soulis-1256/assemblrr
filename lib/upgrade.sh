@@ -370,7 +370,9 @@ upgrade_app() {
 
     log_info "Bringing stack up with updated compose..."
     build_compose_args "$INSTALL_DIR" "${VPN_ENABLED:-n}"
-    if ! run_docker compose "${COMPOSE_ARGS[@]}" --profile "${MEDIA_SERVICE:-jellyfin}" up -d; then
+    # --remove-orphans drops containers for services removed from managed compose
+    # (e.g. Portainer) while leaving services still defined in custom.yaml alone.
+    if ! run_docker compose "${COMPOSE_ARGS[@]}" --profile "${MEDIA_SERVICE:-jellyfin}" up -d --remove-orphans; then
         log_error "docker compose up failed. Restore with: ${APP_CLI_NAME:-assemblrr} restore <backup.tar.gz>"
     fi
 

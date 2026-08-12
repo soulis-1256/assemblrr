@@ -175,27 +175,6 @@ services:
       assemblrr_network:
         ipv4_address: 172.60.0.15
 
-  # Portainer — container management UI
-  portainer:
-    image: portainer/portainer-ce
-    container_name: portainer
-    ports:
-      - 9000:9000
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:9000/api/status"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-    volumes:
-      - /etc/localtime:/etc/localtime:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ${INSTALL_DIRECTORY}/config/portainer:/data
-    restart: unless-stopped
-    networks:
-      assemblrr_network:
-        ipv4_address: 172.60.0.16
-
   # Seerr — media request management (successor to Jellyseerr/Overseerr)
   # Host port 5055 is published by seerr-gateway (not seerr) so DELETE /request
   # can cascade into media file purge. Seerr stays on the Docker network only.

@@ -134,7 +134,8 @@ fzf_multi_select() {
 configure_indexers() {
     local provided_key="$1"
     echo >&2
-    log_warning "Time to add some Indexers into Prowlarr." >&2
+    log_info "Optional: configure Prowlarr indexers now, or skip and use the Prowlarr UI later." >&2
+    log_info "Only enable sources you are authorized to use." >&2
 
     # Try to fetch indexer list from a running Prowlarr instance
     local prowlarr_key="${provided_key:-}"
@@ -156,13 +157,13 @@ configure_indexers() {
         local formatted
         formatted=$(echo "$indexer_data" | jq -r 'sort_by(.name | ascii_downcase)[] | "\(.name)\t\(if .enable then "" else "[P]" end)\t\(.description // "" | gsub("\n"; " ") | .[0:120])"' 2>/dev/null)
         fzf_multi_select "$formatted" \
-            "Select indexers> " \
+            "Prowlarr indexers (optional)> " \
             "Enter/TAB=toggle  Ctrl-O=confirm  Esc=skip  [P]=private" \
             SELECTED_INDEXERS \
             "indexer"
     else
-        echo "Prowlarr is not responding — skipping indexer selection." >&2
-        echo "You can add indexers later via the Prowlarr web UI." >&2
+        echo "Prowlarr is not responding — skipping optional indexer configuration." >&2
+        echo "You can configure indexers later in the Prowlarr web UI if needed." >&2
     fi
 }
 
@@ -195,14 +196,14 @@ _list_bazarr_providers_from_container() {
 configure_subtitle_providers() {
     SELECTED_SUBTITLE_PROVIDERS=()
     echo >&2
-    log_warning "Time to pick subtitle providers for Bazarr." >&2
-    echo "List comes from the running Bazarr image. Nothing is enabled unless you select it." >&2
-    echo "OpenSubtitles.com is added automatically when you saved credentials during setup." >&2
+    log_info "Optional: configure Bazarr subtitle providers now, or skip and use the Bazarr UI later." >&2
+    echo "Catalog comes from the running Bazarr image. Nothing is enabled unless you select it." >&2
+    echo "OpenSubtitles.com is enabled automatically only if you saved credentials during setup." >&2
 
     local names formatted
     if ! names=$(_list_bazarr_providers_from_container); then
-        echo "Bazarr container not available — skipping provider selection." >&2
-        echo "You can add providers later via the Bazarr web UI." >&2
+        echo "Bazarr container not available — skipping optional provider configuration." >&2
+        echo "You can configure providers later in the Bazarr web UI if needed." >&2
         return 0
     fi
     if [ -z "$names" ]; then
@@ -212,7 +213,7 @@ configure_subtitle_providers() {
 
     formatted=$(echo "$names" | awk '{print $1 "\t"}')
     fzf_multi_select "$formatted" \
-        "Select subtitle providers> " \
+        "Bazarr providers (optional)> " \
         "Enter/TAB=toggle  Ctrl-O=confirm  Esc=skip (enable none)" \
         SELECTED_SUBTITLE_PROVIDERS \
         "provider"

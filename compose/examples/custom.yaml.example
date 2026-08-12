@@ -58,6 +58,22 @@ services:
   # --- Bazarr ---
   # Bazarr ships in compose/base.yaml (auto-wired by config.sh). Do not re-add it here.
 
+  # --- Portainer — optional Docker UI (not part of the default stack; prefer assemblrr CLI) ---
+  # Web UI: http://localhost:9000
+  # portainer:
+  #   image: portainer/portainer-ce
+  #   container_name: portainer
+  #   ports:
+  #     - 9000:9000
+  #   volumes:
+  #     - /etc/localtime:/etc/localtime:ro
+  #     - /var/run/docker.sock:/var/run/docker.sock:ro
+  #     - ${INSTALL_DIRECTORY}/config/portainer:/data
+  #   restart: unless-stopped
+  #   networks:
+  #     assemblrr_network:
+  #       ipv4_address: 172.60.0.16
+
   # --- Watchtower — Automatic container update notifications ---
   # MONITOR_ONLY=true: Notifies when updates are available, does NOT auto-update
   # To enable notifications, set WATCHTOWER_NOTIFICATION_URL (see: https://containrrr.dev/shoutrrr/v0.5/services/)

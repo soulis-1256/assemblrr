@@ -690,7 +690,7 @@ log_info "This may take a while..."
 # Ensure mounts still exist/owned immediately before the full stack comes up
 prepare_install_dirs "$install_directory" "$puid" "$pgid"
 build_compose_args "$install_directory" "${setup_vpn,,}"
-if ! run_docker compose "${COMPOSE_ARGS[@]}" --profile "$media_service" up -d; then
+if ! run_docker compose "${COMPOSE_ARGS[@]}" --profile "$media_service" up -d --remove-orphans; then
     log_error "Failed to start ${APP_DISPLAY_NAME} services"
 fi
 
@@ -713,21 +713,17 @@ install_cli
 set_permissions
 
 echo
-# Live dashboard (no stale ~/…_services.txt)
+# Live dashboard once (status exits non-zero when something is unhealthy —
+# that is still a successful print; do not fall back to a second URL list).
 if [ -f "$install_directory/lib/services.sh" ]; then
     # shellcheck source=/dev/null
     source "$install_directory/lib/services.sh"
 fi
-if [ -x "$HOME/.local/bin/$APP_CLI_NAME" ]; then
+if [ -f "$install_directory/cli.sh" ]; then
     log_info "Service dashboard:"
-    # Use install CLI if present; fall back to URL list
-    if bash "$install_directory/cli.sh" status 2>/dev/null; then
-        :
-    else
-        running_services_location
-        log_info "Run: $APP_CLI_NAME status"
-    fi
-else
+    bash "$install_directory/cli.sh" status || true
+    log_info "Re-check anytime: $APP_CLI_NAME status"
+elif type running_services_location >/dev/null 2>&1; then
     running_services_location
     log_info "After install, run: $APP_CLI_NAME status"
 fi

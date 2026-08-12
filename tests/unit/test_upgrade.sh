@@ -70,7 +70,31 @@ assert_contains "$cat" "bazarr|Bazarr|6767" "bazarr in catalog"
 assert_contains "$cat" "jellyfin|Jellyfin|8096" "jellyfin in catalog"
 assert_contains "$cat" "seerr-gateway|Seerr|5055" "Seerr UI via seerr-gateway"
 assert_contains "$cat" "gluetun|" "gluetun when VPN on"
+assert_true "portainer not in catalog" "! echo \"$cat\" | grep -q '^portainer|'"
 url=$(service_ui_url 6767 / localhost)
 assert_eq "http://localhost:6767/" "$url" "bazarr url"
+
+test_suite "migration 002 skips when custom.yaml keeps portainer"
+tmp3=$(mktemp -d)
+mkdir -p "$tmp3/compose"
+cat >"$tmp3/compose/custom.yaml" <<'EOF'
+services:
+  portainer:
+    image: portainer/portainer-ce
+EOF
+unset -f migration_should_skip migration_apply 2>/dev/null || true
+# shellcheck source=/dev/null
+source "$REPO_ROOT/migrations/002_remove_portainer.sh"
+if migration_should_skip "$tmp3"; then
+    _TEST_PASSES=$((_TEST_PASSES + 1))
+    echo "  PASS: skips when custom.yaml defines portainer"
+else
+    _TEST_FAILURES=$((_TEST_FAILURES + 1))
+    echo "  FAIL: expected skip for custom.yaml portainer"
+fi
+rm -rf "$tmp3"
+
+test_suite "upgrade uses --remove-orphans"
+assert_true "upgrade up -d --remove-orphans" "grep -q 'up -d --remove-orphans' \"$REPO_ROOT/lib/upgrade.sh\""
 
 test_summary

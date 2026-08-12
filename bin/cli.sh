@@ -443,10 +443,10 @@ start_app() {
     fi
 
     if [ "$#" -eq 0 ]; then
-        "${DC[@]}" up -d || log_error "Failed to start services"
+        "${DC[@]}" up -d --remove-orphans || log_error "Failed to start services"
         wait_for_services
     else
-        "${DC[@]}" up -d "$@" || log_error "Failed to start services"
+        "${DC[@]}" up -d --remove-orphans "$@" || log_error "Failed to start services"
     fi
 }
 
@@ -456,11 +456,11 @@ restart_app() {
 
     if [ "$#" -eq 0 ]; then
         "${DC[@]}" stop || log_warning "Some services failed to stop"
-        "${DC[@]}" up -d || log_error "Failed to start services"
+        "${DC[@]}" up -d --remove-orphans || log_error "Failed to start services"
         wait_for_services
     else
         "${DC[@]}" stop "$@" || log_warning "Some services failed to stop"
-        "${DC[@]}" up -d "$@" || log_error "Failed to start services"
+        "${DC[@]}" up -d --remove-orphans "$@" || log_error "Failed to start services"
     fi
 }
 
@@ -782,7 +782,7 @@ restore_app() {
         alpine tar -xzf "/backup/$(basename "$abs_backup_file")" -C /target || log_error "Failed to extract backup"
 
     echo "Starting ${APP_DISPLAY_NAME} services..."
-    "${DC[@]}" up -d || log_warning "Failed to start services"
+    "${DC[@]}" up -d --remove-orphans || log_warning "Failed to start services"
 
     echo "Cleaning up old safety snapshots (keeping last 3)..."
     # Keep only the 3 most recent backups, remove the rest

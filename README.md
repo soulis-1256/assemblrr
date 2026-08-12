@@ -24,7 +24,7 @@ Self-hosted media automation, set up in minutes, not a weekend.
 - **Indexing:** Prowlarr
 - **Request Management:** Seerr (delete request fully removes media via `seerr-gateway`; see [docs/seerr-delete-request.md](docs/seerr-delete-request.md))
 - **Quality Profiles:** Recyclarr
-- **Management:** Portainer
+- **Management:** Built-in `assemblrr` CLI (`status`, `logs`, `start`/`stop`, …)
 
 ## Installation
 

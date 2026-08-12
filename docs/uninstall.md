@@ -13,7 +13,7 @@ root-owned; plain `rm -rf` then fails — use the Docker removal step in Option 
 
 | Component | Default location |
 |---|---|
-| Containers | `jellyfin`/`emby`/`plex` (your choice), `qbittorrent`, `sonarr`, `radarr`, `prowlarr`, `bazarr`, `seerr`, `seerr-gateway`, `media-purge-watch`, `recyclarr`, `portainer` — plus `gluetun`, `deunhealth`, `vpn-watchdog` when VPN is enabled |
+| Containers | `jellyfin`/`emby`/`plex` (your choice), `qbittorrent`, `sonarr`, `radarr`, `prowlarr`, `bazarr`, `seerr`, `seerr-gateway`, `media-purge-watch`, `recyclarr` — plus `gluetun`, `deunhealth`, `vpn-watchdog` when VPN is enabled; older installs may still have `portainer` |
 | Docker network | `assemblrr_network` |
 | Install directory (config, secrets, compose files) | `~/assemblrr` |
 | Media directory (your movies/TV/downloads) | `~/assemblrr-media` |
@@ -71,6 +71,7 @@ you deliberately remove it in step 3.
 docker rm -f jellyfin emby plex qbittorrent sonarr radarr prowlarr bazarr \
     seerr seerr-gateway media-purge-watch recyclarr portainer \
     gluetun deunhealth vpn-watchdog 2>/dev/null
+# portainer: only if an older install still has it
 docker network rm assemblrr_network 2>/dev/null
 ```
 
@@ -118,8 +119,9 @@ rm -f ~/assemblrr_services.txt 2>/dev/null   # legacy cheat-sheet
 # swap jellyfin for emby/plex if you chose a different media server
 docker rmi lscr.io/linuxserver/jellyfin lscr.io/linuxserver/qbittorrent \
     lscr.io/linuxserver/sonarr lscr.io/linuxserver/radarr \
-    lscr.io/linuxserver/prowlarr portainer/portainer-ce \
+    lscr.io/linuxserver/prowlarr \
     ghcr.io/seerr-team/seerr ghcr.io/recyclarr/recyclarr alpine:3
+# older installs: docker rmi portainer/portainer-ce
 ```
 
 ## Windows / WSL2

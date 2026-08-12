@@ -29,8 +29,3 @@ This document aggregates the official API documentation for all services used by
 |---------|-------------------|-------|
 | **Seerr** | https://api-docs.overseerr.dev/ | Swagger UI |
 
-## Utility
-
-| Service | API Documentation | Notes |
-|---------|-------------------|-------|
-| **Portainer** | https://documentation.portainer.io/ | REST API for container management |

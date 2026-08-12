@@ -47,7 +47,6 @@ list_service_catalog() {
         "radarr|Radarr|7878|/|ui" \
         "prowlarr|Prowlarr|9696|/|ui" \
         "qbittorrent|qBittorrent|8081|/|ui" \
-        "portainer|Portainer|9000|/|ui" \
         "recyclarr|Recyclarr|||internal"
 
     printf '%s\n' \
