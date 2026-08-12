@@ -640,7 +640,7 @@ echo "  Subtitle language: ${subtitle_language:-en (Bazarr default)}"
 if [ "${opensubtitles_enabled:-n}" = "y" ]; then
     echo "  OpenSubtitles.com: yes (username=${opensubtitles_username})"
 else
-    echo "  OpenSubtitles.com: no (free providers only)"
+    echo "  OpenSubtitles.com: no (pick providers at wire-up)"
 fi
 echo "  Timezone:          $tz"
 echo "  Service login:     $auth_username"

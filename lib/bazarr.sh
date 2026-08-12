@@ -222,10 +222,25 @@ configure_bazarr() {
         os_pass=$(cat "$INSTALL_DIR/secrets/opensubtitles_password.txt" 2>/dev/null || echo "")
     fi
 
-    # Default free / no-account providers (+ OS.com when creds present)
-    providers=(gestdown yifysubtitles tvsubtitles bsplayer embeddedsubtitles)
+    # Providers: user selection from live Bazarr catalog (configure_subtitle_providers).
+    # No hardcoded third-party defaults — same model as Prowlarr indexers.
+    providers=()
+    if [ -n "${SELECTED_SUBTITLE_PROVIDERS+x}" ] && [ "${#SELECTED_SUBTITLE_PROVIDERS[@]}" -gt 0 ]; then
+        providers=("${SELECTED_SUBTITLE_PROVIDERS[@]}")
+    fi
+    # User supplied OS.com credentials during setup → enable that provider
     if [ -n "$os_user" ] && [ -n "$os_pass" ]; then
-        providers+=(opensubtitlescom)
+        local has_os=0
+        local p
+        for p in "${providers[@]+"${providers[@]}"}"; do
+            [ "$p" = "opensubtitlescom" ] && has_os=1 && break
+        done
+        if [ "$has_os" -eq 0 ]; then
+            providers+=(opensubtitlescom)
+        fi
+    fi
+    if [ "${#providers[@]}" -eq 0 ]; then
+        log_step "Bazarr: no subtitle providers selected (configure later in Bazarr UI)"
     fi
 
     # --- Core integrations + TRaSH-style scoring ---
@@ -250,7 +265,7 @@ configure_bazarr() {
     )
 
     local p
-    for p in "${providers[@]}"; do
+    for p in "${providers[@]+"${providers[@]}"}"; do
         form_args+=(-F "settings-general-enabled_providers=${p}")
     done
 

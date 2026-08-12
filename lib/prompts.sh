@@ -116,21 +116,21 @@ configure_opensubtitles() {
     opensubtitles_password=""
 
     if [ "${SETUP_MODE:-}" = "express" ]; then
-        log_success "OpenSubtitles.com: skipped (express mode — free providers only)"
+        log_success "OpenSubtitles.com: skipped (express mode — pick providers at wire-up)"
         export opensubtitles_enabled opensubtitles_username opensubtitles_password
         return 0
     fi
 
     echo
     echo
-    log_info "Bazarr can download subtitles without an account (multiple free providers)."
-    log_info "Optional: OpenSubtitles.com improves coverage (free account: https://www.opensubtitles.com/)."
+    log_info "Subtitle providers are chosen later (fzf from the Bazarr image), same idea as Prowlarr indexers."
+    log_info "Optional: OpenSubtitles.com account for that provider (https://www.opensubtitles.com/)."
     read -p "Do you have OpenSubtitles.com credentials? (y/N) [Default = n]: " opensubtitles_enabled
     opensubtitles_enabled=${opensubtitles_enabled:-n}
 
     if [ "${opensubtitles_enabled,,}" != "y" ]; then
         opensubtitles_enabled="n"
-        log_success "OpenSubtitles.com: not configured (free providers only)"
+        log_success "OpenSubtitles.com: not configured (enable later via provider picker or Bazarr UI)"
         export opensubtitles_enabled opensubtitles_username opensubtitles_password
         return 0
     fi

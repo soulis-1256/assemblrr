@@ -184,6 +184,7 @@ fi
 
 # Bazarr after *arr (+ Jellyfin key when available): auto-subs for Sonarr/Radarr library
 if [ -n "$RADARR_API_KEY" ] || [ -n "$SONARR_API_KEY" ]; then
+    run_optional configure_subtitle_providers
     run_critical configure_bazarr
 fi
 

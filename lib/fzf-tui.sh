@@ -1,12 +1,13 @@
 #!/bin/bash
-# fzf-based TUI for selections (Prowlarr indexers, Jellyfin languages)
+# fzf-based TUI for selections (Prowlarr indexers, Bazarr providers, languages)
 # Provides reusable fzf selection patterns for assemblrr.
-# Sets SELECTED_INDEXERS array for Prowlarr.
+# Sets SELECTED_INDEXERS / SELECTED_SUBTITLE_PROVIDERS arrays.
 # Usage: source lib/fzf-tui.sh; configure_indexers "$api_key"
 
 set -euo pipefail
 
 SELECTED_INDEXERS=()
+SELECTED_SUBTITLE_PROVIDERS=()
 
 # --- TTY detection (reused across functions) ---
 _fzf_has_tty() {
@@ -72,12 +73,21 @@ fzf_single_select() {
     fi
 }
 
-# --- Generic multi-select fzf (for indexers) ---
+# --- Generic multi-select fzf ---
 # Args: $1 = tab-separated list lines
-# Sets SELECTED_INDEXERS array
+#       $2 = prompt (optional)
+#       $3 = header (optional)
+#       $4 = result array name (optional; default SELECTED_INDEXERS)
+#       $5 = noun for log messages (optional; default "item")
+# Appends selected first-column values into the named array.
 fzf_multi_select() {
     local data="$1"
+    local prompt="${2:-Select items> }"
+    local header="${3:-Enter/TAB=toggle  Ctrl-O=confirm  Esc=skip}"
+    local result_var="${4:-SELECTED_INDEXERS}"
+    local noun="${5:-item}"
     local has_tty=false
+    local -n _fzf_result_ref="$result_var"
 
     _fzf_has_tty && has_tty=true
 
@@ -86,17 +96,16 @@ fzf_multi_select() {
     fi
 
     if _fzf_can_render && $has_tty; then
-        # fzf TUI: multi-select with toggle+confirm
         local selected
         selected=$(echo "$data" | fzf \
             --multi \
-            --prompt="Select indexers> " \
+            --prompt="$prompt" \
             --delimiter='\t' \
             --with-nth=1..2 \
             --bind='enter:toggle' \
             --bind='tab:toggle' \
             --bind='ctrl-o:accept' \
-            --header='Enter/TAB=toggle  Ctrl-O=confirm  Esc=skip  [P]=private' \
+            --header="$header" \
             --height=80% \
             --layout=reverse \
             --border \
@@ -104,20 +113,19 @@ fzf_multi_select() {
 
         if [ -n "$selected" ]; then
             while IFS= read -r idx; do
-                [ -n "$idx" ] && SELECTED_INDEXERS+=("$idx")
+                [ -n "$idx" ] && _fzf_result_ref+=("$idx")
             done <<< "$selected"
-            echo "Selected ${#SELECTED_INDEXERS[@]} indexer(s): $(IFS=,; echo "${SELECTED_INDEXERS[*]}")" >&2
+            echo "Selected ${#_fzf_result_ref[@]} ${noun}(s): $(IFS=,; echo "${_fzf_result_ref[*]}")" >&2
         else
-            echo "No indexers selected." >&2
+            echo "No ${noun}s selected." >&2
         fi
     else
-        # No TTY or no fzf — list options and prompt
-        echo "No interactive terminal available — listing available indexers." >&2
-        echo "$data" | cut -f1 | head -20 | sed 's/^/  /' >&2
-        echo "Enter indexer names separated by spaces (or blank to skip):" >&2
+        echo "No interactive terminal available — listing available ${noun}s." >&2
+        echo "$data" | cut -f1 | head -40 | sed 's/^/  /' >&2
+        echo "Enter ${noun} names separated by spaces (or blank to skip):" >&2
         read -r input_line || true
         for idx in $input_line; do
-            SELECTED_INDEXERS+=("$idx")
+            _fzf_result_ref+=("$idx")
         done
     fi
 }
@@ -147,9 +155,65 @@ configure_indexers() {
     if [ -n "$indexer_data" ] && echo "$indexer_data" | jq -e 'type == "array"' >/dev/null 2>&1; then
         local formatted
         formatted=$(echo "$indexer_data" | jq -r 'sort_by(.name | ascii_downcase)[] | "\(.name)\t\(if .enable then "" else "[P]" end)\t\(.description // "" | gsub("\n"; " ") | .[0:120])"' 2>/dev/null)
-        fzf_multi_select "$formatted"
+        fzf_multi_select "$formatted" \
+            "Select indexers> " \
+            "Enter/TAB=toggle  Ctrl-O=confirm  Esc=skip  [P]=private" \
+            SELECTED_INDEXERS \
+            "indexer"
     else
         echo "Prowlarr is not responding — skipping indexer selection." >&2
         echo "You can add indexers later via the Prowlarr web UI." >&2
     fi
+}
+
+# List subtitle provider keys from the running Bazarr container (Bazarr's catalog, not ours).
+# Skips internal modules only (mixins/utils/helpers), not branded providers.
+_list_bazarr_providers_from_container() {
+    local dirs=(
+        /app/bazarr/bin/custom_libs/subliminal_patch/providers
+        /app/bazarr/custom_libs/subliminal_patch/providers
+    )
+    local d names=""
+    if ! command -v docker &>/dev/null; then
+        return 1
+    fi
+    if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qx 'bazarr'; then
+        return 1
+    fi
+    for d in "${dirs[@]}"; do
+        names=$(docker exec bazarr sh -c \
+            "ls -1 '${d}'/*.py 2>/dev/null | xargs -n1 basename 2>/dev/null" 2>/dev/null || true)
+        if [ -n "$names" ]; then
+            echo "$names" | sed 's/\.py$//' | grep -vE '^(mixins|utils|avistaz_network|_.*)$' | sort -u
+            return 0
+        fi
+    done
+    return 1
+}
+
+# --- Bazarr subtitle provider selection (live from container, same idea as Prowlarr) ---
+configure_subtitle_providers() {
+    SELECTED_SUBTITLE_PROVIDERS=()
+    echo >&2
+    log_warning "Time to pick subtitle providers for Bazarr." >&2
+    echo "List comes from the running Bazarr image. Nothing is enabled unless you select it." >&2
+    echo "OpenSubtitles.com is added automatically when you saved credentials during setup." >&2
+
+    local names formatted
+    if ! names=$(_list_bazarr_providers_from_container); then
+        echo "Bazarr container not available — skipping provider selection." >&2
+        echo "You can add providers later via the Bazarr web UI." >&2
+        return 0
+    fi
+    if [ -z "$names" ]; then
+        echo "No providers found in Bazarr image — skipping." >&2
+        return 0
+    fi
+
+    formatted=$(echo "$names" | awk '{print $1 "\t"}')
+    fzf_multi_select "$formatted" \
+        "Select subtitle providers> " \
+        "Enter/TAB=toggle  Ctrl-O=confirm  Esc=skip (enable none)" \
+        SELECTED_SUBTITLE_PROVIDERS \
+        "provider"
 }
