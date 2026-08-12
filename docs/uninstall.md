@@ -13,7 +13,7 @@ root-owned; plain `rm -rf` then fails — use the Docker removal step in Option 
 
 | Component | Default location |
 |---|---|
-| Containers | `jellyfin`/`emby`/`plex` (your choice), `qbittorrent`, `sonarr`, `radarr`, `prowlarr`, `bazarr`, `seerr`, `recyclarr`, `portainer` — plus `gluetun`, `deunhealth`, `vpn-watchdog` when VPN is enabled |
+| Containers | `jellyfin`/`emby`/`plex` (your choice), `qbittorrent`, `sonarr`, `radarr`, `prowlarr`, `bazarr`, `seerr`, `seerr-gateway`, `media-purge-watch`, `recyclarr`, `portainer` — plus `gluetun`, `deunhealth`, `vpn-watchdog` when VPN is enabled |
 | Docker network | `assemblrr_network` |
 | Install directory (config, secrets, compose files) | `~/assemblrr` |
 | Media directory (your movies/TV/downloads) | `~/assemblrr-media` |
@@ -69,7 +69,8 @@ you deliberately remove it in step 3.
 
 ```bash
 docker rm -f jellyfin emby plex qbittorrent sonarr radarr prowlarr bazarr \
-    seerr recyclarr portainer gluetun deunhealth vpn-watchdog 2>/dev/null
+    seerr seerr-gateway media-purge-watch recyclarr portainer \
+    gluetun deunhealth vpn-watchdog 2>/dev/null
 docker network rm assemblrr_network 2>/dev/null
 ```
 

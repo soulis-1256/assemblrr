@@ -261,6 +261,8 @@ copy_configuration_files() {
         ["scripts/media-purge.sh"]="scripts/media-purge.sh"
         ["scripts/arr-purge-hook.sh"]="scripts/arr-purge-hook.sh"
         ["scripts/media-purge-watch.sh"]="scripts/media-purge-watch.sh"
+        ["scripts/seerr-gateway.py"]="scripts/seerr-gateway.py"
+        ["docs/seerr-delete-request.md"]="docs/seerr-delete-request.md"
     )
 
     for src in "${!files[@]}"; do

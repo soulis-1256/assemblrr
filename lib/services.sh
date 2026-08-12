@@ -41,7 +41,7 @@ list_service_catalog() {
 
     printf '%s\n' \
         "${media}|${media_label}|${media_port}|${media_path}|ui" \
-        "seerr|Seerr|5055|/|ui" \
+        "seerr-gateway|Seerr|5055|/|ui" \
         "bazarr|Bazarr|6767|/|ui" \
         "sonarr|Sonarr|8989|/|ui" \
         "radarr|Radarr|7878|/|ui" \
@@ -51,6 +51,7 @@ list_service_catalog() {
         "recyclarr|Recyclarr|||internal"
 
     printf '%s\n' \
+        "seerr|Seerr (internal)|||internal" \
         "media-purge-watch|Media purge watch|||internal"
 
     if [ "${VPN_ENABLED:-n}" = "y" ]; then

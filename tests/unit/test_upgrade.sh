@@ -68,6 +68,7 @@ VPN_ENABLED=y
 cat=$(list_service_catalog)
 assert_contains "$cat" "bazarr|Bazarr|6767" "bazarr in catalog"
 assert_contains "$cat" "jellyfin|Jellyfin|8096" "jellyfin in catalog"
+assert_contains "$cat" "seerr-gateway|Seerr|5055" "Seerr UI via seerr-gateway"
 assert_contains "$cat" "gluetun|" "gluetun when VPN on"
 url=$(service_ui_url 6767 / localhost)
 assert_eq "http://localhost:6767/" "$url" "bazarr url"

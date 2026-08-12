@@ -7,8 +7,9 @@
 #
 # What it proves:
 #   1) Seerr  DELETE /api/v1/media/:id/file  → Radarr + media/ + torrents/ + qB
-#   2) Jellyfin DELETE /Items/:id             → inotify watch → full purge
-#   3) Radarr  DELETE /api/v3/movie/:id       → CustomScript hook → qB cleanup
+#   2) Seerr  DELETE /api/v1/request/:id via seerr-gateway → same full cascade
+#   3) Jellyfin DELETE /Items/:id             → inotify watch → full purge
+#   4) Radarr  DELETE /api/v3/movie/:id       → CustomScript hook → qB cleanup
 #
 set -euo pipefail
 
@@ -237,6 +238,30 @@ assert_fully_gone() {
     return 1
 }
 
+seerr_media_id_for_tmdb() {
+    local mid
+    mid=$(curl -s "http://$(api_host):5055/api/v1/media?take=100" -H "X-Api-Key: ${SEERR_KEY}" \
+        | jq -r --argjson t "$TMDB_ID" '.results[]? | select(.tmdbId == $t) | .id' | head -1)
+    if [ -z "$mid" ]; then
+        mid=$(curl -s "http://$(api_host):5055/api/v1/movie/${TMDB_ID}" -H "X-Api-Key: ${SEERR_KEY}" \
+            | jq -r '.mediaInfo.id // empty')
+    fi
+    echo "$mid"
+}
+
+seerr_request_id_for_tmdb() {
+    curl -s "http://$(api_host):5055/api/v1/request?take=100" -H "X-Api-Key: ${SEERR_KEY}" \
+        | jq -r --argjson t "$TMDB_ID" '
+            .results[]? | select(.media.tmdbId == $t or .mediaInfo.tmdbId == $t) | .id
+          ' 2>/dev/null | head -1
+}
+
+ensure_seerr_request_and_media() {
+    curl -s -X POST "http://$(api_host):5055/api/v1/request" \
+        -H "X-Api-Key: ${SEERR_KEY}" -H "Content-Type: application/json" \
+        -d "{\"mediaType\":\"movie\",\"mediaId\":${TMDB_ID},\"is4k\":false}" >/dev/null || true
+}
+
 # --- Seerr: DELETE /api/v1/media/:id/file ---
 test_seerr_delete_file() {
     echo ""
@@ -246,16 +271,9 @@ test_seerr_delete_file() {
     movie_id=$(setup_title)
     echo "  Radarr movie id=${movie_id}"
 
-    curl -s -X POST "http://$(api_host):5055/api/v1/request" \
-        -H "X-Api-Key: ${SEERR_KEY}" -H "Content-Type: application/json" \
-        -d "{\"mediaType\":\"movie\",\"mediaId\":${TMDB_ID},\"is4k\":false}" >/dev/null || true
+    ensure_seerr_request_and_media
 
-    seerr_media_id=$(curl -s "http://$(api_host):5055/api/v1/media?take=100" -H "X-Api-Key: ${SEERR_KEY}" \
-        | jq -r --argjson t "$TMDB_ID" '.results[]? | select(.tmdbId == $t) | .id' | head -1)
-    if [ -z "$seerr_media_id" ]; then
-        seerr_media_id=$(curl -s "http://$(api_host):5055/api/v1/movie/${TMDB_ID}" -H "X-Api-Key: ${SEERR_KEY}" \
-            | jq -r '.mediaInfo.id // empty')
-    fi
+    seerr_media_id=$(seerr_media_id_for_tmdb)
     [ -n "$seerr_media_id" ] || { fail "Seerr has no media row for tmdb=${TMDB_ID}"; return 1; }
     echo "  Seerr media id=${seerr_media_id}"
 
@@ -271,6 +289,65 @@ test_seerr_delete_file() {
     # CustomScript is async
     sleep 8
     assert_fully_gone "Seerr delete file cascade"
+}
+
+# --- Seerr gateway: DELETE /api/v1/request/:id → media file purge + request gone ---
+test_seerr_delete_request_via_gateway() {
+    echo ""
+    echo "=== Seerr DELETE /api/v1/request/:id (seerr-gateway cascade) ==="
+    local movie_id seerr_media_id request_id code purge_hdr detail_hdr
+
+    if ! docker inspect seerr-gateway --format '{{.State.Running}}' 2>/dev/null | grep -q true; then
+        fail "seerr-gateway container is not running (upgrade stack / compose base.yaml)"
+        return 1
+    fi
+
+    movie_id=$(setup_title)
+    echo "  Radarr movie id=${movie_id}"
+
+    ensure_seerr_request_and_media
+    seerr_media_id=$(seerr_media_id_for_tmdb)
+    [ -n "$seerr_media_id" ] || { fail "Seerr has no media row for tmdb=${TMDB_ID}"; return 1; }
+
+    request_id=$(seerr_request_id_for_tmdb)
+    if [ -z "$request_id" ]; then
+        # Request may already be fulfilled; create a fresh one if API allows
+        ensure_seerr_request_and_media
+        request_id=$(seerr_request_id_for_tmdb)
+    fi
+    [ -n "$request_id" ] || { fail "Seerr has no request row for tmdb=${TMDB_ID}"; return 1; }
+    echo "  Seerr request id=${request_id} media id=${seerr_media_id}"
+
+    code=$(curl -s -D /tmp/assemblrr_seerr_req_del.hdr -o /tmp/assemblrr_seerr_req_del.body -w "%{http_code}" \
+        -X DELETE "http://$(api_host):5055/api/v1/request/${request_id}" \
+        -H "X-Api-Key: ${SEERR_KEY}")
+    purge_hdr=$(grep -i '^X-Assemblrr-Request-Delete-Purge:' /tmp/assemblrr_seerr_req_del.hdr 2>/dev/null \
+        | tail -1 | tr -d '\r' | awk '{print $2}')
+    detail_hdr=$(grep -i '^X-Assemblrr-Purge-Detail:' /tmp/assemblrr_seerr_req_del.hdr 2>/dev/null \
+        | tail -1 | tr -d '\r' | cut -d' ' -f2-)
+    echo "  HTTP ${code} purge=${purge_hdr:-?} detail=${detail_hdr:-?}"
+
+    if [ "$code" != "204" ] && [ "$code" != "200" ]; then
+        fail "Seerr delete request HTTP ${code}: $(head -c 200 /tmp/assemblrr_seerr_req_del.body 2>/dev/null || true)"
+        return 1
+    fi
+    if [ "$purge_hdr" != "1" ]; then
+        fail "missing X-Assemblrr-Request-Delete-Purge:1 (hit stock Seerr instead of gateway?)"
+        return 1
+    fi
+
+    # Request row should be gone
+    local still
+    still=$(curl -s "http://$(api_host):5055/api/v1/request/${request_id}" -H "X-Api-Key: ${SEERR_KEY}" \
+        | jq -r '.id // empty' 2>/dev/null || true)
+    if [ -n "$still" ]; then
+        fail "request ${request_id} still present after delete"
+        return 1
+    fi
+    pass "Seerr request row removed"
+
+    sleep 8
+    assert_fully_gone "Seerr delete request cascade (gateway)"
 }
 
 # --- Jellyfin: DELETE /Items/:id ---
@@ -355,10 +432,14 @@ AUTH_PASS=$(read_key "$INSTALL_DIR/secrets/auth_password.txt") || die "auth_pass
 
 # Prerequisites
 curl -sf "http://$(api_host):7878/ping" >/dev/null || die "Radarr not reachable"
-curl -sf "http://$(api_host):5055/api/v1/settings/public" >/dev/null || die "Seerr not reachable"
+curl -sf "http://$(api_host):5055/api/v1/settings/public" >/dev/null || die "Seerr (gateway) not reachable on :5055"
 curl -sf "http://$(api_host):8096/System/Info/Public" >/dev/null || die "Jellyfin not reachable"
 docker inspect media-purge-watch --format '{{.State.Running}}' 2>/dev/null | grep -q true \
     || die "media-purge-watch container is not running"
+docker inspect seerr-gateway --format '{{.State.Running}}' 2>/dev/null | grep -q true \
+    || die "seerr-gateway container is not running (required for delete-request cascade)"
+curl -sf "http://$(api_host):5055/_assemblrr/ready" >/dev/null \
+    || die "seerr-gateway /_assemblrr/ready failed"
 curl -sf "http://$(api_host):7878/api/v3/notification?apikey=${RADARR_KEY}" \
     | jq -e '[.[] | select(.name == "assemblrr Media Purge" and .onMovieDelete == true)] | length > 0' >/dev/null \
     || die "Radarr Media Purge hook not configured (run upgrade / wiring)"
@@ -373,6 +454,7 @@ echo ""
 
 test_radarr_delete || true
 test_seerr_delete_file || true
+test_seerr_delete_request_via_gateway || true
 test_jellyfin_delete_item || true
 
 cleanup_bbb

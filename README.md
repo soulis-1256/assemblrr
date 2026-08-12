@@ -22,7 +22,7 @@ Self-hosted media automation, set up in minutes, not a weekend.
 - **Managers:** Sonarr, Radarr
 - **Subtitles:** Bazarr (auto-wired to Sonarr/Radarr; optional OpenSubtitles.com)
 - **Indexing:** Prowlarr
-- **Request Management:** Seerr
+- **Request Management:** Seerr (delete request fully removes media via `seerr-gateway`; see [docs/seerr-delete-request.md](docs/seerr-delete-request.md))
 - **Quality Profiles:** Recyclarr
 - **Management:** Portainer
 
@@ -90,6 +90,7 @@ Configuration lives in your installation directory (default: `~/assemblrr`).
 ## Documentation
 
 - **[TRaSH Guides & Quality Profiles](docs/trash-guides.md):** Details on how assemblrr handles quality profiles and what to do when community guide IDs change.
+- **[Seerr delete request → full purge](docs/seerr-delete-request.md):** How `seerr-gateway` makes “delete request” remove media/torrents, and how to retire it if Seerr gains this natively.
 - **[Uninstall Guide](docs/uninstall.md):** Complete removal guide, including a full inventory of what an installation creates.
 - **[API Reference](docs/api-reference.md):** Official API documentation links for all services in the stack.
 

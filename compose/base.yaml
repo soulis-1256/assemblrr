@@ -197,6 +197,9 @@ services:
         ipv4_address: 172.60.0.16
 
   # Seerr — media request management (successor to Jellyseerr/Overseerr)
+  # Host port 5055 is published by seerr-gateway (not seerr) so DELETE /request
+  # can cascade into media file purge. Seerr stays on the Docker network only.
+  # Retirement: see docs/seerr-delete-request.md
   seerr:
     image: ghcr.io/seerr-team/seerr:latest
     container_name: seerr
@@ -206,8 +209,8 @@ services:
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - ${INSTALL_DIRECTORY}/config/seerr:/app/config
-    ports:
-      - 5055:5055
+    expose:
+      - "5055"
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5055/api/v1/settings/public"]
       interval: 30s
@@ -218,6 +221,48 @@ services:
     networks:
       assemblrr_network:
         ipv4_address: 172.60.0.17
+
+  # Thin reverse proxy in front of Seerr: pass-through + delete-request full purge.
+  # SEERR_DELETE_REQUEST_PURGE=0 disables intercept (stock Seerr semantics).
+  seerr-gateway:
+    image: alpine:3
+    container_name: seerr-gateway
+    environment:
+      - TZ=${TZ}
+      - SEERR_UPSTREAM=http://seerr:5055
+      - SEERR_GATEWAY_LISTEN=0.0.0.0
+      - SEERR_GATEWAY_PORT=5055
+      - SEERR_DELETE_REQUEST_PURGE=${SEERR_DELETE_REQUEST_PURGE:-1}
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - ${INSTALL_DIRECTORY}/scripts/seerr-gateway.py:/scripts/seerr-gateway.py:ro
+    ports:
+      - 5055:5055
+    depends_on:
+      - seerr
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5055/_assemblrr/ready', timeout=5)",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        apk add --no-cache python3 >/dev/null
+        exec python3 /scripts/seerr-gateway.py
+    restart: unless-stopped
+    networks:
+      assemblrr_network:
+        ipv4_address: 172.60.0.24
 
   # Recyclarr - automatically syncs TRaSH guides
   recyclarr:

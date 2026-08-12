@@ -40,6 +40,7 @@ run_unit() {
         "$SCRIPT_DIR/unit/test_core.sh" \
         "$SCRIPT_DIR/unit/test_env_example.sh" \
         "$SCRIPT_DIR/unit/test_prepare_install_dirs.sh" \
+        "$SCRIPT_DIR/unit/test_seerr_gateway.sh" \
         "$SCRIPT_DIR/unit/test_upgrade.sh" \
         "$SCRIPT_DIR/unit/test_vpn_secrets.sh"
     do

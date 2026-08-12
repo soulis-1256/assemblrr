@@ -47,9 +47,11 @@ scripts/vpn-watchdog.sh|scripts/vpn-watchdog.sh
 scripts/media-purge.sh|scripts/media-purge.sh
 scripts/arr-purge-hook.sh|scripts/arr-purge-hook.sh
 scripts/media-purge-watch.sh|scripts/media-purge-watch.sh
+scripts/seerr-gateway.py|scripts/seerr-gateway.py
 docs/api-reference.md|docs/api-reference.md
 docs/trash-guides.md|docs/trash-guides.md
 docs/uninstall.md|docs/uninstall.md
+docs/seerr-delete-request.md|docs/seerr-delete-request.md
 README.md|README.md
 EOF
     # Migrations (all files under migrations/)
