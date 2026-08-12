@@ -1,5 +1,5 @@
 #!/bin/bash
-# Unit tests for media-purge qB token matching (Doctor Strange vs Multiverse, etc.)
+# Unit tests for media-purge qB folder-key matching (synthetic titles only).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -495,30 +495,30 @@ if [ "${1:-}" = "--match-self-test" ]; then
         fi
     }
     echo "=== media-purge qB match self-test ==="
-    check "hash_ds" "year folder hits only 2016" \
-        '["Doctor Strange (2016)"]' \
-        '[{"hash":"hash_ds","name":"Doctor Strange (2016) [YTS]","content_path":"/data/torrents/movies/Doctor Strange (2016)"},{"hash":"hash_mom","name":"Doctor Strange in the Multiverse of Madness (2022)","content_path":"/data/torrents/movies/Doctor Strange in the Multiverse of Madness (2022)"}]'
-    check "" "bare Doctor Strange does not hit Multiverse" \
-        '["Doctor Strange"]' \
-        '[{"hash":"hash_mom","name":"Doctor Strange in the Multiverse of Madness (2022)","content_path":"/data/torrents/movies/Doctor Strange in the Multiverse of Madness (2022)"}]'
-    check "hash_ds" "bare Doctor Strange hits exact title only" \
-        '["Doctor Strange"]' \
-        '[{"hash":"hash_ds","name":"Doctor Strange","content_path":"/data/torrents/movies/Doctor Strange"},{"hash":"hash_mom","name":"Doctor Strange in the Multiverse of Madness","content_path":"/data/torrents/movies/Doctor Strange in the Multiverse of Madness"}]'
-    check "hash_bbb" "year preferred when bare+year present" \
-        '["Big Buck Bunny","Big Buck Bunny (2008)"]' \
-        '[{"hash":"hash_bbb","name":"Big Buck Bunny (2008) [e2e]","content_path":"/data/torrents/movies/Big Buck Bunny (2008) [e2e]"},{"hash":"hash_other","name":"Big Buck Bunny Adventures","content_path":"/data/torrents/movies/Big Buck Bunny Adventures"}]'
-    check "hash_m1" "The Matrix bare does not hit Reloaded" \
-        '["The Matrix"]' \
-        '[{"hash":"hash_m1","name":"The Matrix","content_path":"/data/torrents/movies/The Matrix"},{"hash":"hash_m2","name":"The Matrix Reloaded","content_path":"/data/torrents/movies/The Matrix Reloaded"}]'
-    # History filter: drop hash that does not match folder
-    check_filter "hash_ds" "history filter keeps folder-matched hash only" \
-        "Doctor Strange (2016)" \
-        '[{"hash":"hash_ds","name":"Doctor Strange (2016)","content_path":"/data/torrents/movies/Doctor Strange (2016)"},{"hash":"hash_mom","name":"Doctor Strange in the Multiverse of Madness (2022)","content_path":"/data/torrents/movies/Doctor Strange in the Multiverse of Madness (2022)"}]' \
-        hash_ds hash_mom
+    # Synthetic titles only — prove match rules, not real catalog entries.
+    check "hash_a" "year folder hits only first film" \
+        '["Alpha Film (2016)"]' \
+        '[{"hash":"hash_a","name":"Alpha Film (2016) [GRP]","content_path":"/data/torrents/movies/Alpha Film (2016)"},{"hash":"hash_b","name":"Alpha Film Sequel Extended (2022)","content_path":"/data/torrents/movies/Alpha Film Sequel Extended (2022)"}]'
+    check "" "bare short title does not hit longer sequel name" \
+        '["Alpha Film"]' \
+        '[{"hash":"hash_b","name":"Alpha Film Sequel Extended (2022)","content_path":"/data/torrents/movies/Alpha Film Sequel Extended (2022)"}]'
+    check "hash_a" "bare short title hits exact name only" \
+        '["Alpha Film"]' \
+        '[{"hash":"hash_a","name":"Alpha Film","content_path":"/data/torrents/movies/Alpha Film"},{"hash":"hash_b","name":"Alpha Film Sequel Extended","content_path":"/data/torrents/movies/Alpha Film Sequel Extended"}]'
+    check "hash_y" "year preferred when bare+year present" \
+        '["Sample Title","Sample Title (2008)"]' \
+        '[{"hash":"hash_y","name":"Sample Title (2008) [e2e]","content_path":"/data/torrents/movies/Sample Title (2008) [e2e]"},{"hash":"hash_z","name":"Sample Title Adventures","content_path":"/data/torrents/movies/Sample Title Adventures"}]'
+    check "hash_m1" "bare title does not hit same-prefix sequel" \
+        '["Beta Movie"]' \
+        '[{"hash":"hash_m1","name":"Beta Movie","content_path":"/data/torrents/movies/Beta Movie"},{"hash":"hash_m2","name":"Beta Movie Reloaded","content_path":"/data/torrents/movies/Beta Movie Reloaded"}]'
+    check_filter "hash_a" "history filter keeps folder-matched hash only" \
+        "Alpha Film (2016)" \
+        '[{"hash":"hash_a","name":"Alpha Film (2016)","content_path":"/data/torrents/movies/Alpha Film (2016)"},{"hash":"hash_b","name":"Alpha Film Sequel Extended (2022)","content_path":"/data/torrents/movies/Alpha Film Sequel Extended (2022)"}]' \
+        hash_a hash_b
     check_filter "" "history filter drops all when none match folder" \
-        "Doctor Strange (2016)" \
-        '[{"hash":"hash_mom","name":"Doctor Strange in the Multiverse of Madness (2022)","content_path":"/data/torrents/movies/Doctor Strange in the Multiverse of Madness (2022)"}]' \
-        hash_mom
+        "Alpha Film (2016)" \
+        '[{"hash":"hash_b","name":"Alpha Film Sequel Extended (2022)","content_path":"/data/torrents/movies/Alpha Film Sequel Extended (2022)"}]' \
+        hash_b
     if [ "$failures" -gt 0 ]; then
         echo "match-self-test: FAILED ($failures)"
         exit 1
