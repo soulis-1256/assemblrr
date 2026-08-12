@@ -109,8 +109,69 @@ configure_subtitle_language() {
     export subtitle_language
 }
 
+# OpenSubtitles.com website login accepts email or username; the REST API (and
+# Bazarr) require the profile username. Consumer Api-Key is Bazarr's public key
+# from upstream so we validate the same path Bazarr will use at runtime.
+# Override with OPENSUBTITLES_API_KEY if needed.
+_verify_opensubtitles_login() {
+    local user="$1"
+    local pass="$2"
+    local api_key="${OPENSUBTITLES_API_KEY:-s38zmzVlW7IlYruWi7mHwDYl2SfMQoC1}"
+    local ua="${OPENSUBTITLES_USER_AGENT:-assemblrr/1.0}"
+    local tmp http_code body
+    local attempt
+
+    tmp=$(mktemp)
+    for attempt in 1 2 3; do
+        http_code=$(curl -sS -o "$tmp" -w "%{http_code}" --connect-timeout 10 --max-time 30 \
+            -X POST "https://api.opensubtitles.com/api/v1/login" \
+            -H "Content-Type: application/json" \
+            -H "Api-Key: ${api_key}" \
+            -H "User-Agent: ${ua}" \
+            -d "$(jq -nc --arg u "$user" --arg p "$pass" '{username:$u,password:$p}')" \
+            2>/dev/null || echo "000")
+        body=$(cat "$tmp" 2>/dev/null || true)
+
+        case "$http_code" in
+            200)
+                if echo "$body" | jq -e '.token // empty' >/dev/null 2>&1; then
+                    rm -f "$tmp"
+                    return 0
+                fi
+                rm -f "$tmp"
+                return 1
+                ;;
+            429)
+                log_warning "OpenSubtitles rate limit — retrying (${attempt}/3)..."
+                sleep $((attempt + 1))
+                continue
+                ;;
+            000)
+                log_warning "OpenSubtitles: network error (could not reach API)"
+                rm -f "$tmp"
+                return 2
+                ;;
+            *)
+                # Prefer API message when present
+                local msg
+                msg=$(echo "$body" | jq -r '.message // empty' 2>/dev/null || true)
+                if [ -n "$msg" ]; then
+                    log_warning "OpenSubtitles: $msg"
+                else
+                    log_warning "OpenSubtitles: login failed (HTTP ${http_code})"
+                fi
+                rm -f "$tmp"
+                return 1
+                ;;
+        esac
+    done
+    rm -f "$tmp"
+    return 1
+}
+
 # Optional OpenSubtitles.com account for Bazarr (free registration).
-# Same y/N + credentials flow for express and manual.
+# Same y/N + credentials flow for express and manual. Credentials are
+# verified against the OpenSubtitles API before we accept them.
 configure_opensubtitles() {
     opensubtitles_enabled="n"
     opensubtitles_username=""
@@ -119,6 +180,8 @@ configure_opensubtitles() {
     echo
     echo
     log_info "Optional: OpenSubtitles.com credentials for Bazarr (https://www.opensubtitles.com/)."
+    log_info "The website login accepts email or username; Bazarr/API require your profile username."
+    log_info "Find it under your OpenSubtitles profile (not the signup email)."
     log_info "Other subtitle providers can be configured later in the Bazarr UI or optional picker."
     read -p "Do you have OpenSubtitles.com credentials? (y/N) [Default = n]: " opensubtitles_enabled
     opensubtitles_enabled=${opensubtitles_enabled:-n}
@@ -130,19 +193,49 @@ configure_opensubtitles() {
         return 0
     fi
 
-    opensubtitles_enabled="y"
-    while [ -z "$opensubtitles_username" ]; do
-        read -p "OpenSubtitles.com username (not email): " opensubtitles_username
-        [ -z "$opensubtitles_username" ] && log_warning "Username cannot be empty."
-    done
-    while [ -z "$opensubtitles_password" ]; do
-        read_masked "OpenSubtitles.com password: " opensubtitles_password
-        if [ -z "$opensubtitles_password" ]; then
-            log_warning "Password cannot be empty."
+    local retry=""
+    while true; do
+        opensubtitles_username=""
+        opensubtitles_password=""
+
+        while [ -z "$opensubtitles_username" ]; do
+            read -p "OpenSubtitles.com username (profile name, not email): " opensubtitles_username
+            if [ -z "$opensubtitles_username" ]; then
+                log_warning "Username cannot be empty."
+                continue
+            fi
+            if [[ "$opensubtitles_username" == *@* ]]; then
+                log_warning "That looks like an email. OpenSubtitles API rejects email logins."
+                log_warning "Use your profile username (website login may accept email; Bazarr does not)."
+                opensubtitles_username=""
+            fi
+        done
+        while [ -z "$opensubtitles_password" ]; do
+            read_masked "OpenSubtitles.com password: " opensubtitles_password
+            if [ -z "$opensubtitles_password" ]; then
+                log_warning "Password cannot be empty."
+            fi
+        done
+
+        log_info "Verifying OpenSubtitles.com login..."
+        if _verify_opensubtitles_login "$opensubtitles_username" "$opensubtitles_password"; then
+            opensubtitles_enabled="y"
+            log_success "OpenSubtitles.com: login OK — credentials will be stored under secrets/"
+            export opensubtitles_enabled opensubtitles_username opensubtitles_password
+            return 0
+        fi
+
+        read -p "Try again? (Y/n) [Default = y]: " retry
+        retry=${retry:-y}
+        if [ "${retry,,}" != "y" ]; then
+            opensubtitles_enabled="n"
+            opensubtitles_username=""
+            opensubtitles_password=""
+            log_warning "OpenSubtitles.com: skipped (credentials not verified)"
+            export opensubtitles_enabled opensubtitles_username opensubtitles_password
+            return 0
         fi
     done
-    log_success "OpenSubtitles.com: credentials will be stored under secrets/"
-    export opensubtitles_enabled opensubtitles_username opensubtitles_password
 }
 
 configure_vpn() {
