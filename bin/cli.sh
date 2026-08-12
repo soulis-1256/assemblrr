@@ -44,15 +44,28 @@ if [ -z "$INSTALL_DIR" ]; then
     log_error "Could not find ${APP_NAME:-assemblrr} installation. Run setup first."
 fi
 
-# Source runtime config
-safe_source "$INSTALL_DIR/.assemblrr-config"
+# Source runtime config (may be partial during mid-setup abort)
+if [ -f "$INSTALL_DIR/.assemblrr-config" ]; then
+    safe_source "$INSTALL_DIR/.assemblrr-config"
+elif [ -f "$INSTALL_DIR/.${APP_NAME:-assemblrr}-config" ]; then
+    safe_source "$INSTALL_DIR/.${APP_NAME:-assemblrr}-config"
+fi
+VPN_ENABLED="${VPN_ENABLED:-n}"
+MEDIA_SERVICE="${MEDIA_SERVICE:-jellyfin}"
+MEDIA_DIRECTORY="${MEDIA_DIRECTORY:-${HOME}/assemblrr-media}"
 
 # Source branding from install directory
-load_branding "$INSTALL_DIR"
+load_branding "$INSTALL_DIR" 2>/dev/null || true
 
 # Build compose command dynamically (uses lib/compose.sh build_compose_args + adds profile)
-build_compose_args "$INSTALL_DIR" "${VPN_ENABLED:-n}"
-DC=(run_docker compose "${COMPOSE_ARGS[@]}" "--profile" "${MEDIA_SERVICE:-jellyfin}")
+if [ -f "$INSTALL_DIR/compose/base.yaml" ]; then
+    build_compose_args "$INSTALL_DIR" "${VPN_ENABLED:-n}"
+    DC=(run_docker compose "${COMPOSE_ARGS[@]}" "--profile" "${MEDIA_SERVICE:-jellyfin}")
+else
+    # Mid-setup / incomplete tree — uninstall can still remove dirs and CLI
+    DC=(run_docker compose)
+    COMPOSE_ARGS=()
+fi
 readonly TIMEOUT_SECONDS=60
 readonly IP_ENDPOINTS=(
     "https://ipinfo.io/ip"
@@ -408,6 +421,8 @@ uninstall_app() {
     # Setup writes this cheat-sheet under $HOME (outside the install dir)
     # Legacy setup wrote ~/assemblrr_services.txt — remove if present
     rm -f "$HOME/assemblrr_services.txt" 2>/dev/null || true
+    # Install discovery pointer (may live outside the install dir)
+    rm -f "$HOME/.assemblrr-config" "$HOME/.${APP_NAME:-assemblrr}-config" 2>/dev/null || true
 
     log_success "${APP_DISPLAY_NAME} has been uninstalled!"
     log_info "Docker images were left on disk — see docs/uninstall.md to remove them."

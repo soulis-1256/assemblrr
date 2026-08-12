@@ -265,6 +265,8 @@ copy_configuration_files() {
         ["docs/seerr-delete-request.md"]="docs/seerr-delete-request.md"
     )
 
+    local copied=0
+    log_debug "Copying install tree into $install_directory"
     for src in "${!files[@]}"; do
         local dest="$install_directory/${files[$src]}"
         local dest_dir
@@ -277,30 +279,31 @@ copy_configuration_files() {
 
         if ! src_path=$(resolve_project_file "$src"); then
             if [ "$src" = "compose/examples/custom.yaml.example" ]; then
-                log_warning "Optional example file not found: $src"
+                log_debug "Optional example file not found: $src"
                 continue
             fi
             log_error "Failed to locate source file: $src"
         fi
 
-        log_info "Copying $src to $dest..."
+        log_debug "  $src -> $dest"
         if cp "$src_path" "$dest"; then
             # Custom scripts mounted into *arr containers must be executable;
             # Radarr/Sonarr validate CustomScript paths by exec'ing them on save.
             case "$src" in
                 scripts/*) chmod +x "$dest" ;;
             esac
-            log_success "$src copied successfully"
+            copied=$((copied + 1))
         else
             log_error "Failed to copy $src to $dest. Check permissions"
         fi
     done
+    log_debug "Copied ${copied} file(s) into $install_directory"
 }
 
 generate_env_file() {
     local env_file="$install_directory/.env"
 
-    log_info "Generating environment configuration..."
+    log_debug "Generating environment configuration..."
 
     # Set VPN-related variables for envsubst (credentials go to secrets/)
     if [ "${setup_vpn,,}" == "y" ]; then
@@ -348,7 +351,7 @@ generate_env_file() {
 
     chmod 600 "$env_file"
 
-    log_success "Environment configuration generated"
+    log_debug "Environment configuration generated ($env_file)"
 }
 
 write_vpn_secrets() {
@@ -516,8 +519,7 @@ early_vpn_gate() {
     echo
     log_info "Testing VPN connection before the rest of setup..."
     set_provisional_vpn_test_defaults
-    mkdir -p "$install_directory"
-    copy_configuration_files
+    bootstrap_operator
     generate_env_file
     write_vpn_secrets
     # Bind mounts must exist as the host user before Gluetun starts
@@ -542,18 +544,24 @@ SUBTITLE_LANGUAGE="${subtitle_language:-}"
 SETUP_MODE="${SETUP_MODE:-manual}"
 EOF
     chmod 600 "$config_file"
-    log_success "Runtime config written to $config_file"
+    # Pointer so CLI discovery works even for non-default install paths
+    if [ "$config_file" != "$HOME/.${APP_NAME}-config" ]; then
+        printf 'INSTALL_DIRECTORY="%s"\n' "$install_directory" > "$HOME/.${APP_NAME}-config"
+        chmod 600 "$HOME/.${APP_NAME}-config"
+    fi
+    log_debug "Runtime config written to $config_file"
 }
 
 # build_compose_args is defined in lib/compose.sh
 # Usage: build_compose_args "$install_directory" "${setup_vpn,,}"
 
 install_cli() {
-    echo
-    log_info "Installing ${APP_DISPLAY_NAME} CLI..."
-
     # Copy from install directory (persistent), not SCRIPT_DIR (may be /tmp)
     local cli_source="$install_directory/cli.sh"
+    if [ ! -f "$cli_source" ]; then
+        log_warning "CLI source missing at $cli_source — skip install"
+        return 1
+    fi
 
     mkdir -p "$HOME/.local/bin/lib"
     # Copy lib modules (CLI sources them from lib/ subdirectory)
@@ -563,25 +571,43 @@ install_cli() {
         fi
     done
     cp "$cli_source" "$HOME/.local/bin/$APP_CLI_NAME" && chmod +x "$HOME/.local/bin/$APP_CLI_NAME"
+    # Always on PATH for this process (and future shells via profile/fish config)
+    export PATH="$HOME/.local/bin:$PATH"
     if ! grep -q '.local/bin' "$HOME/.profile" 2>/dev/null; then
-        log_info "Adding $HOME/.local/bin to your PATH (in ~/.profile)..."
+        log_debug "Adding $HOME/.local/bin to PATH in ~/.profile"
         echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.profile"
-        export PATH="$HOME/.local/bin:$PATH"
     fi
     # fish ignores ~/.profile, so register the path in its own config too
     if command -v fish &>/dev/null; then
         local fish_config="$HOME/.config/fish/config.fish"
         mkdir -p "$HOME/.config/fish"
         if ! grep -q '.local/bin' "$fish_config" 2>/dev/null; then
-            log_info "Adding $HOME/.local/bin to your fish PATH (in $fish_config)..."
+            log_debug "Adding $HOME/.local/bin to fish PATH in $fish_config"
             echo 'fish_add_path $HOME/.local/bin' >> "$fish_config"
         fi
     fi
-    log_success "${APP_DISPLAY_NAME} CLI installed to $HOME/.local/bin/$APP_CLI_NAME"
+    log_debug "CLI installed to $HOME/.local/bin/$APP_CLI_NAME"
+}
+
+# Materialize install tree + operator CLI as soon as we know the install path.
+# Lets users run: assemblrr uninstall  after aborting mid-setup.
+# Callers still generate .env / secrets when those steps are ready.
+bootstrap_operator() {
+    local quiet="${1:-}"
+    mkdir -p "$install_directory"
+    copy_configuration_files
+    write_runtime_config
+    if install_cli; then
+        if [ "$quiet" != "quiet" ]; then
+            log_success "Operator CLI ready: $HOME/.local/bin/$APP_CLI_NAME"
+            log_info "Abort anytime with: $APP_CLI_NAME uninstall"
+            log_info "(If the shell says command not found: open a new terminal, or run the path above.)"
+        fi
+    fi
 }
 
 set_permissions() {
-    log_info "Setting ownership for install and media directories..."
+    log_debug "Setting ownership for install and media directories..."
 
     # Install bind-mount tree (idempotent; also fixes root-owned leftovers)
     prepare_install_dirs "$install_directory" "$puid" "$pgid"
@@ -591,7 +617,7 @@ set_permissions() {
     fi
     ensure_owned "$media_directory" "$puid" "$pgid"
 
-    log_success "Ownership set for $install_directory and $media_directory"
+    log_debug "Ownership set for $install_directory and $media_directory"
 }
 
 main() {
@@ -607,12 +633,15 @@ log_info "Checking prerequisites..."
 check_dependencies
 
 # 1) VPN questions, then immediately test the tunnel (fail fast).
+#    VPN path bootstraps install tree + CLI early so uninstall works if you abort.
 configure_vpn
 early_vpn_gate
 
 # 2) Only after VPN works (or is disabled): rest of the wizard
 get_user_info
 get_installation_paths
+# No-VPN (or path change after provisional VPN defaults): ensure tree + CLI exist
+bootstrap_operator quiet
 configure_media_service
 configure_seerr_profile
 configure_subtitle_language
@@ -640,7 +669,7 @@ echo "  Subtitle language: ${subtitle_language:-en (Bazarr default)}"
 if [ "${opensubtitles_enabled:-n}" = "y" ]; then
     echo "  OpenSubtitles.com: yes (username=${opensubtitles_username})"
 else
-    echo "  OpenSubtitles.com: no (pick providers at wire-up)"
+    echo "  OpenSubtitles.com: no"
 fi
 echo "  Timezone:          $tz"
 echo "  Service login:     $auth_username"
@@ -675,18 +704,18 @@ prepare_install_dirs "$install_directory" "$puid" "$pgid"
 if [ "${setup_vpn,,}" = "y" ] && [ "${VPN_ALREADY_VERIFIED:-}" != "1" ]; then
     ensure_vpn_connection
 elif [ "${setup_vpn,,}" = "y" ]; then
-    log_info "VPN already verified earlier — not re-testing."
+    log_debug "VPN already verified earlier — not re-testing."
 fi
 
 write_auth_secrets
 write_opensubtitles_secrets
 write_qbittorrent_config
 write_runtime_config
+install_cli
+set_permissions
 
 log_success "Install files ready — starting services..."
-
-log_info "Starting ${APP_DISPLAY_NAME} services..."
-log_info "This may take a while..."
+log_info "Starting ${APP_DISPLAY_NAME} services (this may take a while)..."
 # Ensure mounts still exist/owned immediately before the full stack comes up
 prepare_install_dirs "$install_directory" "$puid" "$pgid"
 build_compose_args "$install_directory" "${setup_vpn,,}"
@@ -705,12 +734,6 @@ if [ -f "$install_directory/config.sh" ]; then
 fi
 # Drop legacy name if an older install left it behind
 rm -f "$install_directory/configure.sh" 2>/dev/null || true
-
-# Install CLI (needed for status/upgrade even if wiring failed)
-echo
-log_info "Installing CLI and configuring permissions..."
-install_cli
-set_permissions
 
 echo
 # Live dashboard once (status exits non-zero when something is unhealthy —
