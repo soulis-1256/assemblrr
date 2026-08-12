@@ -42,12 +42,8 @@ migration_should_skip() {
     return 1
 }
 
-# Return 0 on success. May set UPGRADE_NEED_CONFIG_SYNC=1
 migration_apply() {
     local install_dir="${1:-}"
     mkdir -p "$install_dir/config/bazarr"
-    # Managed base.yaml already includes the service after apply_managed_files.
-    # Flag post-upgrade wiring.
-    UPGRADE_NEED_CONFIG_SYNC=1
     return 0
 }

@@ -1,9 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-# assemblrr service wiring — setup + `assemblrr config sync`
+# Service wiring — invoked by setup and upgrade.
 # Exit 0 if all required steps succeed; exit 1 if any required step fails.
-# Required failures are counted and the script keeps going so you see a full report.
 
 # --- Config discovery ---
 
@@ -166,10 +165,12 @@ fi
 
 if [ -n "$RADARR_API_KEY" ]; then
     run_critical configure_radarr "$RADARR_API_KEY"
+    run_optional add_arr_purge_hook "Radarr" "7878" "$RADARR_API_KEY"
 fi
 
 if [ -n "$SONARR_API_KEY" ]; then
     run_critical configure_sonarr "$SONARR_API_KEY"
+    run_optional add_arr_purge_hook "Sonarr" "8989" "$SONARR_API_KEY"
 fi
 
 if [ -n "$PROWLARR_API_KEY" ]; then
@@ -218,7 +219,7 @@ if [ "$_wire_critical_fail" -gt 0 ]; then
     fi
     echo -e "  ${YELLOW}Log: $CONFIGURE_LOG${NC}" | tee -a "$CONFIGURE_LOG"
     echo
-    _cfg_log_info "Fix issues, then: ${APP_CLI_NAME:-assemblrr} config sync"
+    _cfg_log_info "Fix issues, then re-run setup or: ${APP_CLI_NAME:-assemblrr} upgrade"
     echo
     exit 1
 fi

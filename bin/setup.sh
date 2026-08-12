@@ -258,6 +258,9 @@ copy_configuration_files() {
         ["bin/docker-install.sh"]="docker-install.sh"
         ["scripts/jellyfin-refresh.sh"]="scripts/jellyfin-refresh.sh"
         ["scripts/vpn-watchdog.sh"]="scripts/vpn-watchdog.sh"
+        ["scripts/media-purge.sh"]="scripts/media-purge.sh"
+        ["scripts/arr-purge-hook.sh"]="scripts/arr-purge-hook.sh"
+        ["scripts/media-purge-watch.sh"]="scripts/media-purge-watch.sh"
     )
 
     for src in "${!files[@]}"; do
@@ -695,13 +698,13 @@ if [ -f "$install_directory/config.sh" ]; then
     if ! bash "$install_directory/config.sh"; then
         wiring_ok=0
         log_warning "Service wiring had critical failures. Containers are still running."
-        log_warning "Fix the issues above, then re-run: $APP_CLI_NAME config sync"
+        log_warning "Fix the issues above, then re-run setup or: $APP_CLI_NAME upgrade"
     fi
 fi
 # Drop legacy name if an older install left it behind
 rm -f "$install_directory/configure.sh" 2>/dev/null || true
 
-# Install CLI (needed for config sync even if wiring failed)
+# Install CLI (needed for status/upgrade even if wiring failed)
 echo
 log_info "Installing CLI and configuring permissions..."
 install_cli
@@ -739,7 +742,7 @@ fi
 
 log_warning "Setup finished, but service wiring failed."
 log_warning "Install directory: $install_directory"
-log_warning "Re-run wiring: $APP_CLI_NAME config sync"
+log_warning "Fix issues, then re-run setup or: $APP_CLI_NAME upgrade"
 log_info "Docs: ${APP_REPO_URL}"
 exit 1
 }

@@ -172,7 +172,6 @@ run_migrations() {
     local check_only="${3:-0}"
     local mig_dir="$source_root/migrations"
     local f
-    UPGRADE_NEED_CONFIG_SYNC="${UPGRADE_NEED_CONFIG_SYNC:-0}"
 
     if [ ! -d "$mig_dir" ]; then
         log_info "No migrations directory in source"
@@ -359,7 +358,6 @@ upgrade_app() {
         cp -a "$UPGRADE_SOURCE_ROOT/migrations/." "$INSTALL_DIR/migrations/" 2>/dev/null || true
     fi
 
-    UPGRADE_NEED_CONFIG_SYNC=0
     log_info "Running migrations..."
     run_migrations "$UPGRADE_SOURCE_ROOT" "$INSTALL_DIR" 0
 
@@ -376,17 +374,15 @@ upgrade_app() {
         log_error "docker compose up failed. Restore with: ${APP_CLI_NAME:-assemblrr} restore <backup.tar.gz>"
     fi
 
-    # Always run config sync after upgrade when Bazarr (or other wire) may need it;
-    # config sync is idempotent for existing services.
-    if [ "${UPGRADE_NEED_CONFIG_SYNC:-0}" = "1" ] || [ ! -f "$INSTALL_DIR/secrets/bazarr_api_key.txt" ]; then
-        if [ -f "$INSTALL_DIR/config.sh" ]; then
-            log_info "Running config sync (service wiring)..."
-            if bash "$INSTALL_DIR/config.sh"; then
-                log_success "Config sync completed"
-            else
-                log_warning "Config sync reported failures — fix then: ${APP_CLI_NAME:-assemblrr} config sync"
-            fi
+    if [ -f "$INSTALL_DIR/config.sh" ]; then
+        log_info "Wiring services..."
+        if bash "$INSTALL_DIR/config.sh"; then
+            log_success "Service wiring completed"
+        else
+            log_warning "Service wiring reported failures. Fix issues, then re-run: ${APP_CLI_NAME:-assemblrr} upgrade"
         fi
+    else
+        log_warning "config.sh missing after upgrade — cannot wire services"
     fi
 
     cleanup_upgrade_source

@@ -217,39 +217,39 @@ configure_arr_service() {
     local existing_impls
     existing_impls=$(jq_json_list_values "$download_clients" "implementationName")
 
-    if ! echo "$existing_impls" | grep -q "qBittorrent"; then
-        # Build download client payload — category field names differ between Radarr and Sonarr
-        local qbit_payload
-        qbit_payload=$(jq -n --arg host "$QBITTORRENT_HOST" --arg user "$AUTH_USERNAME" --arg pass "$AUTH_PASSWORD" \
-            --arg cat_name "$category_name" --arg sn "$service_name" '
-            {
-                "enable": true,
-                "removeCompletedDownloads": true,
-                "removeFailedDownloads": true,
-                "name": "qBittorrent",
-                "implementation": "QBittorrent",
-                "implementationName": "qBittorrent",
-                "configContract": "QBittorrentSettings",
-                "priority": 1,
-                "fields": [
-                    {"name": "host", "value": $host},
-                    {"name": "port", "value": 8081},
-                    {"name": "useSsl", "value": false},
-                    {"name": "urlBase", "value": ""},
-                    {"name": "username", "value": $user},
-                    {"name": "password", "value": $pass},
-                    {"name": (if $sn == "Radarr" then "movieCategory" else "tvCategory" end), "value": $cat_name},
-                    {"name": (if $sn == "Radarr" then "movieImportedCategory" else "tvImportedCategory" end), "value": ""},
-                    {"name": (if $sn == "Radarr" then "recentMoviePriority" else "recentTvPriority" end), "value": 0},
-                    {"name": (if $sn == "Radarr" then "olderMoviePriority" else "olderTvPriority" end), "value": 0},
-                    {"name": "initialState", "value": 0},
-                    {"name": "sequentialOrder", "value": false},
-                    {"name": "firstAndLast", "value": false},
-                    {"name": "contentLayout", "value": 0}
-                ]
-            }
-        ' 2>/dev/null || echo "")
+    # Build download client payload — category field names differ between Radarr and Sonarr
+    local qbit_payload
+    qbit_payload=$(jq -n --arg host "$QBITTORRENT_HOST" --arg user "$AUTH_USERNAME" --arg pass "$AUTH_PASSWORD" \
+        --arg cat_name "$category_name" --arg sn "$service_name" '
+        {
+            "enable": true,
+            "removeCompletedDownloads": true,
+            "removeFailedDownloads": true,
+            "name": "qBittorrent",
+            "implementation": "QBittorrent",
+            "implementationName": "qBittorrent",
+            "configContract": "QBittorrentSettings",
+            "priority": 1,
+            "fields": [
+                {"name": "host", "value": $host},
+                {"name": "port", "value": 8081},
+                {"name": "useSsl", "value": false},
+                {"name": "urlBase", "value": ""},
+                {"name": "username", "value": $user},
+                {"name": "password", "value": $pass},
+                {"name": (if $sn == "Radarr" then "movieCategory" else "tvCategory" end), "value": $cat_name},
+                {"name": (if $sn == "Radarr" then "movieImportedCategory" else "tvImportedCategory" end), "value": ""},
+                {"name": (if $sn == "Radarr" then "recentMoviePriority" else "recentTvPriority" end), "value": 0},
+                {"name": (if $sn == "Radarr" then "olderMoviePriority" else "olderTvPriority" end), "value": 0},
+                {"name": "initialState", "value": 0},
+                {"name": "sequentialOrder", "value": false},
+                {"name": "firstAndLast", "value": false},
+                {"name": "contentLayout", "value": 0}
+            ]
+        }
+    ' 2>/dev/null || echo "")
 
+    if ! echo "$existing_impls" | grep -q "qBittorrent"; then
         if [ -n "$qbit_payload" ]; then
             local dc_result
             dc_result=$(api_post "$port" "/api/v3/downloadclient" "$apikey" "$qbit_payload")
@@ -264,7 +264,24 @@ configure_arr_service() {
             critical_errors=$((critical_errors + 1))
         fi
     else
-        log_step "${service_name}: qBittorrent download client already exists"
+        local existing_dc dc_id updated_dc dc_put
+        existing_dc=$(echo "$download_clients" | jq '[.[] | select(.implementationName == "qBittorrent" or .implementation == "QBittorrent")][0]' 2>/dev/null || echo "")
+        dc_id=$(echo "$existing_dc" | jq -r '.id // empty' 2>/dev/null || echo "")
+        if [ -n "$dc_id" ] && [ -n "$qbit_payload" ]; then
+            updated_dc=$(echo "$qbit_payload" | jq --argjson id "$dc_id" '.id = $id' 2>/dev/null || echo "")
+            if [ -n "$updated_dc" ]; then
+                dc_put=$(api_put "$port" "/api/v3/downloadclient/${dc_id}" "$apikey" "$updated_dc")
+                if jq_json_has_key "$dc_put" "id"; then
+                    log_step "${service_name}: updated qBittorrent download client (host: ${QBITTORRENT_HOST})"
+                else
+                    log_step "${service_name}: qBittorrent download client already exists"
+                fi
+            else
+                log_step "${service_name}: qBittorrent download client already exists"
+            fi
+        else
+            log_step "${service_name}: qBittorrent download client already exists"
+        fi
     fi
 
     # 2b. Create qBittorrent category with correct save path
@@ -530,12 +547,13 @@ prowlarr_set_app_profile_min_seeders() {
     return 1
 }
 
-# Set minimumSeeders=0 on every indexer present in one *arr app.
-# Call after Prowlarr fullSync has created the indexers (app profile alone is not enough).
+# Indexer defaults: minSeeders=0, seed ratio 1.0, seed time 7d (override: ASSEMBLRR_SEED_RATIO / ASSEMBLRR_SEED_TIME_MINUTES).
 arr_set_indexer_min_seeders() {
     local service_name="$1"
     local port="$2"
     local apikey="$3"
+    local seed_ratio="${ASSEMBLRR_SEED_RATIO:-1.0}"
+    local seed_time="${ASSEMBLRR_SEED_TIME_MINUTES:-10080}"
 
     [ -z "$apikey" ] && return 1
 
@@ -551,9 +569,14 @@ arr_set_indexer_min_seeders() {
         [ -z "$idx" ] && continue
         idx_id=$(echo "$idx" | jq -r '.id // empty')
         [ -z "$idx_id" ] && continue
-        idx_payload=$(echo "$idx" | jq '
+        idx_payload=$(echo "$idx" | jq \
+            --argjson ratio "$seed_ratio" \
+            --argjson stime "$seed_time" '
             .fields = [.fields[] |
-                if .name == "minimumSeeders" then .value = 0 else . end
+                if .name == "minimumSeeders" then .value = 0
+                elif .name == "seedCriteria.seedRatio" then .value = $ratio
+                elif .name == "seedCriteria.seedTime" then .value = $stime
+                else . end
             ]
         ' 2>/dev/null || echo "")
         [ -z "$idx_payload" ] && continue
@@ -564,8 +587,89 @@ arr_set_indexer_min_seeders() {
     done < <(echo "$indexers" | jq -c '.[]' 2>/dev/null || true)
 
     if [ "$ok" -gt 0 ]; then
-        log_step "${service_name}: indexer minimumSeeders → 0 (${ok})"
+        log_step "${service_name}: indexer seedCriteria ratio=${seed_ratio} time=${seed_time}m, minSeeders=0 (${ok})"
         return 0
+    fi
+    return 1
+}
+
+# On movie/series delete, run arr-purge-hook.sh (qB torrent + files).
+add_arr_purge_hook() {
+    local app_name="$1"
+    local port="$2"
+    local apikey="$3"
+
+    [ -z "$apikey" ] && return 0
+
+    local notifications existing_id
+    notifications=$(api_get "$port" "/api/v3/notification" "$apikey")
+    existing_id=$(echo "$notifications" | jq -r \
+        '.[] | select(.implementation == "CustomScript" and .name == "assemblrr Media Purge") | .id // ""' \
+        2>/dev/null | head -1 || echo "")
+
+    if [ -f "${INSTALL_DIR:-}/scripts/arr-purge-hook.sh" ]; then
+        chmod +x "${INSTALL_DIR}/scripts/arr-purge-hook.sh" 2>/dev/null || true
+    fi
+    if [ -f "${INSTALL_DIR:-}/scripts/media-purge.sh" ]; then
+        chmod +x "${INSTALL_DIR}/scripts/media-purge.sh" 2>/dev/null || true
+    fi
+
+    local schema payload result
+    schema=$(api_get "$port" "/api/v3/notification/schema" "$apikey")
+
+    if [ "$app_name" = "Radarr" ]; then
+        payload=$(echo "$schema" | jq '
+            [.[] | select(.implementation == "CustomScript")][0] |
+            .fields = [.fields[] | if .name == "path" then .value = "/scripts/arr-purge-hook.sh" else . end] |
+            .onGrab = false | .onDownload = false | .onUpgrade = false |
+            .onRename = false | .onMovieAdded = false |
+            .onMovieDelete = true | .onMovieFileDelete = false |
+            .onMovieFileDeleteForUpgrade = false |
+            .onHealthIssue = false | .onHealthRestored = false |
+            .onApplicationUpdate = false | .onManualInteractionRequired = false |
+            .includeHealthWarnings = false |
+            .name = "assemblrr Media Purge" | .tags = []
+        ' 2>/dev/null || echo "")
+    else
+        payload=$(echo "$schema" | jq '
+            [.[] | select(.implementation == "CustomScript")][0] |
+            .fields = [.fields[] | if .name == "path" then .value = "/scripts/arr-purge-hook.sh" else . end] |
+            .onGrab = false | .onDownload = false | .onUpgrade = false |
+            .onRename = false | .onSeriesAdd = false |
+            .onSeriesDelete = true | .onEpisodeFileDelete = false |
+            .onEpisodeFileDeleteForUpgrade = false |
+            .onHealthIssue = false | .onHealthRestored = false |
+            .onApplicationUpdate = false | .onManualInteractionRequired = false |
+            .includeHealthWarnings = false |
+            .name = "assemblrr Media Purge" | .tags = []
+        ' 2>/dev/null || echo "")
+    fi
+
+    if [ -z "$payload" ]; then
+        log_step_fail "${app_name}: CustomScript schema not found for media purge"
+        return 1
+    fi
+
+    if [ -n "$existing_id" ]; then
+        payload=$(echo "$payload" | jq --argjson id "$existing_id" '.id = $id' 2>/dev/null || echo "$payload")
+        result=$(api_put "$port" "/api/v3/notification/${existing_id}" "$apikey" "$payload")
+        if jq_json_has_key "$result" "id"; then
+            log_step "${app_name}: updated Media Purge hook"
+            return 0
+        fi
+    fi
+
+    result=$(api_post_force "$port" "/api/v3/notification" "$apikey" "$payload")
+    if jq_json_has_key "$result" "id"; then
+        log_step "${app_name}: added Media Purge hook"
+        return 0
+    fi
+    local err_msg
+    err_msg=$(echo "$result" | jq -r 'if type == "array" then .[0].errorMessage // empty else .errorMessage // empty end' 2>/dev/null || echo "")
+    if [ -n "$err_msg" ]; then
+        log_step_fail "${app_name}: failed to add Media Purge hook (${err_msg})"
+    else
+        log_step_fail "${app_name}: failed to add Media Purge hook"
     fi
     return 1
 }

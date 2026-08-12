@@ -67,12 +67,11 @@ After install, the CLI is on your `PATH` as `assemblrr`. Run `assemblrr <command
 | `config` | List config subcommands |
 | `config show` | Show current configuration |
 | `config edit` | Re-run the setup wizard (current values as defaults) |
-| `config sync` | Re-wire service APIs (Radarr, Sonarr, Prowlarr, Seerr, …) |
 | `backup /target/dir` | Snapshot configuration |
 | `restore /backup.tar.gz` | Restore from a backup archive |
 | `update-containers` | Pull latest images and restart (offers a backup first) |
 | `update-cli` | Update the CLI to the latest version |
-| `upgrade` | Upgrade install files from git `main` (or `--from DIR`); backup + migrations |
+| `upgrade` | Upgrade from git `main` (or `--from DIR`): files, migrations, stack restart, service wiring |
 | `upgrade --check` | Dry-run: show which managed files and migrations would run |
 | `check-vpn` | Poll VPN health |
 | `uninstall` | Remove everything (asks before deleting data) |

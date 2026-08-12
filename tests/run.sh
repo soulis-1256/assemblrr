@@ -68,13 +68,21 @@ run_compose() {
 
 run_integration() {
     echo "Running live integration tests..."
-    if bash "$SCRIPT_DIR/integration/watchdog_stall.sh"; then
-        echo "-> OK"
-    else
-        local rc=$?
-        echo "-> FAILED (exit $rc)"
-        FAILED=$((FAILED + 1))
-    fi
+    local f
+    for f in \
+        "$SCRIPT_DIR/integration/watchdog_stall.sh" \
+        "$SCRIPT_DIR/integration/media_purge_e2e.sh"
+    do
+        echo ""
+        echo "######## $(basename "$f") ########"
+        if bash "$f"; then
+            echo "-> OK"
+        else
+            local rc=$?
+            echo "-> FAILED (exit $rc)"
+            FAILED=$((FAILED + 1))
+        fi
+    done
 }
 
 run_lint() {

@@ -50,6 +50,9 @@ list_service_catalog() {
         "portainer|Portainer|9000|/|ui" \
         "recyclarr|Recyclarr|||internal"
 
+    printf '%s\n' \
+        "media-purge-watch|Media purge watch|||internal"
+
     if [ "${VPN_ENABLED:-n}" = "y" ]; then
         printf '%s\n' \
             "gluetun|Gluetun (VPN)|||internal" \

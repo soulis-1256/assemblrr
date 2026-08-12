@@ -109,7 +109,7 @@ services:
       - /etc/localtime:/etc/localtime:ro
       - ${MEDIA_DIRECTORY}:/data
       - ${INSTALL_DIRECTORY}/config/sonarr:/config
-      - ${INSTALL_DIRECTORY}/scripts/jellyfin-refresh.sh:/scripts/jellyfin-refresh.sh:ro
+      - ${INSTALL_DIRECTORY}/scripts:/scripts:ro
       - ${INSTALL_DIRECTORY}/secrets:/run/secrets:ro
     ports:
       - 8989:8989
@@ -136,7 +136,7 @@ services:
       - /etc/localtime:/etc/localtime:ro
       - ${MEDIA_DIRECTORY}:/data
       - ${INSTALL_DIRECTORY}/config/radarr:/config
-      - ${INSTALL_DIRECTORY}/scripts/jellyfin-refresh.sh:/scripts/jellyfin-refresh.sh:ro
+      - ${INSTALL_DIRECTORY}/scripts:/scripts:ro
       - ${INSTALL_DIRECTORY}/secrets:/run/secrets:ro
     ports:
       - 7878:7878
@@ -234,6 +234,37 @@ services:
     networks:
       assemblrr_network:
         ipv4_address: 172.60.0.18
+
+  # Deletes under /data/media → purge *arr entry + qB torrent/files
+  media-purge-watch:
+    image: alpine:3
+    container_name: media-purge-watch
+    environment:
+      - TZ=${TZ}
+      - MEDIA_ROOT=/data
+      - CONFIG_DIR=/config
+      - RADARR_URL=http://radarr:7878
+      - SONARR_URL=http://sonarr:8989
+      - AUTH_USERNAME_FILE=/run/secrets/auth_username.txt
+      - AUTH_PASSWORD_FILE=/run/secrets/auth_password.txt
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - ${MEDIA_DIRECTORY}:/data
+      - ${INSTALL_DIRECTORY}/config:/config:ro
+      - ${INSTALL_DIRECTORY}/scripts:/scripts:ro
+      - ${INSTALL_DIRECTORY}/secrets:/run/secrets:ro
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        apk add --no-cache bash curl jq inotify-tools >/dev/null
+        chmod +x /scripts/media-purge.sh /scripts/media-purge-watch.sh /scripts/arr-purge-hook.sh 2>/dev/null || true
+        exec bash /scripts/media-purge-watch.sh
+    restart: unless-stopped
+    networks:
+      assemblrr_network:
+        ipv4_address: 172.60.0.23
 
   # Bazarr — automatic subtitle management (Sonarr/Radarr companion)
   bazarr:

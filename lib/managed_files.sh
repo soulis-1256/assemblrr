@@ -44,6 +44,9 @@ bin/setup.sh|setup.sh
 bin/docker-install.sh|docker-install.sh
 scripts/jellyfin-refresh.sh|scripts/jellyfin-refresh.sh
 scripts/vpn-watchdog.sh|scripts/vpn-watchdog.sh
+scripts/media-purge.sh|scripts/media-purge.sh
+scripts/arr-purge-hook.sh|scripts/arr-purge-hook.sh
+scripts/media-purge-watch.sh|scripts/media-purge-watch.sh
 docs/api-reference.md|docs/api-reference.md
 docs/trash-guides.md|docs/trash-guides.md
 docs/uninstall.md|docs/uninstall.md

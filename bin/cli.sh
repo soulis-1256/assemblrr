@@ -80,7 +80,7 @@ declare -A COMMANDS=(
     ["upgrade"]="upgrade install files from git (or --from DIR); runs migrations"
     ["logs"]="shows container logs (optionally specify service name)"
     ["health"]="checks health status of all services"
-    ["config"]="configuration: show options, or run show / edit / sync"
+    ["config"]="configuration: show options, or run show / edit"
 )
 
 # log_error_inline — same as log_error but without exit (used by check_health)
@@ -121,7 +121,45 @@ show_help() {
     echo "  ${APP_CLI_NAME} config              # List config subcommands"
     echo "  ${APP_CLI_NAME} config show         # Show current configuration"
     echo "  ${APP_CLI_NAME} config edit         # Re-run setup wizard"
-    echo "  ${APP_CLI_NAME} config sync         # Re-wire service APIs"
+    echo "  ${APP_CLI_NAME} purge --movie-id N  # Full delete (*arr + disk + qB)"
+    echo "  ${APP_CLI_NAME} purge --path PATH   # Full delete by library path"
+    echo "  ${APP_CLI_NAME} purge --tmdb ID     # Full delete by TMDB id"
+}
+
+# Full media purge (*arr + qB + hardlinks). Thin wrapper around scripts/media-purge.sh
+purge_media() {
+    local install_dir script
+    install_dir=$(find_install_directory)
+    [ -n "$install_dir" ] || log_error "Could not find installation directory"
+    script="$install_dir/scripts/media-purge.sh"
+    if [ ! -f "$script" ]; then
+        # Dev tree: repo scripts/
+        local self_dir
+        self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        if [ -f "$self_dir/../scripts/media-purge.sh" ]; then
+            script="$self_dir/../scripts/media-purge.sh"
+        fi
+    fi
+    [ -f "$script" ] || log_error "media-purge.sh not found — run upgrade or re-setup"
+    chmod +x "$script" 2>/dev/null || true
+
+    set -a
+    # shellcheck disable=SC1091
+    [ -f "$install_dir/.env" ] && . "$install_dir/.env"
+    set +a
+    export API_HOST="${API_HOST:-127.0.0.1}"
+    export CONFIG_DIR="$install_dir/config"
+    export INSTALL_DIR="$install_dir"
+    export MEDIA_ROOT="${MEDIA_DIRECTORY:-/data}"
+    if [ -f "$install_dir/secrets/auth_username.txt" ]; then
+        export AUTH_USERNAME_FILE="$install_dir/secrets/auth_username.txt"
+        export AUTH_PASSWORD_FILE="$install_dir/secrets/auth_password.txt"
+    fi
+    export QBITTORRENT_URL="${QBITTORRENT_URL:-http://127.0.0.1:8081}"
+    export RADARR_URL="${RADARR_URL:-http://127.0.0.1:7878}"
+    export SONARR_URL="${SONARR_URL:-http://127.0.0.1:8989}"
+
+    bash "$script" "$@"
 }
 
 wait_for_services() {
@@ -652,13 +690,11 @@ show_config_help() {
     echo "Subcommands:"
     printf "  %-12s %s\n" "show" "Show current configuration"
     printf "  %-12s %s\n" "edit" "Re-run the setup wizard (current values as defaults)"
-    printf "  %-12s %s\n" "sync" "Re-wire service APIs (Radarr, Sonarr, Prowlarr, Bazarr, Seerr, …)"
     echo
     echo "Examples:"
     echo "  ${APP_CLI_NAME} config           # List config options"
     echo "  ${APP_CLI_NAME} config show      # Show configuration"
     echo "  ${APP_CLI_NAME} config edit      # Change install choices"
-    echo "  ${APP_CLI_NAME} config sync      # Repair / re-apply app wiring"
 }
 
 # Re-run setup wizard (write files, restart stack, wire apps)
@@ -682,18 +718,6 @@ config_edit() {
     bash "$setup_script"
 }
 
-# Re-wire service APIs only (post-install automation)
-config_sync() {
-    if [ -f "$INSTALL_DIR/config.sh" ]; then
-        bash "$INSTALL_DIR/config.sh"
-    elif [ -f "$INSTALL_DIR/configure.sh" ]; then
-        # Legacy install name
-        bash "$INSTALL_DIR/configure.sh"
-    else
-        log_error "config.sh not found in $INSTALL_DIR"
-    fi
-}
-
 config_cmd() {
     local sub=${1:-}
     case "$sub" in
@@ -705,9 +729,6 @@ config_cmd() {
             ;;
         edit)
             config_edit
-            ;;
-        sync)
-            config_sync
             ;;
         --help|-h|help)
             show_config_help
@@ -901,14 +922,9 @@ main() {
         config)
             config_cmd "${2:-}"
             ;;
-        # Deprecated aliases (hidden from help)
-        reconfigure)
-            log_warning "'reconfigure' is deprecated — use: ${APP_CLI_NAME} config edit"
-            config_edit
-            ;;
-        configure)
-            log_warning "'configure' is deprecated — use: ${APP_CLI_NAME} config sync"
-            config_sync
+        purge)
+            [ $# -lt 2 ] && log_error "Usage: ${APP_CLI_NAME} purge --movie-id N | --series-id N | --path PATH | --tmdb ID | --tvdb ID"
+            purge_media "${@:2}"
             ;;
         *)
             log_error "Unknown command: $command\nRun '${APP_CLI_NAME} --help' for usage information"
