@@ -216,6 +216,10 @@ make_compose_fixture() {
         mkdir -p "$dest/compose/examples"
         cp "$REPO_ROOT/compose/examples/"* "$dest/compose/examples/" 2>/dev/null || true
     fi
+    if [ -d "$REPO_ROOT/compose/sidecars" ]; then
+        mkdir -p "$dest/compose/sidecars"
+        cp "$REPO_ROOT/compose/sidecars/"* "$dest/compose/sidecars/" 2>/dev/null || true
+    fi
     # vpn overlay expects these files to exist
     : >"$dest/secrets/openvpn_user.txt"
     : >"$dest/secrets/openvpn_password.txt"

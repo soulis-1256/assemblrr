@@ -43,6 +43,7 @@ Env:
 | Variable | Default | Meaning |
 |----------|---------|---------|
 | `SEERR_DELETE_REQUEST_PURGE` | `1` | `1` = intercept delete-request; `0`/`false`/`off` = pure passthrough (stock Seerr) |
+| `MEDIA_PURGE_WATCH` | `1` | `1` = inotify watcher on library video deletes; `0` = disable watcher only |
 | `SEERR_UPSTREAM` | `http://seerr:5055` | Upstream Seerr (container) |
 
 Debug response headers on intercepted deletes:

@@ -40,7 +40,9 @@ run_unit() {
         "$SCRIPT_DIR/unit/test_core.sh" \
         "$SCRIPT_DIR/unit/test_env_example.sh" \
         "$SCRIPT_DIR/unit/test_media_purge_match.sh" \
+        "$SCRIPT_DIR/unit/test_media_purge_watch.sh" \
         "$SCRIPT_DIR/unit/test_prepare_install_dirs.sh" \
+        "$SCRIPT_DIR/unit/test_qbit_prefs.sh" \
         "$SCRIPT_DIR/unit/test_seerr_gateway.sh" \
         "$SCRIPT_DIR/unit/test_upgrade.sh" \
         "$SCRIPT_DIR/unit/test_vpn_secrets.sh"

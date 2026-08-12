@@ -1,12 +1,16 @@
 #!/bin/bash
-# inotify on /data/media → media-purge when library files are deleted.
+# inotify on /data/media → media-purge when a library *video* is deleted.
+# Ignores *arr write-tests, sidecars, and upgrade races (new file not yet written).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PURGE="${SCRIPT_DIR}/media-purge.sh"
 MEDIA_ROOT="${MEDIA_ROOT:-/data}"
 WATCH_ROOT="${WATCH_ROOT:-${MEDIA_ROOT}/media}"
-DEBOUNCE_SEC="${DEBOUNCE_SEC:-2}"
+# First look: skip if a replacement video is already there (normal import).
+DEBOUNCE_SEC="${DEBOUNCE_SEC:-8}"
+# Second look: Radarr/Sonarr upgrades delete the old file before writing the new one.
+UPGRADE_GRACE_SEC="${UPGRADE_GRACE_SEC:-20}"
 
 export API_HOST="${API_HOST:-127.0.0.1}"
 export RADARR_URL="${RADARR_URL:-http://radarr:7878}"
@@ -19,10 +23,61 @@ export AUTH_PASSWORD_FILE="${AUTH_PASSWORD_FILE:-/run/secrets/auth_password.txt}
 
 log() { echo "media-purge-watch: $*" >&2; }
 
+# Setup write-tests, editor junk, and incomplete tmp names must never purge.
+purge_watch_is_ignored() {
+    local p="${1:-}"
+    local base="${p##*/}"
+    case "$base" in
+        ""|.|..|.DS_Store|Thumbs.db) return 0 ;;
+        *write_test*|*_write_test.txt|radarr_write_test.txt|sonarr_write_test.txt) return 0 ;;
+        .nfs*|.tmp*|*.tmp|*.partial|*.!qB|*.part) return 0 ;;
+    esac
+    case "$p" in
+        */.nfs*|*/.tmp*|*/tmp/*|*/.git/*) return 0 ;;
+    esac
+    return 1
+}
+
+purge_watch_is_video() {
+    local p="${1:-}"
+    local ext="${p##*.}"
+    ext=$(printf '%s' "$ext" | tr '[:upper:]' '[:lower:]')
+    case "$ext" in
+        mkv|mp4|avi|m4v|ts|m2ts|webm|mov|wmv|mpg|mpeg) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Folder we would ask *arr to delete (title directory under movies/ or tv/).
+purge_watch_library_folder() {
+    local p="$1"
+    case "$p" in
+        */media/movies/*) echo "$p" | sed -E 's|(.*/media/movies/[^/]+).*|\1|' ;;
+        */media/tv/*) echo "$p" | sed -E 's|(.*/media/tv/[^/]+).*|\1|' ;;
+        *) echo "" ;;
+    esac
+}
+
+purge_watch_folder_has_video() {
+    local folder="$1"
+    [ -d "$folder" ] || return 1
+    find "$folder" -type f \( \
+        -iname '*.mkv' -o -iname '*.mp4' -o -iname '*.avi' -o \
+        -iname '*.m4v' -o -iname '*.ts' -o -iname '*.m2ts' -o \
+        -iname '*.webm' -o -iname '*.mov' \
+    \) 2>/dev/null | grep -q .
+}
+
+# --- sourced by unit tests: stop here ---
+if [ "${PURGE_WATCH_SOURCE_ONLY:-0}" = "1" ]; then
+    return 0 2>/dev/null || exit 0
+fi
+
 [ -x "$PURGE" ] || chmod +x "$PURGE" 2>/dev/null || true
 
-if ! command -v inotifywait >/dev/null 2>&1; then
-    apk add --no-cache inotify-tools curl jq bash >/dev/null
+if [ "${MEDIA_PURGE_WATCH:-1}" = "0" ] || [ "${MEDIA_PURGE_WATCH:-1}" = "false" ] || [ "${MEDIA_PURGE_WATCH:-1}" = "off" ]; then
+    log "disabled (MEDIA_PURGE_WATCH=${MEDIA_PURGE_WATCH}); idling"
+    exec sleep infinity
 fi
 
 if [ -z "${QBITTORRENT_URL:-}" ]; then
@@ -37,22 +92,13 @@ fi
 
 log "watching ${WATCH_ROOT} (qB=${QBITTORRENT_URL})"
 
-library_folder_for() {
-    local p="$1"
-    case "$p" in
-        */media/movies/*) echo "$p" | sed -E 's|(.*/media/movies/[^/]+).*|\1|' ;;
-        */media/tv/*) echo "$p" | sed -E 's|(.*/media/tv/[^/]+).*|\1|' ;;
-        *) echo "" ;;
-    esac
-}
-
 LAST_PURGE_PATH=""
 LAST_PURGE_TS=0
 
 handle_event() {
     local path="$1"
     local folder
-    folder=$(library_folder_for "$path")
+    folder=$(purge_watch_library_folder "$path")
     [ -n "$folder" ] || return 0
 
     local now
@@ -62,14 +108,16 @@ handle_event() {
     fi
 
     sleep "$DEBOUNCE_SEC"
-    if [ -e "$folder" ]; then
-        if find "$folder" -type f \( -name '*.mkv' -o -name '*.mp4' -o -name '*.avi' -o -name '*.m4v' -o -name '*.ts' \) 2>/dev/null | grep -q .; then
-            return 0
-        fi
+    if purge_watch_folder_has_video "$folder"; then
+        return 0
+    fi
+    sleep "$UPGRADE_GRACE_SEC"
+    if purge_watch_folder_has_video "$folder"; then
+        return 0
     fi
 
     LAST_PURGE_PATH="$folder"
-    LAST_PURGE_TS=$now
+    LAST_PURGE_TS=$(date +%s)
     local arr_path
     case "$folder" in
         /data/*) arr_path="$folder" ;;
@@ -81,13 +129,29 @@ handle_event() {
 
 mkdir -p "$WATCH_ROOT/movies" "$WATCH_ROOT/tv" 2>/dev/null || true
 
+if ! command -v inotifywait >/dev/null 2>&1; then
+    log "ERROR: inotifywait missing (sidecar image not built?)"
+    exit 1
+fi
+
+# Serial: one event at a time. Backgrounding every inotify line can fork-bomb
+# a library delete and race an in-progress *arr upgrade.
 inotifywait -m -r \
     -e delete,delete_self,moved_from \
     --format '%e|%w|%f' \
     "$WATCH_ROOT" 2>/dev/null | while IFS='|' read -r events watch_dir filename; do
     full="${watch_dir}${filename}"
-    case "$full" in
-        *'/.nfs'*|*/.tmp*|*/tmp/*) continue ;;
+    if purge_watch_is_ignored "$full"; then
+        continue
+    fi
+    if purge_watch_is_video "$full"; then
+        handle_event "$full"
+        continue
+    fi
+    # Title folder removed (not a sidecar nfo/jpg delete).
+    case ",${events}," in
+        *,DELETE_SELF,*)
+            handle_event "$full"
+            ;;
     esac
-    handle_event "$full" &
 done

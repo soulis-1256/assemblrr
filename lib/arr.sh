@@ -52,7 +52,42 @@ set_arr_auth() {
 
 # --- qBittorrent helpers ---
 
-# Set qBittorrent WebUI credentials and default save paths.
+# True when this install routes qB through Gluetun.
+qbit_vpn_enabled() {
+    case "${VPN_ENABLED:-n}" in
+        y|Y|yes|YES) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# setPreferences JSON: save paths, and tun0 when VPN is on.
+# qB 5.x + WireGuard does not bind the POINTOPOINT tun by itself; "Any"
+# listens on eth0 and Gluetun's kill switch then drops tracker/DHT packets
+# ("Operation not permitted" → stalledDL).
+# $1 optional extra JSON object fields, including a leading comma
+#    e.g. ',"web_ui_username":"x","web_ui_password":"y"'
+qbit_core_prefs_json() {
+    local extras="${1:-}"
+    local iface=""
+    if qbit_vpn_enabled; then
+        iface=',"current_network_interface":"tun0"'
+    fi
+    printf '%s' "{\"save_path\":\"/data/torrents\",\"temp_path\":\"/data/torrents/incomplete\",\"temp_path_enabled\":true${iface}${extras}}"
+}
+
+qbit_apply_prefs() {
+    local cookie_jar="$1"
+    local extras="${2:-}"
+    local qbit_port=8081
+    curl -s --connect-timeout 5 \
+        "http://${API_HOST}:${qbit_port}/api/v2/app/setPreferences" \
+        -b "$cookie_jar" \
+        -H "Referer: http://${API_HOST}:${qbit_port}" \
+        -d "json=$(qbit_core_prefs_json "$extras")" \
+        2>/dev/null >/dev/null || true
+}
+
+# Set qBittorrent WebUI credentials, save paths, and VPN interface.
 # Prefer final credentials when already configured (avoids brute-force lockouts).
 qbit_set_credentials() {
     local qbit_port=8081
@@ -67,13 +102,12 @@ qbit_set_credentials() {
         local qbit_sid
         qbit_sid=$(qbit_cookie_sid "$qbit_cookie_jar")
         if [ -n "$qbit_sid" ]; then
-            curl -s --connect-timeout 5 \
-                "http://${API_HOST}:${qbit_port}/api/v2/app/setPreferences" \
-                -b "$qbit_cookie_jar" \
-                -H "Referer: http://${API_HOST}:${qbit_port}" \
-                -d "json={\"save_path\":\"/data/torrents\",\"temp_path\":\"/data/torrents/incomplete\",\"temp_path_enabled\":true}" \
-                2>/dev/null >/dev/null || true
-            _cfg_log_info "qBittorrent credentials already set"
+            qbit_apply_prefs "$qbit_cookie_jar"
+            if qbit_vpn_enabled; then
+                _cfg_log_info "qBittorrent credentials already set; BitTorrent bound to tun0"
+            else
+                _cfg_log_info "qBittorrent credentials already set"
+            fi
             rm -f "$qbit_cookie_jar"
             return 0
         fi
@@ -96,14 +130,14 @@ qbit_set_credentials() {
             local qbit_sid
             qbit_sid=$(qbit_cookie_sid "$qbit_cookie_jar")
             if [ -n "$qbit_sid" ]; then
-                curl -s --connect-timeout 5 \
-                    "http://${API_HOST}:${qbit_port}/api/v2/app/setPreferences" \
-                    -b "$qbit_cookie_jar" \
-                    -H "Referer: http://${API_HOST}:${qbit_port}" \
-                    -d "json={\"web_ui_username\":\"${AUTH_USERNAME}\",\"web_ui_password\":\"${AUTH_PASSWORD}\",\"save_path\":\"/data/torrents\",\"temp_path\":\"/data/torrents/incomplete\",\"temp_path_enabled\":true}" \
-                    2>/dev/null >/dev/null || true
+                qbit_apply_prefs "$qbit_cookie_jar" \
+                    ",\"web_ui_username\":\"${AUTH_USERNAME}\",\"web_ui_password\":\"${AUTH_PASSWORD}\""
                 echo >&2
-                _cfg_log_info "Set qBittorrent credentials and save path"
+                if qbit_vpn_enabled; then
+                    _cfg_log_info "Set qBittorrent credentials, save path, and tun0 bind"
+                else
+                    _cfg_log_info "Set qBittorrent credentials and save path"
+                fi
                 rm -f "$qbit_cookie_jar"
                 return 0
             fi

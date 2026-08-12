@@ -184,7 +184,10 @@ wait_for_services() {
         local running_services
 
         total_services=$("${DC[@]}" ps --format '{{.Name}}' | wc -l)
-        running_services=$("${DC[@]}" ps --format '{{.Status}}' | grep -c "Up")
+        # grep -c exits 1 when the count is 0; ((wait_time++)) is also 0 on
+        # the first increment. Both abort the CLI under set -e.
+        running_services=$("${DC[@]}" ps --format '{{.Status}}' | grep -c "Up" || true)
+        running_services=${running_services:-0}
 
         if [ "$total_services" -eq "$running_services" ] && [ "$total_services" -gt 0 ]; then
             echo
@@ -194,7 +197,7 @@ wait_for_services() {
 
         echo -n "."
         sleep 1
-        ((wait_time++))
+        wait_time=$((wait_time + 1))
 
         if [ $((wait_time % 10)) -eq 0 ]; then
             echo

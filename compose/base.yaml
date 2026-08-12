@@ -204,7 +204,7 @@ services:
   # Thin reverse proxy in front of Seerr: pass-through + delete-request full purge.
   # SEERR_DELETE_REQUEST_PURGE=0 disables intercept (stock Seerr semantics).
   seerr-gateway:
-    image: alpine:3
+    image: python:3.12-alpine
     container_name: seerr-gateway
     environment:
       - TZ=${TZ}
@@ -218,7 +218,8 @@ services:
     ports:
       - 5055:5055
     depends_on:
-      - seerr
+      seerr:
+        condition: service_healthy
     healthcheck:
       test:
         [
@@ -230,14 +231,8 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
-    command:
-      - /bin/sh
-      - -c
-      - |
-        set -eu
-        apk add --no-cache python3 >/dev/null
-        exec python3 /scripts/seerr-gateway.py
+      start_period: 20s
+    command: ["python3", "/scripts/seerr-gateway.py"]
     restart: unless-stopped
     networks:
       assemblrr_network:
@@ -261,7 +256,10 @@ services:
 
   # Deletes under /data/media → purge *arr entry + qB torrent/files
   media-purge-watch:
-    image: alpine:3
+    image: assemblrr/media-purge-watch:local
+    build:
+      context: ${INSTALL_DIRECTORY}/compose/sidecars
+      dockerfile: media-purge-watch.Dockerfile
     container_name: media-purge-watch
     environment:
       - TZ=${TZ}
@@ -271,20 +269,14 @@ services:
       - SONARR_URL=http://sonarr:8989
       - AUTH_USERNAME_FILE=/run/secrets/auth_username.txt
       - AUTH_PASSWORD_FILE=/run/secrets/auth_password.txt
+      - MEDIA_PURGE_WATCH=${MEDIA_PURGE_WATCH:-1}
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - ${MEDIA_DIRECTORY}:/data
       - ${INSTALL_DIRECTORY}/config:/config:ro
       - ${INSTALL_DIRECTORY}/scripts:/scripts:ro
       - ${INSTALL_DIRECTORY}/secrets:/run/secrets:ro
-    command:
-      - /bin/sh
-      - -c
-      - |
-        set -eu
-        apk add --no-cache bash curl jq inotify-tools >/dev/null
-        chmod +x /scripts/media-purge.sh /scripts/media-purge-watch.sh /scripts/arr-purge-hook.sh 2>/dev/null || true
-        exec bash /scripts/media-purge-watch.sh
+    command: ["/scripts/media-purge-watch.sh"]
     restart: unless-stopped
     networks:
       assemblrr_network:

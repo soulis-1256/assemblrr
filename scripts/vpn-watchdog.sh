@@ -5,7 +5,7 @@
 
 set -euo pipefail
 
-QBIT_HOST="127.0.0.1:8081"
+QBIT_HOST="${QBIT_HOST:-127.0.0.1:8081}"
 AUTH_USERNAME_FILE="${AUTH_USERNAME_FILE:-/run/secrets/auth_username.txt}"
 AUTH_PASSWORD_FILE="${AUTH_PASSWORD_FILE:-/run/secrets/auth_password.txt}"
 QBIT_USER="$(cat "$AUTH_USERNAME_FILE")"

@@ -262,6 +262,8 @@ copy_configuration_files() {
         ["scripts/arr-purge-hook.sh"]="scripts/arr-purge-hook.sh"
         ["scripts/media-purge-watch.sh"]="scripts/media-purge-watch.sh"
         ["scripts/seerr-gateway.py"]="scripts/seerr-gateway.py"
+        ["compose/sidecars/vpn-watchdog.Dockerfile"]="compose/sidecars/vpn-watchdog.Dockerfile"
+        ["compose/sidecars/media-purge-watch.Dockerfile"]="compose/sidecars/media-purge-watch.Dockerfile"
         ["docs/seerr-delete-request.md"]="docs/seerr-delete-request.md"
     )
 
@@ -411,13 +413,27 @@ write_qbittorrent_config() {
     pbkdf2_hash=$(qbit_generate_pbkdf2 "${auth_password:-}")
 
     if [ -n "$pbkdf2_hash" ]; then
-        cat > "$qbit_config_dir/qBittorrent.conf" << EOF
+        if [ "${setup_vpn,,}" = "y" ]; then
+            cat > "$qbit_config_dir/qBittorrent.conf" << EOF
+[BitTorrent]
+Session\Interface=tun0
+Session\InterfaceName=tun0
+
 [Preferences]
 WebUI\Username=${auth_username:-admin}
 WebUI\Password_PBKDF2=$pbkdf2_hash
 WebUI\Port=8081
 EOF
-        log_success "Pre-configured qBittorrent credentials (bypassing WebAPI restrictions)"
+            log_success "Pre-configured qBittorrent credentials and tun0 bind"
+        else
+            cat > "$qbit_config_dir/qBittorrent.conf" << EOF
+[Preferences]
+WebUI\Username=${auth_username:-admin}
+WebUI\Password_PBKDF2=$pbkdf2_hash
+WebUI\Port=8081
+EOF
+            log_success "Pre-configured qBittorrent credentials (bypassing WebAPI restrictions)"
+        fi
     fi
 }
 

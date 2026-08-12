@@ -29,6 +29,8 @@ compose/base.yaml|compose/base.yaml
 compose/direct-access.yaml|compose/direct-access.yaml
 compose/vpn.yaml|compose/vpn.yaml
 compose/examples/custom.yaml.example|compose/examples/custom.yaml.example
+compose/sidecars/vpn-watchdog.Dockerfile|compose/sidecars/vpn-watchdog.Dockerfile
+compose/sidecars/media-purge-watch.Dockerfile|compose/sidecars/media-purge-watch.Dockerfile
 .env.example|.env.example
 templates/recyclarr/recyclarr.yml|templates/recyclarr/recyclarr.yml
 templates/recyclarr/includes/radarr-hd.yml|templates/recyclarr/includes/radarr-hd.yml

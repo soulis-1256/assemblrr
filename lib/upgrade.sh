@@ -372,13 +372,15 @@ upgrade_app() {
     build_compose_args "$INSTALL_DIR" "${VPN_ENABLED:-n}"
     # --remove-orphans drops containers for services removed from managed compose
     # (e.g. Portainer) while leaving services still defined in custom.yaml alone.
-    if ! run_docker compose "${COMPOSE_ARGS[@]}" --profile "${MEDIA_SERVICE:-jellyfin}" up -d --remove-orphans; then
+    if ! run_docker compose "${COMPOSE_ARGS[@]}" --profile "${MEDIA_SERVICE:-jellyfin}" up -d --build --remove-orphans; then
         log_error "docker compose up failed. Restore with: ${APP_CLI_NAME:-assemblrr} restore <backup.tar.gz>"
     fi
 
     if [ -f "$INSTALL_DIR/config.sh" ]; then
         log_info "Wiring services..."
-        if bash "$INSTALL_DIR/config.sh"; then
+        # Re-wire must not open fzf/read prompts (would hang unattended upgrades
+        # and can wipe Bazarr providers if the picker is skipped).
+        if ASSEMBLRR_NONINTERACTIVE=1 bash "$INSTALL_DIR/config.sh"; then
             log_success "Service wiring completed"
         else
             log_warning "Service wiring reported failures. Fix issues, then re-run: ${APP_CLI_NAME:-assemblrr} upgrade"

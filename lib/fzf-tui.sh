@@ -133,6 +133,10 @@ fzf_multi_select() {
 # --- Prowlarr Indexer Selection ---
 configure_indexers() {
     local provided_key="$1"
+    if [ "${ASSEMBLRR_NONINTERACTIVE:-0}" = "1" ]; then
+        echo "Skipping optional Prowlarr indexer selection (non-interactive)." >&2
+        return 0
+    fi
     echo >&2
     log_info "Optional: configure Prowlarr indexers now, or skip and use the Prowlarr UI later." >&2
     log_info "Only enable sources you are authorized to use." >&2
@@ -195,6 +199,10 @@ _list_bazarr_providers_from_container() {
 # --- Bazarr subtitle provider selection (live from container, same idea as Prowlarr) ---
 configure_subtitle_providers() {
     SELECTED_SUBTITLE_PROVIDERS=()
+    if [ "${ASSEMBLRR_NONINTERACTIVE:-0}" = "1" ]; then
+        echo "Skipping optional Bazarr provider selection (non-interactive)." >&2
+        return 0
+    fi
     echo >&2
     log_info "Optional: configure Bazarr subtitle providers now, or skip and use the Bazarr UI later." >&2
     echo "Catalog comes from the running Bazarr image. Nothing is enabled unless you select it." >&2

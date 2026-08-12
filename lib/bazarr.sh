@@ -240,7 +240,19 @@ configure_bazarr() {
         fi
     fi
     if [ "${#providers[@]}" -eq 0 ]; then
-        log_step "Bazarr: no subtitle providers selected (configure later in Bazarr UI)"
+        # Upgrade / skipped picker: keep whatever Bazarr already has enabled.
+        local current_p
+        current_p=$(curl -s --connect-timeout 8 \
+            "http://${API_HOST}:${BAZARR_PORT}/api/system/settings?apikey=${bazarr_key}" 2>/dev/null \
+            | jq -r '.general.enabled_providers[]? // empty' 2>/dev/null || true)
+        if [ -n "$current_p" ]; then
+            while IFS= read -r p; do
+                [ -n "$p" ] && providers+=("$p")
+            done <<< "$current_p"
+            log_step "Bazarr: keeping existing providers ($(IFS=,; echo "${providers[*]}"))"
+        else
+            log_step "Bazarr: no subtitle providers selected (configure later in Bazarr UI)"
+        fi
     fi
 
     # --- Core integrations + TRaSH-style scoring ---

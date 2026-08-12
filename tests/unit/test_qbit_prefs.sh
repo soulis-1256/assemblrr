@@ -1,0 +1,42 @@
+#!/bin/bash
+# qB session prefs JSON (VPN tun0 bind)
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/../helpers.sh"
+
+# arr.sh requires helpers used only in other functions; stub logging.
+# shellcheck disable=SC1091
+source "$REPO_ROOT/lib/core.sh"
+# shellcheck disable=SC1091
+source "$REPO_ROOT/lib/arr.sh"
+
+test_suite "qbit_core_prefs_json VPN on binds tun0"
+VPN_ENABLED=y
+json=$(qbit_core_prefs_json)
+assert_contains "$json" '"current_network_interface":"tun0"' "VPN=y sets tun0"
+assert_contains "$json" '"save_path":"/data/torrents"' "save path always set"
+assert_contains "$json" '"temp_path_enabled":true' "incomplete path on"
+
+test_suite "qbit_core_prefs_json VPN off leaves interface unset"
+VPN_ENABLED=n
+json=$(qbit_core_prefs_json)
+assert_not_contains "$json" "current_network_interface" "VPN=n does not force an interface"
+assert_contains "$json" '"save_path":"/data/torrents"' "save path still set"
+
+test_suite "qbit_core_prefs_json extras merge"
+VPN_ENABLED=y
+json=$(qbit_core_prefs_json ',"web_ui_username":"x"')
+assert_contains "$json" '"current_network_interface":"tun0"' "tun0 kept with extras"
+assert_contains "$json" '"web_ui_username":"x"' "extras appended"
+
+test_suite "qbit_vpn_enabled"
+VPN_ENABLED=y
+assert_true "y is enabled" "qbit_vpn_enabled"
+VPN_ENABLED=Y
+assert_true "Y is enabled" "qbit_vpn_enabled"
+VPN_ENABLED=n
+assert_false "n is disabled" "qbit_vpn_enabled"
+
+test_summary
