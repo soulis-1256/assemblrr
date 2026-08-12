@@ -15,23 +15,41 @@ root-owned; plain `rm -rf` then fails — use the Docker removal step in Option 
 |---|---|
 | Containers | `jellyfin`/`emby`/`plex` (your choice), `qbittorrent`, `sonarr`, `radarr`, `prowlarr`, `bazarr`, `seerr`, `seerr-gateway`, `media-purge-watch`, `recyclarr` — plus `gluetun`, `deunhealth`, `vpn-watchdog` when VPN is enabled; older installs may still have `portainer` |
 | Docker network | `assemblrr_network` |
-| Install directory (config, secrets, compose files) | `~/assemblrr` |
-| Media directory (your movies/TV/downloads) | `~/assemblrr-media` |
+| Install directory (config, secrets, compose files) | `~/assemblrr` (or the path you chose) |
+| Media directory (your movies/TV/downloads) | `~/assemblrr-media` (or the path you chose) |
 | CLI command | `~/.local/bin/assemblrr` |
 | CLI library modules | `~/.local/bin/lib/*.sh` |
-| Runtime config | `~/assemblrr/.assemblrr-config` (written near the end of setup) |
+| Runtime config | `<install>/.assemblrr-config` (written when the install tree is first bootstrapped — early in setup, not only at the end) |
+| Discovery pointer | `~/.assemblrr-config` (points at `INSTALL_DIRECTORY` so the CLI can find non-default paths) |
 | Logs | `/tmp/assemblrr-*.log` |
 | Legacy (old installs) | `~/assemblrr_services.txt` — unused; safe to delete; `uninstall` removes it |
 
-No named Docker volumes are used — all state lives in the two directories above.
+No named Docker volumes are used — all state lives in the install and media
+directories above.
+
+### Mid-setup / abort
+
+Setup installs the operator CLI as soon as the install path is known (VPN test
+path or after you choose directories). If you stop setup early (Ctrl+C, failed
+VPN, closed terminal):
+
+1. Prefer **`assemblrr uninstall`** (or `assemblrr uninstall --force` to keep
+   media without prompts) if `~/.local/bin` is on your `PATH`.
+2. If the shell says `command not found`, try a **new terminal**, or run the
+   binary directly: `~/.local/bin/assemblrr uninstall --force`.
+3. If the PATH CLI is missing but the install tree exists, use **Option 2**.
+4. If there is no install tree / no runtime config, use **Option 3**.
+
+`--force` alone **never** deletes your media directory; pass `--media` only if
+you intend to delete movies/TV/downloads as well.
 
 ### Which option applies?
 
 | Situation | Use |
 |---|---|
-| Setup finished; `assemblrr` is on your PATH | Option 1 |
-| Setup finished; CLI missing from PATH but `~/assemblrr/cli.sh` and `.assemblrr-config` exist | Option 2 |
-| Setup failed mid-way, no `.assemblrr-config`, `Permission denied` on `config/`, or CLI cannot find the install | Option 3 |
+| CLI works (`assemblrr` on PATH, or `~/.local/bin/assemblrr`) | Option 1 |
+| CLI not on PATH, but `<install>/cli.sh` and `<install>/.assemblrr-config` exist (finished **or** mid-setup abort after bootstrap) | Option 2 |
+| No runtime config, incomplete tree, `Permission denied` on `config/`, or CLI cannot find the install | Option 3 |
 
 ## Option 1 — Normal uninstall (CLI works)
 
@@ -47,18 +65,25 @@ assemblrr uninstall --force         # no prompts; keeps media
 assemblrr uninstall --force --media # no prompts; deletes media too
 ```
 
-`--force` alone never deletes your media directory; pass `--media` to opt in.
+If a new shell has not picked up `~/.local/bin` yet:
 
-## Option 2 — CLI missing from PATH (install is otherwise complete)
+```bash
+~/.local/bin/assemblrr uninstall --force
+```
 
-Setup copies the CLI into the install directory. If `.assemblrr-config` exists:
+## Option 2 — Install tree present, PATH CLI missing
+
+Setup always copies `cli.sh` into the install directory when it bootstraps the
+tree. If `<install>/.assemblrr-config` exists (default: `~/assemblrr`):
 
 ```bash
 bash ~/assemblrr/cli.sh uninstall
+# or non-interactive, keep media:
+bash ~/assemblrr/cli.sh uninstall --force
 ```
 
 If that errors with “could not find installation” or there is no
-`.assemblrr-config`, setup never finished — use Option 3.
+`.assemblrr-config`, use Option 3.
 
 ## Option 3 — Manual removal (failed or incomplete setup)
 
@@ -110,6 +135,7 @@ rm -f ~/.local/bin/assemblrr
 rm -f ~/.local/bin/lib/*.sh
 rmdir ~/.local/bin/lib 2>/dev/null    # only removed if now empty
 rm -f ~/assemblrr_services.txt 2>/dev/null   # legacy cheat-sheet
+rm -f ~/.assemblrr-config 2>/dev/null        # discovery pointer
 ```
 
 **5. Optional — remove the Docker images:**
