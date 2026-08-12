@@ -26,7 +26,17 @@ Auth failures on step 1 are returned to the client with no deletes.
 |-------|------|
 | `scripts/seerr-gateway.py` | Reverse proxy + request-delete intercept |
 | `compose/base.yaml` → `seerr-gateway` | Publishes 5055; `seerr` is internal only |
-| `scripts/arr-purge-hook.sh` / `media-purge.sh` | qB + disk cleanup after *arr delete |
+| `scripts/arr-purge-hook.sh` / `media-purge.sh` | qB + disk cleanup after *arr delete; then best-effort Jellyfin library refresh |
+
+### Purge safety (qB)
+
+`media-purge.sh` prefers under-delete over collateral damage:
+
+1. *arr history download hashes that still exist in qB **and** match the library folder key (`Title (YYYY)`)
+2. Exact folder-key match on torrent name / content path (no bare short-title prefix)
+3. Refuse ambiguous multi-matches
+
+See `media-purge.sh --match-self-test`.
 
 Env:
 

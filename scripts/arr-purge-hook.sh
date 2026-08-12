@@ -8,6 +8,8 @@ PURGE="${SCRIPT_DIR}/media-purge.sh"
 
 export API_HOST="${API_HOST:-127.0.0.1}"
 export QBITTORRENT_URL="${QBITTORRENT_URL:-}"
+export JELLYFIN_URL="${JELLYFIN_URL:-http://jellyfin:8096}"
+export JELLYFIN_API_KEY_FILE="${JELLYFIN_API_KEY_FILE:-/run/secrets/jellyfin_api_key.txt}"
 export AUTH_USERNAME_FILE="${AUTH_USERNAME_FILE:-/run/secrets/auth_username.txt}"
 export AUTH_PASSWORD_FILE="${AUTH_PASSWORD_FILE:-/run/secrets/auth_password.txt}"
 
