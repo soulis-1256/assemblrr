@@ -7,6 +7,10 @@
 
 set -euo pipefail
 
+_prompts_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+[ -f "$_prompts_dir/ui.sh" ] && source "$_prompts_dir/ui.sh"
+
 configure_media_service() {
     # Express mode: use Jellyfin by default
     if [ "${SETUP_MODE:-}" = "express" ]; then
@@ -17,9 +21,9 @@ configure_media_service() {
         return 0
     fi
 
-    echo
-    echo
-    log_info "Time to choose your media service."
+    ui_intro \
+        "Time to choose your media service." \
+        "Change the media server. This restarts the stack."
     echo "  1) Jellyfin (recommended, easier)"
     echo "  2) Emby"
     echo "  3) Plex (advanced, uses host networking)"
@@ -65,9 +69,9 @@ configure_seerr_profile() {
         return 0
     fi
 
-    echo
-    echo
-    log_info "What default quality profile would you like to set for Seerr (Movies)?"
+    ui_intro \
+        "What default quality profile would you like to set for Seerr (Movies)?" \
+        "Change Seerr's default movie quality profile."
     echo "  1) Ultra-HD (4K - Optimized for HEVC/x265)"
     echo "  2) 1080p"
     echo "  3) Any (Radarr Default)"
@@ -94,9 +98,9 @@ configure_subtitle_language() {
     local iso639_url="https://raw.githubusercontent.com/jellyfin/jellyfin/master/Emby.Server.Implementations/Localization/iso6392.txt"
     local awk_filter='$4 != "" {print $1 "\t" $4}'
 
-    echo
-    echo
-    log_info "Select your preferred subtitle language (Jellyfin playback + Bazarr downloads)."
+    ui_intro \
+        "Select your preferred subtitle language (Jellyfin playback + Bazarr downloads)." \
+        "Change the preferred subtitle language (Jellyfin + Bazarr)."
 
     # Use fzf single-select with fallback to "en"
     subtitle_language=$(fzf_single_select "$iso639_url" "$awk_filter" "")
@@ -177,12 +181,14 @@ configure_opensubtitles() {
     opensubtitles_username=""
     opensubtitles_password=""
 
-    echo
-    echo
-    log_info "Optional: OpenSubtitles.com credentials for Bazarr (https://www.opensubtitles.com/)."
+    ui_intro \
+        "Optional: OpenSubtitles.com credentials for Bazarr (https://www.opensubtitles.com/)." \
+        "Update OpenSubtitles.com credentials for Bazarr. Answer n to clear them."
     log_info "The website login accepts email or username; Bazarr/API require your profile username."
     log_info "Find it under your OpenSubtitles profile (not the signup email)."
-    log_info "Other subtitle providers can be configured later in the Bazarr UI or optional picker."
+    ui_note \
+        "Other subtitle providers can be configured later with: ${APP_CLI_NAME:-assemblrr} config edit providers" \
+        ""
     read -p "Do you have OpenSubtitles.com credentials? (y/N) [Default = n]: " opensubtitles_enabled
     opensubtitles_enabled=${opensubtitles_enabled:-n}
 
@@ -239,9 +245,9 @@ configure_opensubtitles() {
 }
 
 configure_vpn() {
-    echo
-    echo
-    log_info "Time to set up the VPN."
+    ui_intro \
+        "Time to set up the VPN." \
+        "Change VPN settings. This restarts the stack and can interrupt downloads."
     log_info "Supported VPN providers: https://github.com/qdm12/gluetun-wiki"
 
     read -p "Configure VPN? (Y/n) [Default = y]: " setup_vpn
@@ -315,7 +321,9 @@ configure_vpn() {
 
     prompt_vpn_credentials
 
-    # Port forwarding
+    # Port forwarding — we do not maintain a provider allowlist (lists go stale).
+    log_info "Port forwarding only helps if your provider supports it (and Gluetun can use it)."
+    log_info "If they do not, leave this off — turning it on can limit which servers Gluetun picks."
     read -p "Enable port forwarding? (y/N) [Default = n]: " enable_port_forwarding
     enable_port_forwarding=${enable_port_forwarding:-"n"}
 
@@ -366,10 +374,12 @@ prompt_vpn_credentials() {
 }
 
 configure_auth() {
-    echo
-    echo
-    log_info "Set credentials for your service web UIs."
-    log_info "These will be used to log into Radarr, Prowlarr, and other services."
+    ui_intro \
+        "Set credentials for your service web UIs." \
+        "Change the shared service login (Radarr, Sonarr, Prowlarr, qBittorrent)."
+    ui_note \
+        "These will be used to log into Radarr, Prowlarr, and other services." \
+        "Seerr / Jellyfin / Bazarr may still use the previous password until you sign in there or re-run wiring."
     echo
 
     auth_username=""

@@ -238,11 +238,16 @@ refresh_user_cli() {
     local install_dir="$1"
     mkdir -p "$HOME/.local/bin/lib"
     local m
-    for m in core branding compose vpn managed_files upgrade services; do
+    if ! type list_cli_lib_modules >/dev/null 2>&1; then
+        # shellcheck source=/dev/null
+        [ -f "$install_dir/lib/managed_files.sh" ] && source "$install_dir/lib/managed_files.sh"
+    fi
+    while IFS= read -r m; do
+        [ -z "$m" ] && continue
         if [ -f "$install_dir/lib/${m}.sh" ]; then
             cp "$install_dir/lib/${m}.sh" "$HOME/.local/bin/lib/${m}.sh"
         fi
-    done
+    done < <(list_cli_lib_modules)
     if [ -f "$install_dir/cli.sh" ]; then
         cp "$install_dir/cli.sh" "$HOME/.local/bin/${APP_CLI_NAME:-assemblrr}"
         chmod +x "$HOME/.local/bin/${APP_CLI_NAME:-assemblrr}"
@@ -264,10 +269,12 @@ validate_install_compose() {
 
 # --- Public entrypoints ---
 
-# upgrade_app [--check] [--from DIR] [--ref REF] [--skip-backup] [-y]
+# upgrade_app [--check] [--from DIR] [--ref REF] [--skip-backup] [--skip-stack] [--skip-wire] [-y]
 upgrade_app() {
     local check_only=0
     local skip_backup=0
+    local skip_stack=0
+    local skip_wire=0
     local assume_yes=0
     local from_dir=""
     local ref=""
@@ -277,6 +284,8 @@ upgrade_app() {
         case "$1" in
             --check) check_only=1; shift ;;
             --skip-backup) skip_backup=1; shift ;;
+            --skip-stack) skip_stack=1; shift ;;
+            --skip-wire) skip_wire=1; shift ;;
             -y|--yes) assume_yes=1; shift ;;
             --from)
                 from_dir="${2:-}"
@@ -368,15 +377,21 @@ upgrade_app() {
         log_error "Compose invalid after upgrade. Restore with: ${APP_CLI_NAME:-assemblrr} restore <backup.tar.gz>"
     fi
 
-    log_info "Bringing stack up with updated compose..."
-    build_compose_args "$INSTALL_DIR" "${VPN_ENABLED:-n}"
-    # --remove-orphans drops containers for services removed from managed compose
-    # (e.g. Portainer) while leaving services still defined in custom.yaml alone.
-    if ! run_docker compose "${COMPOSE_ARGS[@]}" --profile "${MEDIA_SERVICE:-jellyfin}" up -d --build --remove-orphans; then
-        log_error "docker compose up failed. Restore with: ${APP_CLI_NAME:-assemblrr} restore <backup.tar.gz>"
+    if [ "$skip_stack" = "1" ]; then
+        log_info "Skipping stack restart (--skip-stack)"
+    else
+        log_info "Bringing stack up with updated compose..."
+        build_compose_args "$INSTALL_DIR" "${VPN_ENABLED:-n}"
+        # --remove-orphans drops containers for services removed from managed compose
+        # (e.g. Portainer) while leaving services still defined in custom.yaml alone.
+        if ! run_docker compose "${COMPOSE_ARGS[@]}" --profile "${MEDIA_SERVICE:-jellyfin}" up -d --build --remove-orphans; then
+            log_error "docker compose up failed. Restore with: ${APP_CLI_NAME:-assemblrr} restore <backup.tar.gz>"
+        fi
     fi
 
-    if [ -f "$INSTALL_DIR/config.sh" ]; then
+    if [ "$skip_wire" = "1" ]; then
+        log_info "Skipping service wiring (--skip-wire)"
+    elif [ -f "$INSTALL_DIR/config.sh" ]; then
         log_info "Wiring services..."
         # Re-wire must not open fzf/read prompts (would hang unattended upgrades
         # and can wipe Bazarr providers if the picker is skipped).

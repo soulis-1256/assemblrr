@@ -78,6 +78,20 @@ service_ui_url() {
     fi
 }
 
+# True when a compose ps row is ready for the operator.
+# healthy → ready; starting/unhealthy → not; no healthcheck + running → ready.
+service_row_ready() {
+    local state="${1:-}"
+    local health="${2:-}"
+    state=$(printf '%s' "$state" | tr '[:upper:]' '[:lower:]')
+    health=$(printf '%s' "$health" | tr '[:upper:]' '[:lower:]')
+    case "$health" in
+        healthy) return 0 ;;
+        unhealthy|starting) return 1 ;;
+    esac
+    [ "$state" = "running" ]
+}
+
 # Human-readable service URLs only (setup summary / scripting)
 running_services_location() {
     local host_ip="localhost"

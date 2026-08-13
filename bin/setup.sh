@@ -219,86 +219,40 @@ check_dependencies() {
 # --- Setup prompts (sourced from lib/prompts.sh) ---
 # Requires: lib/core.sh already sourced, constants defined above
 # fzf-tui helpers (fzf_single_select, fzf_multi_select) must be sourced before prompts
+source "$APP_ROOT/lib/managed_files.sh"
 source "$APP_ROOT/lib/fzf-tui.sh"
 source "$APP_ROOT/lib/services.sh"
 source "$APP_ROOT/lib/prompts.sh"
 
 copy_configuration_files() {
-    local -A files=(
-        ["lib/core.sh"]="lib/core.sh"
-        ["lib/branding.sh"]="lib/branding.sh"
-        ["lib/compose.sh"]="lib/compose.sh"
-        ["lib/vpn.sh"]="lib/vpn.sh"
-        ["lib/api.sh"]="lib/api.sh"
-        ["lib/arr.sh"]="lib/arr.sh"
-        ["lib/jellyfin.sh"]="lib/jellyfin.sh"
-        ["lib/seerr.sh"]="lib/seerr.sh"
-        ["lib/bazarr.sh"]="lib/bazarr.sh"
-        ["lib/prompts.sh"]="lib/prompts.sh"
-        ["lib/fzf-tui.sh"]="lib/fzf-tui.sh"
-        ["lib/managed_files.sh"]="lib/managed_files.sh"
-        ["lib/upgrade.sh"]="lib/upgrade.sh"
-        ["lib/services.sh"]="lib/services.sh"
-        ["compose/base.yaml"]="compose/base.yaml"
-        ["compose/direct-access.yaml"]="compose/direct-access.yaml"
-        ["compose/vpn.yaml"]="compose/vpn.yaml"
-        ["compose/examples/custom.yaml.example"]="compose/examples/custom.yaml.example"
-        [".env.example"]=".env.example"
-        ["templates/recyclarr/recyclarr.yml"]="templates/recyclarr/recyclarr.yml"
-        ["templates/recyclarr/includes/radarr-hd.yml"]="templates/recyclarr/includes/radarr-hd.yml"
-        ["templates/recyclarr/includes/radarr-uhd.yml"]="templates/recyclarr/includes/radarr-uhd.yml"
-        ["templates/recyclarr/includes/radarr-soft-cfs.yml"]="templates/recyclarr/includes/radarr-soft-cfs.yml"
-        ["templates/recyclarr/includes/sonarr-web-1080.yml"]="templates/recyclarr/includes/sonarr-web-1080.yml"
-        ["templates/recyclarr/includes/sonarr-web-2160.yml"]="templates/recyclarr/includes/sonarr-web-2160.yml"
-        ["templates/recyclarr/includes/sonarr-soft-cfs.yml"]="templates/recyclarr/includes/sonarr-soft-cfs.yml"
-        ["branding.conf"]="branding.conf"
-        ["bin/cli.sh"]="cli.sh"
-        ["bin/config.sh"]="config.sh"
-        ["bin/setup.sh"]="setup.sh"
-        ["bin/docker-install.sh"]="docker-install.sh"
-        ["scripts/jellyfin-refresh.sh"]="scripts/jellyfin-refresh.sh"
-        ["scripts/vpn-watchdog.sh"]="scripts/vpn-watchdog.sh"
-        ["scripts/media-purge.sh"]="scripts/media-purge.sh"
-        ["scripts/arr-purge-hook.sh"]="scripts/arr-purge-hook.sh"
-        ["scripts/media-purge-watch.sh"]="scripts/media-purge-watch.sh"
-        ["scripts/seerr-gateway.py"]="scripts/seerr-gateway.py"
-        ["compose/sidecars/vpn-watchdog.Dockerfile"]="compose/sidecars/vpn-watchdog.Dockerfile"
-        ["compose/sidecars/media-purge-watch.Dockerfile"]="compose/sidecars/media-purge-watch.Dockerfile"
-        ["docs/seerr-delete-request.md"]="docs/seerr-delete-request.md"
-    )
-
-    local copied=0
+    local copied=0 src dest src_path dest_path dest_dir
     log_debug "Copying install tree into $install_directory"
-    for src in "${!files[@]}"; do
-        local dest="$install_directory/${files[$src]}"
-        local dest_dir
-        local src_path=""
-        dest_dir=$(dirname "$dest")
-
-        if [ ! -d "$dest_dir" ]; then
-            mkdir -p "$dest_dir"
-        fi
+    UPGRADE_SOURCE_ROOT="${UPGRADE_SOURCE_ROOT:-$APP_ROOT}"
+    while IFS='|' read -r src dest; do
+        [ -z "$src" ] && continue
+        [[ "$src" =~ ^# ]] && continue
+        dest_path="$install_directory/$dest"
+        dest_dir=$(dirname "$dest_path")
+        [ -d "$dest_dir" ] || mkdir -p "$dest_dir"
 
         if ! src_path=$(resolve_project_file "$src"); then
-            if [ "$src" = "compose/examples/custom.yaml.example" ]; then
+            if [[ "$src" == compose/examples/* ]]; then
                 log_debug "Optional example file not found: $src"
                 continue
             fi
             log_error "Failed to locate source file: $src"
         fi
 
-        log_debug "  $src -> $dest"
-        if cp "$src_path" "$dest"; then
-            # Custom scripts mounted into *arr containers must be executable;
-            # Radarr/Sonarr validate CustomScript paths by exec'ing them on save.
+        log_debug "  $src -> $dest_path"
+        if cp "$src_path" "$dest_path"; then
             case "$src" in
-                scripts/*) chmod +x "$dest" ;;
+                scripts/*|bin/cli.sh|bin/config.sh|bin/setup.sh) chmod +x "$dest_path" ;;
             esac
             copied=$((copied + 1))
         else
-            log_error "Failed to copy $src to $dest. Check permissions"
+            log_error "Failed to copy $src to $dest_path. Check permissions"
         fi
-    done
+    done < <(list_managed_files)
     log_debug "Copied ${copied} file(s) into $install_directory"
 }
 
@@ -580,12 +534,13 @@ install_cli() {
     fi
 
     mkdir -p "$HOME/.local/bin/lib"
-    # Copy lib modules (CLI sources them from lib/ subdirectory)
-    for _lib_module in core branding compose vpn managed_files upgrade services; do
+    local _lib_module
+    while IFS= read -r _lib_module; do
+        [ -z "$_lib_module" ] && continue
         if [ -f "$install_directory/lib/${_lib_module}.sh" ]; then
             cp "$install_directory/lib/${_lib_module}.sh" "$HOME/.local/bin/lib/${_lib_module}.sh"
         fi
-    done
+    done < <(list_cli_lib_modules)
     cp "$cli_source" "$HOME/.local/bin/$APP_CLI_NAME" && chmod +x "$HOME/.local/bin/$APP_CLI_NAME"
     # Always on PATH for this process (and future shells via profile/fish config)
     export PATH="$HOME/.local/bin:$PATH"

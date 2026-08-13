@@ -111,6 +111,15 @@ qbit_cookie_sid() {
 
 # --- Wait for service API to be ready ---
 
+_api_ready() {
+    local port="$1"
+    local apikey="$2"
+    local api_path="$3"
+    local response
+    response=$(curl -s --connect-timeout 3 "http://${API_HOST}:${port}${api_path}?apikey=${apikey}" 2>/dev/null || echo "")
+    [ -n "$response" ] && [ -n "$(jq_json_get "$response" "version")" ]
+}
+
 wait_for_api() {
     local name="$1"
     local port="$2"
@@ -119,19 +128,18 @@ wait_for_api() {
     local max_wait="${API_READY_TIMEOUT_SECONDS:-120}"
     local wait_time=0
 
+    # Happy path: already up — stay quiet (config edit / re-wire).
+    if _api_ready "$port" "$apikey" "$api_path"; then
+        return 0
+    fi
+
     echo -n "Waiting for $name API" >&2
     while [ $wait_time -lt $max_wait ]; do
-        dot_inline
-        local response
-        response=$(curl -s --connect-timeout 3 "http://${API_HOST}:${port}${api_path}?apikey=${apikey}" 2>/dev/null || echo "")
-        if [ -n "$response" ]; then
-            local version
-            version=$(jq_json_get "$response" "version")
-            if [ -n "$version" ]; then
-                echo >&2
-                return 0
-            fi
+        if _api_ready "$port" "$apikey" "$api_path"; then
+            echo >&2
+            return 0
         fi
+        dot_inline
         sleep 2
         wait_time=$((wait_time + 2))
     done

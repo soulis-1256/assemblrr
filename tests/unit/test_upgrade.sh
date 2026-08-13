@@ -19,6 +19,8 @@ list=$(list_managed_files)
 assert_true "has lib/bazarr.sh" "echo \"\$list\" | grep -q 'lib/bazarr.sh|lib/bazarr.sh'"
 assert_true "has lib/upgrade.sh" "echo \"\$list\" | grep -q 'lib/upgrade.sh|lib/upgrade.sh'"
 assert_true "has lib/services.sh" "echo \"\$list\" | grep -q 'lib/services.sh|lib/services.sh'"
+assert_true "has lib/config_edit.sh" "echo \"\$list\" | grep -q 'lib/config_edit.sh|lib/config_edit.sh'"
+assert_true "has lib/ui.sh" "echo \"\$list\" | grep -q 'lib/ui.sh|lib/ui.sh'"
 assert_true "has compose/base.yaml" "echo \"\$list\" | grep -q 'compose/base.yaml|compose/base.yaml'"
 assert_true "has vpn-watchdog Dockerfile" "echo \"\$list\" | grep -q 'compose/sidecars/vpn-watchdog.Dockerfile'"
 assert_true "has media-purge-watch Dockerfile" "echo \"\$list\" | grep -q 'compose/sidecars/media-purge-watch.Dockerfile'"
@@ -76,6 +78,14 @@ assert_true "portainer not in catalog" "! echo \"$cat\" | grep -q '^portainer|'"
 url=$(service_ui_url 6767 / localhost)
 assert_eq "http://localhost:6767/" "$url" "bazarr url"
 
+test_suite "service_row_ready uses Docker health"
+assert_true "healthy is ready" "service_row_ready running healthy"
+assert_false "starting is not ready" "service_row_ready running starting"
+assert_false "unhealthy is not ready" "service_row_ready running unhealthy"
+assert_true "no healthcheck + running is ready" "service_row_ready running ''"
+assert_false "exited is not ready" "service_row_ready exited ''"
+assert_false "created is not ready" "service_row_ready created ''"
+
 test_suite "migration 002 skips when custom.yaml keeps portainer"
 tmp3=$(mktemp -d)
 mkdir -p "$tmp3/compose"
@@ -99,5 +109,10 @@ rm -rf "$tmp3"
 test_suite "upgrade uses --build --remove-orphans and non-interactive wiring"
 assert_true "upgrade up -d --build --remove-orphans" "grep -q 'up -d --build --remove-orphans' \"$REPO_ROOT/lib/upgrade.sh\""
 assert_true "upgrade wires with ASSEMBLRR_NONINTERACTIVE" "grep -q 'ASSEMBLRR_NONINTERACTIVE=1' \"$REPO_ROOT/lib/upgrade.sh\""
+assert_true "upgrade accepts --skip-stack" "grep -q -- '--skip-stack' \"$REPO_ROOT/lib/upgrade.sh\""
+assert_true "upgrade accepts --skip-wire" "grep -q -- '--skip-wire' \"$REPO_ROOT/lib/upgrade.sh\""
+mods=$(list_cli_lib_modules)
+assert_contains "$mods" "config_edit" "CLI modules include config_edit"
+assert_contains "$mods" "ui" "CLI modules include ui"
 
 test_summary

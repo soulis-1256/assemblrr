@@ -1,7 +1,8 @@
 #!/bin/bash
 # assemblrr *arr service configuration — sourced by config.sh
 # Provides: set_arr_auth, qbit helpers, configure_arr_service, profile lookups,
-#           configure_radarr, configure_sonarr, configure_prowlarr
+#           configure_radarr, configure_sonarr, configure_prowlarr,
+#           apply_selected_indexers, sync_selected_indexers
 # Requires: lib/core.sh (logging), lib/api.sh (api_get/post/put/delete helpers),
 #           config.sh (_cfg_log_info, log_step, log_step_fail, AUTH_USERNAME, etc.)
 
@@ -60,7 +61,9 @@ qbit_vpn_enabled() {
     esac
 }
 
-# setPreferences JSON: save paths, and tun0 when VPN is on.
+# setPreferences JSON: save paths, Automatic Torrent Management, and tun0 when VPN is on.
+# ATM makes category save paths real: Radarr → /data/torrents/movies, Sonarr → /data/torrents/tv.
+# Per-torrent TMM is left alone, so already-downloaded torrents stay where they are.
 # qB 5.x + WireGuard does not bind the POINTOPOINT tun by itself; "Any"
 # listens on eth0 and Gluetun's kill switch then drops tracker/DHT packets
 # ("Operation not permitted" → stalledDL).
@@ -72,7 +75,7 @@ qbit_core_prefs_json() {
     if qbit_vpn_enabled; then
         iface=',"current_network_interface":"tun0"'
     fi
-    printf '%s' "{\"save_path\":\"/data/torrents\",\"temp_path\":\"/data/torrents/incomplete\",\"temp_path_enabled\":true${iface}${extras}}"
+    printf '%s' "{\"save_path\":\"/data/torrents\",\"temp_path\":\"/data/torrents/incomplete\",\"temp_path_enabled\":true,\"auto_tmm_enabled\":true${iface}${extras}}"
 }
 
 qbit_apply_prefs() {
@@ -728,6 +731,106 @@ wait_for_arr_indexer_sync() {
     return 1
 }
 
+# POST indexers named in SELECTED_INDEXERS into Prowlarr (skip existing).
+# Used by first-run wiring and `assemblrr config edit indexers`.
+apply_selected_indexers() {
+    local apikey="$1"
+    local indexer_schemas
+    indexer_schemas=$(api_get "9696" "/api/v1/indexer/schema" "$apikey")
+
+    if [ -z "$indexer_schemas" ]; then
+        log_step_fail "Prowlarr: failed to fetch indexer schemas"
+        return 1
+    fi
+
+    local selected_indexers=()
+    if [ -n "${SELECTED_INDEXERS+x}" ] && [ "${#SELECTED_INDEXERS[@]}" -gt 0 ]; then
+        selected_indexers=("${SELECTED_INDEXERS[@]}")
+        echo "Applying ${#selected_indexers[@]} selected Prowlarr indexer(s)" >&2
+    fi
+
+    local existing_indexers
+    existing_indexers=$(api_get "9696" "/api/v1/indexer" "$apikey")
+    local existing_names
+    existing_names=$(jq_json_list_values "$existing_indexers" "name")
+
+    local indexer_name
+    for indexer_name in "${selected_indexers[@]+"${selected_indexers[@]}"}"; do
+        if echo "$existing_names" | grep -q -F -x "$indexer_name"; then
+            log_step "Prowlarr: ${indexer_name} indexer already exists"
+            continue
+        fi
+
+        # Cardigann indexers match on 'name'. Empty field values use definition defaults.
+        local indexer_payload
+        indexer_payload=$(echo "$indexer_schemas" | jq --arg idx "$indexer_name" '
+            [.[] | select(.name == $idx or (.name | ascii_downcase | startswith($idx | ascii_downcase)))][0] |
+            .fields = [.fields[] | select(.value != "") | {name: .name, value: .value}] |
+            .enable = true | .enableAutoSearch = true | .appProfileId = 1 | .priority = (.priority // 25)
+        ' 2>/dev/null || echo "")
+
+        if [ -z "$indexer_payload" ]; then
+            log_step_fail "Prowlarr: ${indexer_name} schema not found"
+            continue
+        fi
+
+        local idx_result
+        idx_result=$(curl -s --connect-timeout 5 -X POST \
+            -H "Content-Type: application/json" \
+            -d "$indexer_payload" \
+            "http://${API_HOST}:9696/api/v1/indexer?apikey=${apikey}&forceSave=true" 2>/dev/null)
+        if jq_json_has_key "$idx_result" "id"; then
+            log_step "Prowlarr: added ${indexer_name} indexer"
+        else
+            local disabled_payload
+            disabled_payload=$(echo "$indexer_payload" | jq -c '.enable = false' 2>/dev/null || echo "")
+            idx_result=$(curl -s --connect-timeout 5 -X POST \
+                -H "Content-Type: application/json" \
+                -d "$disabled_payload" \
+                "http://${API_HOST}:9696/api/v1/indexer?apikey=${apikey}&forceSave=true" 2>/dev/null)
+            if jq_json_has_key "$idx_result" "id"; then
+                log_step "Prowlarr: added ${indexer_name} indexer (disabled — needs FlareSolverr for Cloudflare)"
+            else
+                log_step_fail "Prowlarr: failed to add ${indexer_name} indexer"
+            fi
+        fi
+    done
+    if [ "${#selected_indexers[@]}" -gt 0 ]; then
+        echo >&2
+        log_success "Prowlarr indexer configuration finished (check markers above for any failures)" >&2
+    fi
+    return 0
+}
+
+# Make Prowlarr match SELECTED_INDEXERS: add missing, delete unselected.
+# Esc/empty selection is a no-op (caller should skip). Confirm = desired set.
+sync_selected_indexers() {
+    local apikey="$1"
+    apply_selected_indexers "$apikey" || return 1
+
+    local existing_indexers
+    existing_indexers=$(api_get "9696" "/api/v1/indexer" "$apikey")
+    if [ -z "$existing_indexers" ] || [ "$existing_indexers" = "[]" ]; then
+        return 0
+    fi
+
+    local id name
+    while IFS=$'\t' read -r id name; do
+        [ -n "$id" ] && [ -n "$name" ] || continue
+        if printf '%s\n' "${SELECTED_INDEXERS[@]+"${SELECTED_INDEXERS[@]}"}" | grep -q -F -x "$name"; then
+            continue
+        fi
+        local code
+        code=$(api_delete "9696" "/api/v1/indexer/${id}" "$apikey")
+        if [ "$code" = "200" ] || [ "$code" = "204" ]; then
+            log_step "Prowlarr: removed ${name} indexer"
+        else
+            log_step_fail "Prowlarr: failed to remove ${name} indexer (HTTP ${code:-?})"
+        fi
+    done < <(echo "$existing_indexers" | jq -r '.[] | "\(.id)\t\(.name)"' 2>/dev/null)
+    return 0
+}
+
 configure_prowlarr() {
     local apikey="$1"
     local radarr_apikey="$2"
@@ -805,77 +908,8 @@ configure_prowlarr() {
         fi
     fi
 
-    # 2. Selected indexers (optional; can add later in UI)
-    local indexer_schemas
-    indexer_schemas=$(api_get "9696" "/api/v1/indexer/schema" "$apikey")
-
-    if [ -z "$indexer_schemas" ]; then
-        log_step_fail "Prowlarr: failed to fetch indexer schemas"
-    else
-        local selected_indexers=()
-        if [ -n "${SELECTED_INDEXERS+x}" ] && [ "${#SELECTED_INDEXERS[@]}" -gt 0 ]; then
-            selected_indexers=("${SELECTED_INDEXERS[@]}")
-            echo "Applying ${#selected_indexers[@]} selected Prowlarr indexer(s)" >&2
-        fi
-
-        # Get existing indexers to avoid duplicates
-        local existing_indexers
-        existing_indexers=$(api_get "9696" "/api/v1/indexer" "$apikey")
-        local existing_names
-        existing_names=$(jq_json_list_values "$existing_indexers" "name")
-
-        local indexer_name
-        for indexer_name in "${selected_indexers[@]+"${selected_indexers[@]}"}"; do
-            # Skip if already added
-            if echo "$existing_names" | grep -q -F -x "$indexer_name"; then
-                log_step "Prowlarr: ${indexer_name} indexer already exists"
-                continue
-            fi
-
-            # Build the indexer payload using jq to safely extract from schema
-            # Cardigann indexers use 'name' field to match, not implementationName
-            # Skip empty field values — Prowlarr uses Cardigann definition defaults
-            local indexer_payload
-            indexer_payload=$(echo "$indexer_schemas" | jq --arg idx "$indexer_name" '
-                [.[] | select(.name == $idx or (.name | ascii_downcase | startswith($idx | ascii_downcase)))][0] |
-                .fields = [.fields[] | select(.value != "") | {name: .name, value: .value}] |
-                .enable = true | .enableAutoSearch = true | .appProfileId = 1 | .priority = (.priority // 25)
-            ' 2>/dev/null || echo "")
-
-            if [ -z "$indexer_payload" ]; then
-                log_step_fail "Prowlarr: ${indexer_name} schema not found"
-                continue
-            fi
-
-            # Try adding with forceSave to bypass connectivity validation
-            # If that fails (e.g. Cloudflare), retry with enable=false
-            local idx_result
-            idx_result=$(curl -s --connect-timeout 5 -X POST \
-                -H "Content-Type: application/json" \
-                -d "$indexer_payload" \
-                "http://${API_HOST}:9696/api/v1/indexer?apikey=${apikey}&forceSave=true" 2>/dev/null)
-            if jq_json_has_key "$idx_result" "id"; then
-                log_step "Prowlarr: added ${indexer_name} indexer"
-            else
-                # Retry with enable=false
-                local disabled_payload
-                disabled_payload=$(echo "$indexer_payload" | jq -c '.enable = false' 2>/dev/null || echo "")
-                idx_result=$(curl -s --connect-timeout 5 -X POST \
-                    -H "Content-Type: application/json" \
-                    -d "$disabled_payload" \
-                    "http://${API_HOST}:9696/api/v1/indexer?apikey=${apikey}&forceSave=true" 2>/dev/null)
-                if jq_json_has_key "$idx_result" "id"; then
-                    log_step "Prowlarr: added ${indexer_name} indexer (disabled — needs FlareSolverr for Cloudflare)"
-                else
-                    log_step_fail "Prowlarr: failed to add ${indexer_name} indexer"
-                fi
-            fi
-        done
-        if [ "${#selected_indexers[@]}" -gt 0 ]; then
-            echo >&2
-            log_success "Prowlarr indexer configuration finished (check markers above for any failures)" >&2
-        fi
-    fi
+    # 2. Selected indexers (optional; can add later via `config edit indexers`)
+    apply_selected_indexers "$apikey"
 
     # 3) After fullSync, set min seeders on *arr indexers (best-effort)
     wait_for_arr_indexer_sync "$radarr_apikey" || true

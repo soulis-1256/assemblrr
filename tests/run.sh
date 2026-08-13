@@ -37,13 +37,16 @@ run_unit() {
     echo "Running unit tests..."
     for f in \
         "$SCRIPT_DIR/unit/test_compose.sh" \
+        "$SCRIPT_DIR/unit/test_config_edit.sh" \
         "$SCRIPT_DIR/unit/test_core.sh" \
         "$SCRIPT_DIR/unit/test_env_example.sh" \
+        "$SCRIPT_DIR/unit/test_fzf_tui.sh" \
         "$SCRIPT_DIR/unit/test_media_purge_match.sh" \
         "$SCRIPT_DIR/unit/test_media_purge_watch.sh" \
         "$SCRIPT_DIR/unit/test_prepare_install_dirs.sh" \
         "$SCRIPT_DIR/unit/test_qbit_prefs.sh" \
         "$SCRIPT_DIR/unit/test_seerr_gateway.sh" \
+        "$SCRIPT_DIR/unit/test_ui.sh" \
         "$SCRIPT_DIR/unit/test_upgrade.sh" \
         "$SCRIPT_DIR/unit/test_vpn_secrets.sh"
     do

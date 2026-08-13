@@ -66,7 +66,8 @@ else
     DC=(run_docker compose)
     COMPOSE_ARGS=()
 fi
-readonly TIMEOUT_SECONDS=60
+# Cold start: Jellyfin/Bazarr start_period is 60s, then the first healthcheck.
+readonly WAIT_READY_SECONDS=180
 readonly IP_ENDPOINTS=(
     "https://ipinfo.io/ip"
     "https://api.ipify.org"
@@ -93,7 +94,7 @@ declare -A COMMANDS=(
     ["upgrade"]="upgrade install files from git (or --from DIR); runs migrations"
     ["logs"]="shows container logs (optionally specify service name)"
     ["health"]="checks health status of all services"
-    ["config"]="configuration: show options, or run show / edit"
+    ["config"]="configuration: show, or edit one setup section"
 )
 
 # log_error_inline — same as log_error but without exit (used by check_health)
@@ -129,11 +130,13 @@ show_help() {
     echo "  ${APP_CLI_NAME} upgrade             # Upgrade from git main (backup first)"
     echo "  ${APP_CLI_NAME} upgrade --from DIR  # Upgrade from a local source tree"
     echo "  ${APP_CLI_NAME} upgrade --check     # Dry-run upgrade plan"
+    echo "  ${APP_CLI_NAME} upgrade --skip-stack  # Files + CLI only (no container restart)"
     echo "  ${APP_CLI_NAME} status             # URLs + health for all services"
     echo "  ${APP_CLI_NAME} status --docker    # Raw docker compose ps"
     echo "  ${APP_CLI_NAME} config              # List config subcommands"
     echo "  ${APP_CLI_NAME} config show         # Show current configuration"
-    echo "  ${APP_CLI_NAME} config edit         # Re-run setup wizard"
+    echo "  ${APP_CLI_NAME} config edit         # Pick a setup section to change"
+    echo "  ${APP_CLI_NAME} config edit indexers  # Reopen Prowlarr indexer fzf"
     echo "  ${APP_CLI_NAME} purge --movie-id N  # Full delete (*arr + disk + qB)"
     echo "  ${APP_CLI_NAME} purge --path PATH   # Full delete by library path"
     echo "  ${APP_CLI_NAME} purge --tmdb ID     # Full delete by TMDB id"
@@ -177,21 +180,33 @@ purge_media() {
 
 wait_for_services() {
     local wait_time=0
-    echo -n "Waiting for services to start"
+    local timeout="${WAIT_READY_SECONDS:-180}"
+    local total=0 ready=0
+    local -a waiting=()
 
-    while [ $wait_time -lt $TIMEOUT_SECONDS ]; do
-        local total_services
-        local running_services
+    echo -n "Waiting for services to become ready"
 
-        total_services=$("${DC[@]}" ps --format '{{.Name}}' | wc -l)
-        # grep -c exits 1 when the count is 0; ((wait_time++)) is also 0 on
-        # the first increment. Both abort the CLI under set -e.
-        running_services=$("${DC[@]}" ps --format '{{.Status}}' | grep -c "Up" || true)
-        running_services=${running_services:-0}
+    while [ $wait_time -lt "$timeout" ]; do
+        total=0
+        ready=0
+        waiting=()
 
-        if [ "$total_services" -eq "$running_services" ] && [ "$total_services" -gt 0 ]; then
+        local svc state health
+        while IFS=$'\t' read -r svc state health; do
+            [ -z "$svc" ] && continue
+            total=$((total + 1))
+            if type service_row_ready >/dev/null 2>&1 && service_row_ready "$state" "$health"; then
+                ready=$((ready + 1))
+            elif ! type service_row_ready >/dev/null 2>&1 && [ "$(echo "$state" | tr '[:upper:]' '[:lower:]')" = "running" ]; then
+                ready=$((ready + 1))
+            else
+                waiting+=("$svc")
+            fi
+        done < <(_status_compose_rows)
+
+        if [ "$total" -gt 0 ] && [ "$ready" -eq "$total" ]; then
             echo
-            log_success "All $total_services services are up and running!"
+            log_success "All $total services are ready."
             return 0
         fi
 
@@ -201,12 +216,15 @@ wait_for_services() {
 
         if [ $((wait_time % 10)) -eq 0 ]; then
             echo
-            echo -n "$running_services/$total_services services running"
+            echo -n "$ready/$total ready"
+            if [ "${#waiting[@]}" -gt 0 ] && [ "${#waiting[@]}" -le 6 ]; then
+                echo -n " (${waiting[*]})"
+            fi
         fi
     done
 
     echo
-    log_error "Not all services started within ${TIMEOUT_SECONDS} seconds ($running_services/$total_services running)"
+    log_error "Not all services became ready within ${timeout}s ($ready/$total ready${waiting[*]:+: ${waiting[*]}})"
 }
 
 get_ip_with_retries() {
@@ -416,9 +434,14 @@ uninstall_app() {
         rm -f "$HOME/.local/bin/$APP_CLI_NAME" "/usr/local/bin/$APP_CLI_NAME" 2>/dev/null || true
     fi
     local _lib_module
-    for _lib_module in core branding compose vpn managed_files upgrade services; do
-        rm -f "$HOME/.local/bin/lib/${_lib_module}.sh" 2>/dev/null || true
-    done
+    if type list_cli_lib_modules >/dev/null 2>&1; then
+        while IFS= read -r _lib_module; do
+            [ -z "$_lib_module" ] && continue
+            rm -f "$HOME/.local/bin/lib/${_lib_module}.sh" 2>/dev/null || true
+        done < <(list_cli_lib_modules)
+    else
+        rm -f "$HOME/.local/bin/lib/"*.sh 2>/dev/null || true
+    fi
     rmdir "$HOME/.local/bin/lib" 2>/dev/null || true
 
     # Setup writes this cheat-sheet under $HOME (outside the install dir)
@@ -707,37 +730,34 @@ show_config_help() {
     echo
     echo "Subcommands:"
     printf "  %-12s %s\n" "show" "Show current configuration"
-    printf "  %-12s %s\n" "edit" "Re-run the setup wizard (current values as defaults)"
+    printf "  %-12s %s\n" "edit" "Change one first-setup section (picker if omitted)"
     echo
     echo "Examples:"
-    echo "  ${APP_CLI_NAME} config           # List config options"
-    echo "  ${APP_CLI_NAME} config show      # Show configuration"
-    echo "  ${APP_CLI_NAME} config edit      # Change install choices"
+    echo "  ${APP_CLI_NAME} config                 # List config options"
+    echo "  ${APP_CLI_NAME} config show            # Show configuration"
+    echo "  ${APP_CLI_NAME} config edit            # Pick a section (indexers, profile, …)"
+    echo "  ${APP_CLI_NAME} config edit indexers   # Reopen the Prowlarr indexer fzf"
+    echo "  ${APP_CLI_NAME} config edit all        # Re-run the full setup wizard"
+    echo
+    echo "Run '${APP_CLI_NAME} config edit --help' for every section."
 }
 
-# Re-run setup wizard (write files, restart stack, wire apps)
-config_edit() {
-    echo "Re-running ${APP_DISPLAY_NAME} setup wizard..."
-    echo "Current configuration will be used as defaults."
-    echo
-
-    local setup_script
-    if [ -f "$INSTALL_DIR/setup.sh" ]; then
-        setup_script="$INSTALL_DIR/setup.sh"
+_load_config_edit() {
+    local src=""
+    if [ -f "$INSTALL_DIR/lib/config_edit.sh" ]; then
+        src="$INSTALL_DIR/lib/config_edit.sh"
+    elif [ -f "$_lib_dir/config_edit.sh" ]; then
+        src="$_lib_dir/config_edit.sh"
     else
-        local tmp_dir
-        tmp_dir=$(mktemp -d)
-        if ! git clone --depth=1 "${APP_REPO_URL}" "$tmp_dir/assemblrr" 2>/dev/null; then
-            log_error "Failed to clone ${APP_REPO_URL}. Check your internet connection and repository access."
-        fi
-        setup_script="$tmp_dir/assemblrr/bin/setup.sh"
+        log_error "config_edit.sh not found. Run '${APP_CLI_NAME} upgrade' to install modular config edit."
     fi
-
-    bash "$setup_script"
+    # shellcheck source=/dev/null
+    source "$src"
 }
 
 config_cmd() {
     local sub=${1:-}
+    shift || true
     case "$sub" in
         "")
             show_config_help
@@ -746,7 +766,8 @@ config_cmd() {
             show_config
             ;;
         edit)
-            config_edit
+            _load_config_edit
+            config_edit_run "${1:-}"
             ;;
         --help|-h|help)
             show_config_help
@@ -866,11 +887,17 @@ update_cli() {
     fi
 
     mkdir -p "$HOME/.local/bin/lib"
-    for _m in core branding compose vpn managed_files upgrade services; do
+    if [ -f "$tmp_dir/assemblrr/lib/managed_files.sh" ]; then
+        # shellcheck source=/dev/null
+        source "$tmp_dir/assemblrr/lib/managed_files.sh"
+    fi
+    local _m
+    while IFS= read -r _m; do
+        [ -z "$_m" ] && continue
         if [ -f "$tmp_dir/assemblrr/lib/${_m}.sh" ]; then
             cp "$tmp_dir/assemblrr/lib/${_m}.sh" "$HOME/.local/bin/lib/${_m}.sh"
         fi
-    done
+    done < <(list_cli_lib_modules)
     cp "$tmp_dir/assemblrr/bin/cli.sh" "$HOME/.local/bin/$APP_CLI_NAME" && chmod +x "$HOME/.local/bin/$APP_CLI_NAME"
     # Remove old system-wide install if it exists
     [ -n "${APP_CLI_NAME:-}" ] && rm -f "/usr/local/bin/$APP_CLI_NAME" 2>/dev/null
@@ -938,7 +965,7 @@ main() {
             check_health
             ;;
         config)
-            config_cmd "${2:-}"
+            config_cmd "${@:2}"
             ;;
         purge)
             [ $# -lt 2 ] && log_error "Usage: ${APP_CLI_NAME} purge --movie-id N | --series-id N | --path PATH | --tmdb ID | --tvdb ID"

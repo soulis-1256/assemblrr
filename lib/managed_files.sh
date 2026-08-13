@@ -25,6 +25,8 @@ lib/fzf-tui.sh|lib/fzf-tui.sh
 lib/managed_files.sh|lib/managed_files.sh
 lib/upgrade.sh|lib/upgrade.sh
 lib/services.sh|lib/services.sh
+lib/ui.sh|lib/ui.sh
+lib/config_edit.sh|lib/config_edit.sh
 compose/base.yaml|compose/base.yaml
 compose/direct-access.yaml|compose/direct-access.yaml
 compose/vpn.yaml|compose/vpn.yaml
@@ -65,4 +67,19 @@ EOF
             printf '%s|%s\n' "$rel" "$rel"
         done < <(find "$UPGRADE_SOURCE_ROOT/migrations" -type f -print0 2>/dev/null | sort -z)
     fi
+}
+
+# Lib modules the user-facing CLI copies next to ~/.local/bin/assemblrr.
+list_cli_lib_modules() {
+    cat <<'EOF'
+core
+branding
+compose
+vpn
+managed_files
+upgrade
+services
+ui
+config_edit
+EOF
 }
