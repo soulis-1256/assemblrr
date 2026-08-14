@@ -399,8 +399,11 @@ configure_jellyfin_notifications() {
 
     # NOTE: The MediaBrowser/Emby notification type calls /Library/Media/Updated which
     # only refreshes EXISTING items in Jellyfin's DB — it cannot discover NEW files.
-    # We use a CustomScript that calls POST /Library/Refresh instead, which performs a
-    # full library scan and discovers newly downloaded movies/episodes.
+    # CustomScript → jellyfin-refresh.sh POSTs /Library/Refresh (full scan).
+    # A second POST cancels the in-progress scan; Jellyfin 10.11 can then leave a
+    # new series with 0 children in the UI. Sonarr fires onImportComplete (once per
+    # release, not per file). Radarr has no onImportComplete, so onDownload is one movie.
+    # The script also skips if a scan is already running and heals empty series.
 
     local errors=0
     if ! add_jellyfin_refresh_notif "Radarr" "7878" "$RADARR_API_KEY"; then
@@ -423,23 +426,22 @@ add_jellyfin_refresh_notif() {
         return 0
     fi
 
-    local notifications
+    local notifications existing_id schema payload result
     notifications=$(api_get "$port" "/api/v3/notification" "$apikey")
-    local existing_id
     existing_id=$(echo "$notifications" | jq -r '.[] | select(.implementation == "CustomScript" and .name == "Jellyfin Refresh") | .id // ""' 2>/dev/null | head -1 || echo "")
 
-    if [ -n "$existing_id" ]; then
-        log_step "${app_name}: Jellyfin Refresh script already configured"
-        return 0
-    fi
-
-    local schema
     schema=$(api_get "$port" "/api/v3/notification/schema" "$apikey")
-    local payload
+    # Sonarr 4: onImportComplete fires once per release (season pack). Radarr has
+    # no onImportComplete — keep onDownload (one event per movie).
     payload=$(echo "$schema" | jq '
         [.[] | select(.implementation == "CustomScript")][0] |
         .fields = [.fields[] | if .name == "path" then .value = "/scripts/jellyfin-refresh.sh" else . end] |
-        .onDownload = true | .onUpgrade = true | .name = "Jellyfin Refresh" | .tags = []
+        .onUpgrade = true | .name = "Jellyfin Refresh" | .tags = [] |
+        if has("onImportComplete") then
+            .onDownload = false | .onImportComplete = true
+        else
+            .onDownload = true
+        end
     ' 2>/dev/null || echo "")
 
     if [ -z "$payload" ]; then
@@ -454,10 +456,18 @@ add_jellyfin_refresh_notif() {
         chmod +x "$INSTALL_DIR/scripts/jellyfin-refresh.sh" 2>/dev/null || true
     fi
 
-    local result
+    if [ -n "$existing_id" ]; then
+        payload=$(echo "$payload" | jq --argjson id "$existing_id" '.id = $id' 2>/dev/null || echo "$payload")
+        result=$(api_put "$port" "/api/v3/notification/${existing_id}" "$apikey" "$payload")
+        if jq_json_has_key "$result" "id"; then
+            log_step "${app_name}: updated Jellyfin Refresh script (scan on import complete)"
+            return 0
+        fi
+    fi
+
     result=$(api_post_force "$port" "/api/v3/notification" "$apikey" "$payload")
     if jq_json_has_key "$result" "id"; then
-        log_step "${app_name}: added Jellyfin Refresh script (auto-scan on import)"
+        log_step "${app_name}: added Jellyfin Refresh script (scan on import complete)"
         return 0
     fi
     local err_msg
