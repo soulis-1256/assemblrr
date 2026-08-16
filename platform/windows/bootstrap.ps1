@@ -86,3 +86,14 @@ Write-Host ""
 $setupArgs = $args -join ' '
 # Run wsl directly in the current terminal — inherits ConPTY for full TTY/fzf support
 wsl -d $defaultDistro -- bash -i -c "cd /tmp/$AppName && bash bin/setup.sh $setupArgs"
+$setupExit = $LASTEXITCODE
+if ($setupExit -ne 0) {
+    Write-Host ""
+    Write-Host "Setup did not finish. The operator CLI may already be installed in WSL." -ForegroundColor Yellow
+    Write-Host "From PowerShell:" -ForegroundColor White
+    Write-Host "  wsl -d $defaultDistro -- ~/.local/bin/$AppName status" -ForegroundColor Cyan
+    Write-Host "  wsl -d $defaultDistro -- ~/.local/bin/$AppName uninstall" -ForegroundColor Cyan
+    Write-Host "Or open WSL and run those same commands there." -ForegroundColor White
+    Write-Host ""
+}
+exit $setupExit

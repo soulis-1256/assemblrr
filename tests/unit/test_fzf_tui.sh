@@ -36,4 +36,16 @@ assert_eq "start:pos(1)+select+pos(3)+select" "$(fzf_preselect_start_bind "$data
 assert_eq "" "$(fzf_preselect_start_bind "$data" $'Nope')" "unknown name → empty"
 assert_eq "" "$(fzf_preselect_start_bind "$data" "")" "empty names → empty"
 
+test_suite "format_path_menu"
+menu=$(format_path_menu /home/u/assemblrr /home/u/assemblrr-media /mnt/e /media/u/disk)
+assert_contains "$menu" $'home\tHome (default)\t/home/u/assemblrr  +  /home/u/assemblrr-media\t/home/u/assemblrr\t/home/u/assemblrr-media' \
+    "home default row"
+assert_contains "$menu" $'all:/mnt/e\tWindows E: — everything here' "WSL drive everything"
+assert_contains "$menu" $'media:/mnt/e\tWindows E: — media only (recommended)' "WSL drive media-only"
+assert_contains "$menu" $'/mnt/e/assemblrr\t/mnt/e/assemblrr-media' "everything paths on E:"
+assert_contains "$menu" $'/home/u/assemblrr\t/mnt/e/assemblrr-media' "media-only keeps home install"
+assert_contains "$menu" $'all:/media/u/disk\tdisk — everything here' "linux mount uses basename"
+assert_contains "$menu" $'browse\tBrowse for a folder...' "browse row"
+assert_contains "$menu" $'custom\tType paths...' "custom row"
+
 test_summary

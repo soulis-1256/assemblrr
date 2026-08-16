@@ -252,6 +252,9 @@ refresh_user_cli() {
         cp "$install_dir/cli.sh" "$HOME/.local/bin/${APP_CLI_NAME:-assemblrr}"
         chmod +x "$HOME/.local/bin/${APP_CLI_NAME:-assemblrr}"
     fi
+    if type ensure_local_bin_on_path >/dev/null 2>&1; then
+        ensure_local_bin_on_path
+    fi
 }
 
 # --- Validate compose after apply ---

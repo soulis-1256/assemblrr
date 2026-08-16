@@ -1,5 +1,5 @@
 #!/bin/bash
-# fzf-based TUI for selections (Prowlarr indexers, Bazarr providers, languages)
+# fzf-based TUI for selections (Prowlarr indexers, Bazarr providers, languages, paths)
 # Provides reusable fzf selection patterns for assemblrr.
 # Sets SELECTED_INDEXERS / SELECTED_SUBTITLE_PROVIDERS arrays.
 # Usage: source lib/fzf-tui.sh; configure_indexers "$api_key"
@@ -20,6 +20,207 @@ _fzf_has_tty() {
 
 _fzf_can_render() {
     command -v fzf &>/dev/null && echo "test" | timeout 1 fzf --height=5 --no-mouse --filter="test" &>/dev/null
+}
+
+# TSV: key<TAB>title<TAB>detail<TAB>install<TAB>media
+# Extra args after the two defaults are injected storage roots (tests).
+format_path_menu() {
+    local def_install="$1"
+    local def_media="$2"
+    shift 2
+    local app="${APP_NAME:-assemblrr}"
+    local -a roots=()
+    local root title free
+
+    if [ "$#" -gt 0 ]; then
+        roots=("$@")
+    else
+        mapfile -t roots < <(list_storage_roots)
+    fi
+
+    printf '%s\t%s\t%s\t%s\t%s\n' \
+        "home" "Home (default)" "${def_install}  +  ${def_media}" \
+        "$def_install" "$def_media"
+
+    for root in "${roots[@]}"; do
+        [ -n "$root" ] || continue
+        root="${root%/}"
+        [ "$root" = "${HOME:-}" ] && continue
+        title=$(storage_root_label "$root")
+        free=$(storage_free_label "$root")
+        printf '%s\t%s\t%s\t%s\t%s\n' \
+            "all:${root}" "${title} — everything here" \
+            "${root}/${app}  +  ${root}/${app}-media${free}" \
+            "${root}/${app}" "${root}/${app}-media"
+        printf '%s\t%s\t%s\t%s\t%s\n' \
+            "media:${root}" "${title} — media only (recommended)" \
+            "${def_install}  +  ${root}/${app}-media${free}" \
+            "$def_install" "${root}/${app}-media"
+    done
+
+    printf '%s\t%s\t%s\t%s\t%s\n' \
+        "browse" "Browse for a folder..." \
+        "Pick a parent, then choose everything vs media-only" "" ""
+    printf '%s\t%s\t%s\t%s\t%s\n' \
+        "custom" "Type paths..." \
+        "Enter install and media directories yourself" "" ""
+}
+
+_fzf_select_path_row() {
+    local data="$1"
+    local selected=""
+    if _fzf_can_render && _fzf_has_tty; then
+        selected=$(echo "$data" | fzf \
+            --delimiter=$'\t' \
+            --with-nth=2,3 \
+            --prompt="Install location> " \
+            --header="↑↓=navigate  Enter=confirm  Esc=home default" \
+            --height=60% \
+            --reverse \
+            --border \
+            --scrollbar='│' \
+            2>/dev/null) || true
+        echo "$selected"
+        return 0
+    fi
+
+    local i=0 line
+    echo "$data" | while IFS=$'\t' read -r _ title detail _; do
+        i=$((i + 1))
+        printf '  %d) %s\n      %s\n' "$i" "$title" "$detail" >&2
+    done
+    echo "Enter number (default: 1 = home): " >&2
+    local input=""
+    read -r input || true
+    input="${input:-1}"
+    if [[ "$input" =~ ^[0-9]+$ ]]; then
+        echo "$data" | awk -F '\t' -v n="$input" 'NR==n {print}'
+    fi
+}
+
+_prompt_parent_usage() {
+    local parent="$1"
+    local def_install="$2"
+    local app="${APP_NAME:-assemblrr}"
+    local choice=""
+    echo
+    echo "Use ${parent} for:"
+    echo "  1) Media only (recommended) — config stays in ${def_install}"
+    echo "  2) Everything — ${parent}/${app} + ${parent}/${app}-media"
+    read -p "Choose [1]: " choice
+    choice="${choice:-1}"
+    case "$choice" in
+        2)
+            install_directory="${parent}/${app}"
+            media_directory="${parent}/${app}-media"
+            ;;
+        *)
+            install_directory="$def_install"
+            media_directory="${parent}/${app}-media"
+            ;;
+    esac
+}
+
+_browse_parent_folder() {
+    local app="${APP_NAME:-assemblrr}"
+    local -a roots=()
+    local r selected="" list
+    list=$(mktemp)
+    mapfile -t roots < <(list_storage_roots)
+    {
+        printf '%s\n' "${HOME:-/}"
+        printf '%s\n' "${roots[@]}"
+        for r in "${HOME:-/}" "${roots[@]}"; do
+            [ -d "$r" ] || continue
+            if [ "$r" = "/mnt/c" ]; then
+                find "$r" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -80
+            else
+                find "$r" -mindepth 1 -maxdepth 2 -type d 2>/dev/null | head -200
+            fi
+        done
+    } | sort -u > "$list"
+
+    if _fzf_can_render && _fzf_has_tty; then
+        selected=$(fzf \
+            --prompt="Parent folder> " \
+            --header="This folder will contain ${app} / ${app}-media. Esc=cancel" \
+            --height=60% --reverse --border \
+            < "$list" 2>/dev/null) || true
+    else
+        echo "Enter a parent folder path (blank to cancel): " >&2
+        read -r selected || true
+    fi
+    rm -f "$list"
+    echo "$selected"
+}
+
+_prompt_typed_paths() {
+    local def_install="$1"
+    local def_media="$2"
+    read -p "Installation directory? [${def_install}]: " install_directory
+    install_directory=${install_directory:-$def_install}
+    install_directory=$(expand_path "$install_directory")
+    read -p "Media directory? [${def_media}]: " media_directory
+    media_directory=${media_directory:-$def_media}
+    media_directory=$(expand_path "$media_directory")
+}
+
+# Sets install_directory and media_directory from an fzf (or numbered) menu.
+pick_storage_paths() {
+    local def_install="${APP_DEFAULT_INSTALL_DIR:-$HOME/${APP_NAME:-assemblrr}}"
+    local def_media="${APP_DEFAULT_MEDIA_DIR:-$HOME/${APP_NAME:-assemblrr}-media}"
+    local data row key parent
+
+    if [ "${ASSEMBLRR_NONINTERACTIVE:-0}" = "1" ]; then
+        install_directory="$def_install"
+        media_directory="$def_media"
+        return 0
+    fi
+
+    while true; do
+        data=$(format_path_menu "$def_install" "$def_media")
+        row=$(_fzf_select_path_row "$data")
+        if [ -z "$row" ]; then
+            install_directory="$def_install"
+            media_directory="$def_media"
+            return 0
+        fi
+        key=$(printf '%s\n' "$row" | cut -f1)
+        case "$key" in
+            home)
+                install_directory=$(printf '%s\n' "$row" | cut -f4)
+                media_directory=$(printf '%s\n' "$row" | cut -f5)
+                return 0
+                ;;
+            all:*|media:*)
+                install_directory=$(printf '%s\n' "$row" | cut -f4)
+                media_directory=$(printf '%s\n' "$row" | cut -f5)
+                return 0
+                ;;
+            browse)
+                parent=$(_browse_parent_folder)
+                if [ -z "$parent" ]; then
+                    continue
+                fi
+                parent=$(expand_path "$parent")
+                if [ ! -d "$parent" ]; then
+                    log_warning "Not a directory: $parent"
+                    continue
+                fi
+                _prompt_parent_usage "$parent" "$def_install"
+                return 0
+                ;;
+            custom)
+                _prompt_typed_paths "$def_install" "$def_media"
+                return 0
+                ;;
+            *)
+                install_directory="$def_install"
+                media_directory="$def_media"
+                return 0
+                ;;
+        esac
+    done
 }
 
 # --- Generic single-select fzf (for languages, etc.) ---

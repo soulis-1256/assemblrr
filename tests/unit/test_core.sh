@@ -75,4 +75,35 @@ export ASSEMBLRR_DIR="/custom/install/path"
 assert_eq "/custom/install/path" "$(find_install_directory)" "honors ASSEMBLRR_DIR"
 unset ASSEMBLRR_DIR
 
+test_suite "find_install_directory prefers home pointer"
+fid_home="$tmp/fid-home"
+mkdir -p "$fid_home/assemblrr" "$fid_home/on-disk"
+printf 'INSTALL_DIRECTORY="%s"\n' "$fid_home/assemblrr" > "$fid_home/assemblrr/.assemblrr-config"
+printf 'INSTALL_DIRECTORY="%s"\n' "$fid_home/on-disk" > "$fid_home/.assemblrr-config"
+assert_eq "$fid_home/on-disk" "$(HOME="$fid_home" find_install_directory)" \
+    "pointer wins over leftover ~/assemblrr"
+
+test_suite "storage_root_label"
+assert_eq "Windows E:" "$(storage_root_label /mnt/e)" "WSL E:"
+assert_eq "Windows C:" "$(storage_root_label /mnt/c/)" "strips trailing slash"
+assert_eq "Seagate" "$(storage_root_label /media/user/Seagate)" "linux /media"
+assert_eq "USB" "$(storage_root_label /run/media/user/USB)" "linux /run/media"
+assert_eq "/data" "$(storage_root_label /data)" "other path unchanged"
+
+test_suite "ensure_local_bin_on_path"
+path_home="$tmp/path-home"
+mkdir -p "$path_home"
+HOME="$path_home" ensure_local_bin_on_path
+assert_contains "$(cat "$path_home/.profile")" '.local/bin' "writes .profile"
+assert_contains "$(cat "$path_home/.bashrc")" '.local/bin' "writes .bashrc"
+assert_true "does not create .bash_profile" "[ ! -f \"$path_home/.bash_profile\" ]"
+HOME="$path_home" ensure_local_bin_on_path
+assert_eq "1" "$(grep -cF '.local/bin' "$path_home/.profile")" "idempotent .profile"
+assert_eq "1" "$(grep -cF '.local/bin' "$path_home/.bashrc")" "idempotent .bashrc"
+mkdir -p "$path_home/.config/fish"
+: > "$path_home/.bash_profile"
+HOME="$path_home" ensure_local_bin_on_path
+assert_contains "$(cat "$path_home/.bash_profile")" '.local/bin' "appends existing .bash_profile"
+assert_contains "$(cat "$path_home/.config/fish/config.fish")" '.local/bin' "writes fish config"
+
 test_summary

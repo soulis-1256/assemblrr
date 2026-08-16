@@ -901,6 +901,9 @@ update_cli() {
     cp "$tmp_dir/assemblrr/bin/cli.sh" "$HOME/.local/bin/$APP_CLI_NAME" && chmod +x "$HOME/.local/bin/$APP_CLI_NAME"
     # Remove old system-wide install if it exists
     [ -n "${APP_CLI_NAME:-}" ] && rm -f "/usr/local/bin/$APP_CLI_NAME" 2>/dev/null
+    if type ensure_local_bin_on_path >/dev/null 2>&1; then
+        ensure_local_bin_on_path
+    fi
     log_success "CLI updated successfully!"
 
     [ -n "$tmp_dir" ] && rm -rf "$tmp_dir"

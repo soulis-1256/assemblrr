@@ -40,4 +40,10 @@ build_compose_args "$tmp" "Y"
 joined="${COMPOSE_ARGS[*]}"
 assert_contains "$joined" "vpn.yaml" "VPN=Y treated as enabled"
 
+test_suite "recyclarr image tag"
+recyclarr_image=$(grep -E '^\s+image:.*recyclarr' "$REPO_ROOT/compose/base.yaml")
+assert_contains "$recyclarr_image" "ghcr.io/recyclarr/recyclarr:8" "pins major tag 8"
+assert_not_contains "$recyclarr_image" ":latest" "does not use unpublished :latest"
+assert_contains "$(grep CRON "$REPO_ROOT/compose/base.yaml")" "CRON_SCHEDULE" "uses CRON_SCHEDULE"
+
 test_summary

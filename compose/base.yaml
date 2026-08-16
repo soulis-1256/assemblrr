@@ -244,13 +244,14 @@ services:
         ipv4_address: 172.60.0.24
 
   # Recyclarr - automatically syncs TRaSH guides
+  # :latest is no longer published; :8 tracks the current major (see recyclarr.dev).
   recyclarr:
-    image: ghcr.io/recyclarr/recyclarr:latest
+    image: ghcr.io/recyclarr/recyclarr:8
     container_name: recyclarr
     user: ${PUID}:${PGID}
     environment:
       - TZ=${TZ}
-      - CRON=@daily
+      - CRON_SCHEDULE=@daily
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - ${INSTALL_DIRECTORY}/config/recyclarr:/config

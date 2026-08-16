@@ -207,7 +207,7 @@ check_dependencies() {
 
     # Perform snap check if docker is installed
     if command -v docker &>/dev/null; then
-        if [[ $(which docker) == "/snap/bin/docker" ]]; then
+        if [ "$(command -v docker)" = "/snap/bin/docker" ]; then
             log_error "Docker is installed via snap. ${APP_DISPLAY_NAME} requires the official Docker installation. Please remove snap Docker and install from https://docs.docker.com/engine/install/"
         fi
         log_success "Docker is installed and running"
@@ -489,6 +489,8 @@ early_vpn_gate() {
     echo
     log_info "Testing VPN connection before the rest of setup..."
     set_provisional_vpn_test_defaults
+    _ASSEMBLRR_PROVISIONAL_INSTALL="$install_directory"
+    export _ASSEMBLRR_PROVISIONAL_INSTALL
     bootstrap_operator
     generate_env_file
     write_vpn_secrets
@@ -542,21 +544,7 @@ install_cli() {
         fi
     done < <(list_cli_lib_modules)
     cp "$cli_source" "$HOME/.local/bin/$APP_CLI_NAME" && chmod +x "$HOME/.local/bin/$APP_CLI_NAME"
-    # Always on PATH for this process (and future shells via profile/fish config)
-    export PATH="$HOME/.local/bin:$PATH"
-    if ! grep -q '.local/bin' "$HOME/.profile" 2>/dev/null; then
-        log_debug "Adding $HOME/.local/bin to PATH in ~/.profile"
-        echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.profile"
-    fi
-    # fish ignores ~/.profile, so register the path in its own config too
-    if command -v fish &>/dev/null; then
-        local fish_config="$HOME/.config/fish/config.fish"
-        mkdir -p "$HOME/.config/fish"
-        if ! grep -q '.local/bin' "$fish_config" 2>/dev/null; then
-            log_debug "Adding $HOME/.local/bin to fish PATH in $fish_config"
-            echo 'fish_add_path $HOME/.local/bin' >> "$fish_config"
-        fi
-    fi
+    ensure_local_bin_on_path
     log_debug "CLI installed to $HOME/.local/bin/$APP_CLI_NAME"
 }
 
@@ -572,7 +560,7 @@ bootstrap_operator() {
         if [ "$quiet" != "quiet" ]; then
             log_success "Operator CLI ready: $HOME/.local/bin/$APP_CLI_NAME"
             log_info "Abort anytime with: $APP_CLI_NAME uninstall"
-            log_info "(If the shell says command not found: open a new terminal, or run the path above.)"
+            log_info "If the shell says command not found: $HOME/.local/bin/$APP_CLI_NAME uninstall"
         fi
     fi
 }
@@ -691,7 +679,15 @@ log_info "Starting ${APP_DISPLAY_NAME} services (this may take a while)..."
 prepare_install_dirs "$install_directory" "$puid" "$pgid"
 build_compose_args "$install_directory" "${setup_vpn,,}"
 if ! run_docker compose "${COMPOSE_ARGS[@]}" --profile "$media_service" up -d --remove-orphans; then
-    log_error "Failed to start ${APP_DISPLAY_NAME} services"
+    echo
+    log_warning "Failed to start ${APP_DISPLAY_NAME} services"
+    echo
+    log_info "The operator CLI is already installed. From a WSL or Linux shell:"
+    log_info "  $HOME/.local/bin/$APP_CLI_NAME status"
+    log_info "  $HOME/.local/bin/$APP_CLI_NAME uninstall"
+    log_info "If '$APP_CLI_NAME' is not found, use that full path (or open a new terminal)."
+    echo
+    exit 1
 fi
 
 # Wire services (Radarr, Prowlarr, etc.)

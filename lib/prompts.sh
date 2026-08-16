@@ -468,40 +468,29 @@ get_user_info() {
 }
 
 get_installation_paths() {
-    # Express mode: use default paths
-    if [ "${SETUP_MODE:-}" = "express" ]; then
-        install_directory="$APP_DEFAULT_INSTALL_DIR"
-        media_directory="$APP_DEFAULT_MEDIA_DIR"
-        log_success "Install directory: $install_directory"
-        log_success "Media directory: $media_directory"
-    else
-        read -p "Installation directory? [$APP_DEFAULT_INSTALL_DIR]: " install_directory
-        install_directory=${install_directory:-$APP_DEFAULT_INSTALL_DIR}
-        # FIX: Expand tilde in user input
-        install_directory=$(expand_path "$install_directory")
-        create_and_verify_directory "$install_directory" "installation"
+    ui_intro \
+        "Where should assemblrr store config and media? External drives (WSL E:, USB, …) show up in the list." \
+        "Change install and media directories. This does not move existing files."
 
-        read -p "Media directory? [$APP_DEFAULT_MEDIA_DIR]: " media_directory
-        media_directory=${media_directory:-$APP_DEFAULT_MEDIA_DIR}
-        # FIX: Expand tilde in user input
-        media_directory=$(expand_path "$media_directory")
+    pick_storage_paths
+    install_directory=$(expand_path "$install_directory")
+    media_directory=$(expand_path "$media_directory")
 
-        while true; do
-            read -p "Are you sure your media directory is \"$media_directory\"? (Y/n) [Default = y]: " media_directory_correct
-            media_directory_correct=${media_directory_correct:-"y"}
-
-            if [ "${media_directory_correct,,}" != "y" ]; then
-                read -p "Media directory? [$APP_DEFAULT_MEDIA_DIR]: " media_directory
-                media_directory=${media_directory:-$APP_DEFAULT_MEDIA_DIR}
-                media_directory=$(expand_path "$media_directory")
-            else
-                break
-            fi
-        done
+    # VPN gate bootstraps ~/assemblrr first. If the user then picked another
+    # install path, drop that leftover tree so CLI discovery cannot shadow it.
+    if [ -n "${_ASSEMBLRR_PROVISIONAL_INSTALL:-}" ] && \
+       [ "$install_directory" != "$_ASSEMBLRR_PROVISIONAL_INSTALL" ] && \
+       [ -d "$_ASSEMBLRR_PROVISIONAL_INSTALL" ]; then
+        log_info "Install path changed — removing temporary files at $_ASSEMBLRR_PROVISIONAL_INSTALL"
+        safe_rm_rf "$_ASSEMBLRR_PROVISIONAL_INSTALL"
     fi
 
+    create_and_verify_directory "$install_directory" "installation"
     setup_directory_structure "$media_directory"
     verify_user_permissions "$username" "$media_directory"
+
+    log_success "Install directory: $install_directory"
+    log_success "Media directory: $media_directory"
 
     export install_directory media_directory
 }

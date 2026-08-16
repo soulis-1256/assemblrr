@@ -70,10 +70,12 @@ safe_source() {
 # --- Install directory discovery ---
 # Discover installation directory from runtime config
 find_install_directory() {
+    # Prefer the home pointer over $HOME/assemblrr so a leftover default tree
+    # from the VPN bootstrap cannot shadow a later non-default install path.
     local search_order=(
         "/opt/assemblrr/.assemblrr-config"
-        "$HOME/assemblrr/.assemblrr-config"
         "$HOME/.assemblrr-config"
+        "$HOME/assemblrr/.assemblrr-config"
     )
 
     # Check ASSEMBLRR_DIR env var first
@@ -103,6 +105,96 @@ expand_path() {
     local path="$1"
     # Only expand leading ~ to $HOME, nothing else
     echo "${path/#\~/$HOME}"
+}
+
+# Human label for a detected storage root (WSL drive letter or mount name).
+storage_root_label() {
+    local root="${1%/}"
+    local letter
+    case "$root" in
+        /mnt/[a-z])
+            letter="${root##*/}"
+            echo "Windows ${letter^^}:"
+            ;;
+        /media/*|/run/media/*)
+            echo "${root##*/}"
+            ;;
+        *)
+            echo "$root"
+            ;;
+    esac
+}
+
+# " (123G free)" or empty if df cannot report.
+storage_free_label() {
+    local root="$1"
+    local avail
+    avail=$(df -hP "$root" 2>/dev/null | awk 'NR==2 {print $4}')
+    if [ -n "$avail" ]; then
+        echo "  (${avail} free)"
+    fi
+}
+
+# Mounted volumes that are useful as install/media parents.
+# WSL: /mnt/<letter>. Linux: /media and /run/media children.
+list_storage_roots() {
+    local d
+    local -A seen=()
+
+    _list_storage_emit() {
+        local p="${1%/}"
+        [ -n "$p" ] && [ -d "$p" ] || return 0
+        [ "$p" = "${HOME:-}" ] && return 0
+        [ -n "${seen[$p]:-}" ] && return 0
+        seen[$p]=1
+        printf '%s\n' "$p"
+    }
+
+    for d in /mnt/[a-z]; do
+        [ -d "$d" ] || continue
+        if grep -Eq "[[:space:]]${d}[[:space:]]" /proc/mounts 2>/dev/null; then
+            _list_storage_emit "$d"
+        fi
+    done
+
+    for d in /media/"${USER:-}"/* /media/* /run/media/"${USER:-}"/*; do
+        [ -d "$d" ] || continue
+        case "$d" in
+            /media|"/media/${USER:-}"|/run/media|"/run/media/${USER:-}") continue ;;
+        esac
+        [ -r "$d" ] || continue
+        _list_storage_emit "$d"
+    done
+}
+
+# Persist ~/.local/bin on PATH for bash, zsh, and fish.
+# Does not create ~/.bash_profile (that would hide ~/.profile on login bash).
+_append_path_line() {
+    local file="$1"
+    local line="$2"
+    local marker="$3"
+    if [ -f "$file" ] && grep -qF "$marker" "$file" 2>/dev/null; then
+        return 0
+    fi
+    mkdir -p "$(dirname "$file")"
+    printf '%s\n' "$line" >> "$file"
+}
+
+ensure_local_bin_on_path() {
+    export PATH="$HOME/.local/bin:$PATH"
+    local line='export PATH="$HOME/.local/bin:$PATH"'
+    local marker='.local/bin'
+    _append_path_line "$HOME/.profile" "$line" "$marker"
+    _append_path_line "$HOME/.bashrc" "$line" "$marker"
+    if [ -f "$HOME/.bash_profile" ]; then
+        _append_path_line "$HOME/.bash_profile" "$line" "$marker"
+    fi
+    if [ -f "$HOME/.zshrc" ] || command -v zsh >/dev/null 2>&1; then
+        _append_path_line "$HOME/.zshrc" "$line" "$marker"
+    fi
+    if command -v fish >/dev/null 2>&1 || [ -d "$HOME/.config/fish" ]; then
+        _append_path_line "$HOME/.config/fish/config.fish" 'fish_add_path $HOME/.local/bin' "$marker"
+    fi
 }
 
 # Validate that a path is safe to remove (used by safe_rm_rf)

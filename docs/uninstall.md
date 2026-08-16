@@ -35,8 +35,9 @@ VPN, closed terminal):
 
 1. Prefer **`assemblrr uninstall`** (or `assemblrr uninstall --force` to keep
    media without prompts) if `~/.local/bin` is on your `PATH`.
-2. If the shell says `command not found`, try a **new terminal**, or run the
-   binary directly: `~/.local/bin/assemblrr uninstall --force`.
+2. If the shell says `command not found`, run the binary directly:
+   `~/.local/bin/assemblrr uninstall --force`. A new terminal also picks up
+   PATH from `~/.bashrc` / `~/.profile` / `~/.zshrc` / fish config.
 3. If the PATH CLI is missing but the install tree exists, use **Option 2**.
 4. If there is no install tree / no runtime config, use **Option 3**.
 
