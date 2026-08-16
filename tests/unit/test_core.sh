@@ -117,6 +117,13 @@ assert_contains "$left" $'media\t'"$ptr_home/assemblrr-media" "lists home leftov
 skipped=$(HOME="$ptr_home" list_assemblrr_leftovers "$empty_inst" "$ptr_home/assemblrr-media")
 assert_eq "" "$skipped" "skips known paths"
 
+test_suite "print_detected_locations"
+loc=$(INSTALL_DIR=/mnt/e/assemblrr MEDIA_DIRECTORY=/mnt/e/assemblrr-media \
+    HOME="$ptr_home" print_detected_locations "Detected installation:")
+assert_contains "$loc" "Detected installation:" "optional heading"
+assert_contains "$loc" "Config:  /mnt/e/assemblrr" "prints config path"
+assert_contains "$loc" "Media:   /mnt/e/assemblrr-media" "prints media path"
+
 test_suite "storage_root_label"
 assert_eq "Windows E:" "$(storage_root_label /mnt/e)" "WSL E:"
 assert_eq "Windows C:" "$(storage_root_label /mnt/c/)" "strips trailing slash"

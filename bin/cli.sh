@@ -367,6 +367,8 @@ destroy_app() {
 uninstall_app() {
     local force=false
     local delete_media=false
+    local removed_config=false
+    local removed_media=false
     for arg in "$@"; do
         case "$arg" in
             -f|--force) force=true ;;
@@ -374,16 +376,20 @@ uninstall_app() {
         esac
     done
 
+    poke_wsl_automounts 2>/dev/null || true
+    echo
+    print_detected_locations "Detected installation:"
+    echo
+
     # --force already opts out of all confirmation; skip the scary preamble.
     if [ "$force" = false ]; then
-        echo -e "\nWARNING: This will COMPLETELY remove ${APP_DISPLAY_NAME}!"
-        echo "This includes:"
-        echo "  - All running containers and volumes"
-        echo "  - The installation directory: $INSTALL_DIR"
-        echo "  - The CLI command: $APP_CLI_NAME"
-        echo "  - The Docker network: $APP_NETWORK_NAME"
-        echo
-        echo "Your media directory ($MEDIA_DIRECTORY) is kept unless you explicitly delete it."
+        echo "WARNING: This will COMPLETELY remove ${APP_DISPLAY_NAME}!"
+        echo "This includes running containers, the Docker network, the CLI, and the config path above."
+        if [ "$delete_media" = true ]; then
+            echo "Media at $MEDIA_DIRECTORY will also be deleted."
+        else
+            echo "Media at $MEDIA_DIRECTORY is kept unless you confirm below (or pass --media)."
+        fi
         echo "Tip: run '${APP_CLI_NAME} backup <target-dir>' first if you want to keep your configuration."
         echo
         echo "This is not recoverable!"
@@ -402,60 +408,64 @@ uninstall_app() {
         run_docker network rm "$APP_NETWORK_NAME" 2>/dev/null || log_warning "Failed to remove Docker network $APP_NETWORK_NAME"
     fi
 
-    echo "Removing installation directory..."
+    echo "Removing config at $INSTALL_DIR ..."
     if [ "$force" = true ]; then
         safe_rm_rf "$INSTALL_DIR"
-        log_warning "Installation directory deleted"
+        removed_config=true
+        log_warning "Removed $INSTALL_DIR"
     else
         read -p "Also delete config at $INSTALL_DIR? Type the full path to confirm: " -r
         if [[ "$REPLY" = "$INSTALL_DIR" ]]; then
             safe_rm_rf "$INSTALL_DIR"
-            log_warning "Installation directory deleted"
+            removed_config=true
+            log_warning "Removed $INSTALL_DIR"
         else
-            log_info "Installation directory preserved at $INSTALL_DIR"
+            log_info "Kept $INSTALL_DIR"
         fi
     fi
 
     if [ "$delete_media" = true ]; then
+        echo "Removing media at $MEDIA_DIRECTORY ..."
         safe_rm_rf "$MEDIA_DIRECTORY"
-        log_warning "Media directory deleted"
+        removed_media=true
+        log_warning "Removed $MEDIA_DIRECTORY"
     elif [ "$force" = false ]; then
         read -p "Also delete media at $MEDIA_DIRECTORY? Type the full path to confirm: " -r
         if [[ "$REPLY" = "$MEDIA_DIRECTORY" ]]; then
             safe_rm_rf "$MEDIA_DIRECTORY"
-            log_warning "Media directory deleted"
+            removed_media=true
+            log_warning "Removed $MEDIA_DIRECTORY"
         else
-            log_info "Media directory preserved at $MEDIA_DIRECTORY"
+            log_info "Kept $MEDIA_DIRECTORY"
         fi
     else
-        log_info "Media directory preserved at $MEDIA_DIRECTORY"
+        log_info "Kept media at $MEDIA_DIRECTORY (pass --media to delete)"
     fi
 
     # Path picker / hung setup can leave assemblrr trees on other mounts
     # (e.g. /mnt/e) that the pointer never recorded.
-    poke_wsl_automounts 2>/dev/null || true
     local leftover_kind leftover_path
     while IFS=$'\t' read -r leftover_kind leftover_path; do
         [ -n "$leftover_path" ] || continue
         case "$leftover_kind" in
             install)
-                log_warning "Found leftover install at $leftover_path"
+                echo "Removing leftover install at $leftover_path ..."
                 safe_rm_rf "$leftover_path"
-                log_warning "Leftover install deleted"
+                log_warning "Removed leftover $leftover_path"
                 ;;
             media)
                 if [ "$delete_media" = true ]; then
-                    log_warning "Found leftover media at $leftover_path"
+                    echo "Removing leftover media at $leftover_path ..."
                     safe_rm_rf "$leftover_path"
-                    log_warning "Leftover media deleted"
+                    log_warning "Removed leftover $leftover_path"
                 else
-                    log_info "Left leftover media at $leftover_path (pass --media to delete)"
+                    log_info "Kept leftover media at $leftover_path (pass --media to delete)"
                 fi
                 ;;
         esac
     done < <(list_assemblrr_leftovers "$INSTALL_DIR" "$MEDIA_DIRECTORY")
 
-    echo "Removing CLI..."
+    echo "Removing CLI at $HOME/.local/bin/$APP_CLI_NAME ..."
     if [ -n "${APP_CLI_NAME:-}" ]; then
         rm -f "$HOME/.local/bin/$APP_CLI_NAME" "/usr/local/bin/$APP_CLI_NAME" 2>/dev/null || true
     fi
@@ -477,6 +487,16 @@ uninstall_app() {
     rm -f "$HOME/.assemblrr-config" "$HOME/.${APP_NAME:-assemblrr}-config" 2>/dev/null || true
 
     log_success "${APP_DISPLAY_NAME} has been uninstalled!"
+    if [ "$removed_config" = true ]; then
+        echo "  Removed config: $INSTALL_DIR"
+    else
+        echo "  Kept config:    $INSTALL_DIR"
+    fi
+    if [ "$removed_media" = true ]; then
+        echo "  Removed media:  $MEDIA_DIRECTORY"
+    else
+        echo "  Kept media:     $MEDIA_DIRECTORY"
+    fi
     log_info "Docker images were left on disk — see docs/uninstall.md to remove them."
 }
 
@@ -610,7 +630,7 @@ check_status() {
     [ "$vpn" = "y" ] && vpn_label="on"
 
     echo "${APP_DISPLAY_NAME}  ·  media=${media}  ·  VPN ${vpn_label}"
-    echo "Install: ${INSTALL_DIR}"
+    print_detected_locations
     echo
     printf "  %-14s %-12s %s\n" "SERVICE" "STATE" "URL / NOTE"
     printf "  %-14s %-12s %s\n" "--------------" "------------" "---------------------------"
@@ -731,8 +751,7 @@ update_containers() {
 
 show_config() {
     echo "${APP_DISPLAY_NAME} Configuration:"
-    echo "  Install directory:  $INSTALL_DIR"
-    echo "  Media directory:    $MEDIA_DIRECTORY"
+    print_detected_locations
     echo "  Media service:      $MEDIA_SERVICE"
     echo "  VPN enabled:        $VPN_ENABLED"
     echo "  VPN type:           $VPN_TYPE"

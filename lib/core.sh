@@ -149,6 +149,27 @@ is_assemblrr_media_tree() {
     [ -d "$d/torrents/movies" ] || [ -d "$d/media/movies" ] || [ -d "$d/blackhole" ]
 }
 
+# Shared location block for `status` and `uninstall`.
+# Uses INSTALL_DIR, MEDIA_DIRECTORY, APP_CLI_NAME (optional heading as $1).
+print_detected_locations() {
+    local heading="${1:-}"
+    local cli_path="$HOME/.local/bin/${APP_CLI_NAME:-assemblrr}"
+    local kind path
+    [ -n "$heading" ] && echo "$heading"
+    printf '  Config:  %s\n' "${INSTALL_DIR:-unknown}"
+    printf '  Media:   %s\n' "${MEDIA_DIRECTORY:-unknown}"
+    if [ -e "$cli_path" ]; then
+        printf '  CLI:     %s\n' "$cli_path"
+    fi
+    while IFS=$'\t' read -r kind path; do
+        [ -n "$path" ] || continue
+        case "$kind" in
+            install) printf '  Extra:   leftover install %s\n' "$path" ;;
+            media)   printf '  Extra:   leftover media %s\n' "$path" ;;
+        esac
+    done < <(list_assemblrr_leftovers "${INSTALL_DIR:-}" "${MEDIA_DIRECTORY:-}")
+}
+
 # TSV: kind<TAB>path   kind is install|media
 # Optional $1/$2 are already-known paths to skip.
 list_assemblrr_leftovers() {
