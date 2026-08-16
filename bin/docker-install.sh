@@ -63,7 +63,11 @@ $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev
 }
 
 install_docker_arch() {
-    sudo pacman -Sy --noconfirm --needed docker docker-compose
+    echo
+    echo "Arch Linux: about to run a full system upgrade (pacman -Syu)."
+    echo "A partial install (-Sy without -u) can break packages (GLIBC mismatch)."
+    echo
+    sudo pacman -Syu --noconfirm --needed docker docker-compose
 }
 
 install_docker_fedora() {

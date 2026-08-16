@@ -124,7 +124,12 @@ install_packages() {
             sudo apt-get update -qq && sudo apt-get install -y "${pkgs[@]}"
             ;;
         pacman)
-            sudo pacman -Sy --noconfirm --needed "${pkgs[@]}"
+            echo
+            log_warning "Arch Linux: about to run a full system upgrade (pacman -Syu)."
+            log_info "A partial install (-Sy without -u) can break jq (GLIBC mismatch)."
+            log_info "This updates the whole system, then installs: ${pkgs[*]}"
+            echo
+            sudo pacman -Syu --noconfirm --needed "${pkgs[@]}"
             ;;
         dnf)
             sudo dnf install -y "${pkgs[@]}"
@@ -171,6 +176,26 @@ check_dependencies() {
             echo "Installing missing packages..."
             if ! install_packages "${missing_packages[@]}"; then
                 log_error "Failed to install missing packages. Please install them manually: ${missing_packages[*]}"
+            fi
+            local still_broken=()
+            local pkg
+            for pkg in "${missing_packages[@]}"; do
+                case "$pkg" in
+                    jq) echo "{}" | jq . &>/dev/null || still_broken+=("$pkg") ;;
+                    fzf) fzf --version &>/dev/null || still_broken+=("$pkg") ;;
+                    curl) curl --version &>/dev/null || still_broken+=("$pkg") ;;
+                    *) command -v "$pkg" &>/dev/null || still_broken+=("$pkg") ;;
+                esac
+            done
+            if [ ${#still_broken[@]} -gt 0 ]; then
+                echo
+                log_warning "Installed, but still not runnable: ${still_broken[*]}"
+                if printf '%s\n' "${still_broken[@]}" | grep -qx jq; then
+                    jq . </dev/null 2>&1 | head -5 || true
+                    log_info "On Arch this is usually a partial upgrade. In WSL run: sudo pacman -Syu"
+                    log_info "Then open a new WSL terminal and re-run setup."
+                fi
+                log_error "Please fix the packages above and re-run setup."
             fi
             log_success "Successfully installed missing packages"
         else
