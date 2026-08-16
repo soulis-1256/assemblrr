@@ -33,4 +33,11 @@ assert_eq "/data/media/tv/Show Name" \
     "series title dir"
 assert_eq "" "$(purge_watch_library_folder /data/torrents/movies/x.mkv)" "torrents path ignored"
 
+test_suite "purge_watch_season_number"
+assert_eq "2" "$(purge_watch_season_number '/data/media/tv/Show Name/Season 2/ep.mkv')" "Season 2 file"
+assert_eq "1" "$(purge_watch_season_number '/data/media/tv/Show Name/Season 01/ep.mkv')" "Season 01 file"
+assert_eq "0" "$(purge_watch_season_number '/data/media/tv/Show Name/Specials/ep.mkv')" "Specials"
+assert_eq "" "$(purge_watch_season_number '/data/media/tv/Show Name/ep.mkv')" "no season folder"
+assert_eq "" "$(purge_watch_season_number '/data/media/movies/Title (2012)/movie.mkv')" "movie path"
+
 test_summary

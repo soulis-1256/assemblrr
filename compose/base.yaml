@@ -201,7 +201,8 @@ services:
       assemblrr_network:
         ipv4_address: 172.60.0.17
 
-  # Thin reverse proxy in front of Seerr: pass-through + delete-request full purge.
+  # Thin reverse proxy in front of Seerr: pass-through + delete-request purge.
+  # TV: season-scoped via Sonarr when the request is a subset of remaining seasons.
   # SEERR_DELETE_REQUEST_PURGE=0 disables intercept (stock Seerr semantics).
   seerr-gateway:
     image: python:3.12-alpine
@@ -212,9 +213,13 @@ services:
       - SEERR_GATEWAY_LISTEN=0.0.0.0
       - SEERR_GATEWAY_PORT=5055
       - SEERR_DELETE_REQUEST_PURGE=${SEERR_DELETE_REQUEST_PURGE:-1}
+      - SONARR_URL=http://sonarr:8989
+      - SONARR_CONFIG=/config/sonarr/config.xml
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - ${INSTALL_DIRECTORY}/scripts/seerr-gateway.py:/scripts/seerr-gateway.py:ro
+      # Bind the dir, not config.xml — Docker creates a directory if the file is missing.
+      - ${INSTALL_DIRECTORY}/config/sonarr:/config/sonarr:ro
     ports:
       - 5055:5055
     depends_on:

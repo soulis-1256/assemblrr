@@ -92,7 +92,7 @@ fi
 readonly SUPPORTED_MEDIA_SERVICES=("jellyfin" "emby" "plex")
 readonly DEFAULT_MEDIA_SERVICE="jellyfin"
 readonly DEFAULT_VPN_SERVICE="protonvpn"
-readonly MEDIA_SUBDIRS=("torrents/movies" "torrents/tv" "media/movies" "media/tv" "blackhole")
+readonly MEDIA_SUBDIRS=("torrents/movies" "torrents/tv" "media/movies" "media/tv" "media/.recycle" "blackhole")
 
 # Dependencies
 readonly REQUIRED_COMMANDS=("curl" "jq" "sed" "awk" "envsubst" "fzf")

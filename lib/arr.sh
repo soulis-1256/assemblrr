@@ -331,12 +331,14 @@ configure_arr_service() {
     mediamgmt=$(api_get "$port" "/api/v3/config/mediamanagement" "$apikey")
     if [ -n "$mediamgmt" ]; then
         local mgmt_payload
-        mgmt_payload=$(echo "$mediamgmt" | jq --arg uf "$unmonitor_field" '.copyUsingHardlinks = true | .enableMediaManagement = true | .[$uf] = true | .recycleBin = ""' 2>/dev/null || echo "")
+        mgmt_payload=$(echo "$mediamgmt" | jq --arg uf "$unmonitor_field" \
+            '.copyUsingHardlinks = true | .enableMediaManagement = true | .[$uf] = true
+             | .recycleBin = "/data/media/.recycle" | .recycleBinCleanupDays = 7' 2>/dev/null || echo "")
         if [ -n "$mgmt_payload" ]; then
             local mgmt_result
             mgmt_result=$(api_put "$port" "/api/v3/config/mediamanagement" "$apikey" "$mgmt_payload")
             if jq_json_has_key "$mgmt_result" "id"; then
-                log_step "${service_name}: enabled hardlinks in Media Management"
+                log_step "${service_name}: enabled hardlinks + recycle bin (/data/media/.recycle)"
             else
                 log_step_fail "${service_name}: failed to enable hardlinks"
             fi

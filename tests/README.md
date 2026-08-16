@@ -38,7 +38,7 @@ Requires a running stack with purge wiring (`media-purge-watch` up, `seerr-gatew
 1. Creates a synthetic hardlinked title under `media/` + `torrents/` and a local qB torrent (no indexer grab).
 2. **Radarr** `DELETE /api/v3/movie/:id?deleteFiles=true` → CustomScript → qB cleanup.
 3. **Seerr** `DELETE /api/v1/media/:id/file` → Radarr delete → same cascade.
-4. **Seerr** `DELETE /api/v1/request/:id` **through seerr-gateway** → media file delete + request gone → same cascade (checks `X-Assemblrr-Request-Delete-Purge`).
+4. **Seerr** `DELETE /api/v1/request/:id` **through seerr-gateway** → movie/title purge or TV season-scoped purge + request gone (checks `X-Assemblrr-Request-Delete-Purge`).
 5. **Jellyfin** `DELETE /Items/:id` → filesystem delete → `media-purge-watch` → full purge.
 6. Asserts Radarr row, `media/`, `torrents/`, and qB torrent are all gone (other titles untouched).
 

@@ -34,6 +34,9 @@ assert_not_contains "$seerr_block" "5055:5055" "seerr service does not publish h
 gw_block=$(awk '/^  seerr-gateway:/{p=1} p&&/^  [a-z]/{if(!/^  seerr-gateway:/)exit} p' "$base")
 assert_contains "$gw_block" "5055:5055" "seerr-gateway publishes 5055"
 assert_contains "$gw_block" "SEERR_DELETE_REQUEST_PURGE" "purge flag wired in compose"
+assert_contains "$gw_block" "SONARR_URL" "gateway has Sonarr URL for TV season purge"
+assert_contains "$gw_block" "config/sonarr:/config/sonarr" "gateway mounts Sonarr config dir"
+assert_not_contains "$gw_block" "config.xml:/config/sonarr/config.xml" "gateway does not file-mount config.xml"
 
 # Catalog: Seerr UI is the gateway
 test_suite "service catalog points Seerr UI at gateway"

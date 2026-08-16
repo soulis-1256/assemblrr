@@ -3,9 +3,15 @@
 seerr-gateway — reverse proxy for Seerr with delete-request full purge.
 
 Stock Seerr DELETE /api/v1/request/:id only removes the request row. assemblrr
-intercepts that call (when enabled), deletes linked media files via Seerr first
-(DELETE /api/v1/media/:id/file → Radarr/Sonarr deleteFiles + purge hooks), then
-forwards the original request delete.
+intercepts that call (when enabled):
+
+  * Movies (and TV requests that cover every remaining season): DELETE
+    /api/v1/media/:id/file → Radarr/Sonarr deleteFiles + purge hooks.
+  * TV requests for a subset of seasons: delete only those seasons' episode
+    files via Sonarr and unmonitor them. Other seasons stay. The title-level
+    Seerr file-delete is skipped so Sonarr does not wipe the series folder.
+
+Then the original request delete is forwarded.
 
 Passthrough: all other methods/paths are proxied unchanged to SEERR_UPSTREAM.
 
@@ -46,6 +52,9 @@ READ_TIMEOUT = float(os.environ.get("SEERR_GATEWAY_READ_TIMEOUT", "120"))
 LOG_LEVEL = os.environ.get("SEERR_GATEWAY_LOG_LEVEL", "INFO").upper()
 
 REQUEST_DELETE_RE = re.compile(r"^/api/v1/request/(\d+)/?$")
+SONARR_URL = os.environ.get("SONARR_URL", "http://sonarr:8989").rstrip("/")
+SONARR_API_KEY = os.environ.get("SONARR_API_KEY", "").strip()
+SONARR_CONFIG = os.environ.get("SONARR_CONFIG", "/config/sonarr/config.xml")
 
 HOP_BY_HOP = {
     "connection",
@@ -189,6 +198,262 @@ def media_ids_from_request(payload: dict) -> Tuple[Optional[int], bool]:
         return None, is4k
 
 
+def request_is_tv(payload: dict) -> bool:
+    rtype = (payload.get("type") or payload.get("mediaType") or "").lower()
+    if rtype == "tv":
+        return True
+    media = payload.get("media") or payload.get("mediaInfo") or {}
+    if isinstance(media, dict):
+        return (media.get("mediaType") or "").lower() == "tv"
+    return False
+
+
+def seasons_from_request(payload: dict) -> List[int]:
+    """Season numbers listed on this Seerr request (including specials if present)."""
+    out: List[int] = []
+    for row in payload.get("seasons") or []:
+        if not isinstance(row, dict):
+            continue
+        try:
+            n = int(row.get("seasonNumber"))
+        except (TypeError, ValueError):
+            continue
+        out.append(n)
+    # Unique, stable order
+    seen = set()
+    uniq: List[int] = []
+    for n in out:
+        if n not in seen:
+            seen.add(n)
+            uniq.append(n)
+    return uniq
+
+
+def discover_sonarr_api_key() -> str:
+    if SONARR_API_KEY:
+        return SONARR_API_KEY
+    path = SONARR_CONFIG
+    if not path or not os.path.isfile(path):
+        return ""
+    try:
+        text = open(path, encoding="utf-8").read()
+    except OSError:
+        return ""
+    m = re.search(r"<ApiKey>([^<]+)</ApiKey>", text)
+    return m.group(1).strip() if m else ""
+
+
+def _sonarr_request(
+    method: str,
+    path: str,
+    api_key: str,
+    body: Optional[dict] = None,
+    timeout: float = 20,
+) -> Tuple[int, object]:
+    url = f"{SONARR_URL}{path}"
+    data = None if body is None else json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(url, data=data, method=method)
+    req.add_header("X-Api-Key", api_key)
+    if data is not None:
+        req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read()
+            parsed: object = None
+            if raw:
+                try:
+                    parsed = json.loads(raw.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    parsed = raw
+            return resp.status, parsed
+    except urllib.error.HTTPError as e:
+        raw = e.read()
+        parsed = None
+        if raw:
+            try:
+                parsed = json.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                parsed = raw
+        return e.code, parsed
+    except (urllib.error.URLError, TimeoutError, socket.timeout, OSError) as e:
+        raise RuntimeError(f"sonarr {method} {path}: {e}") from e
+
+
+def sonarr_lookup_series_id(payload: dict, api_key: str) -> Optional[int]:
+    media = payload.get("media") or payload.get("mediaInfo") or {}
+    if not isinstance(media, dict):
+        media = {}
+    ext = media.get("externalServiceId")
+    if ext is not None:
+        try:
+            return int(ext)
+        except (TypeError, ValueError):
+            pass
+    tvdb = media.get("tvdbId")
+    if tvdb is None:
+        return None
+    try:
+        tvdb_i = int(tvdb)
+    except (TypeError, ValueError):
+        return None
+    status, series = _sonarr_request("GET", "/api/v3/series", api_key)
+    if status != 200 or not isinstance(series, list):
+        return None
+    for row in series:
+        if isinstance(row, dict) and row.get("tvdbId") == tvdb_i:
+            sid = row.get("id")
+            try:
+                return int(sid)
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def sonarr_remaining_seasons(series_id: int, api_key: str) -> List[int]:
+    """Seasons that still have files or are monitored (skip specials)."""
+    status, series = _sonarr_request("GET", f"/api/v3/series/{series_id}", api_key)
+    if status == 404:
+        return []
+    if status != 200 or not isinstance(series, dict):
+        raise RuntimeError(f"sonarr GET series/{series_id} HTTP {status}")
+    status_f, files = _sonarr_request(
+        "GET", f"/api/v3/episodefile?seriesId={series_id}", api_key
+    )
+    if status_f != 200 or not isinstance(files, list):
+        raise RuntimeError(f"sonarr GET episodefile HTTP {status_f}")
+    remain: set = set()
+    for f in files:
+        if isinstance(f, dict) and f.get("seasonNumber") not in (None, 0):
+            remain.add(int(f["seasonNumber"]))
+    for s in series.get("seasons") or []:
+        if not isinstance(s, dict):
+            continue
+        try:
+            n = int(s.get("seasonNumber"))
+        except (TypeError, ValueError):
+            continue
+        if n == 0:
+            continue
+        if s.get("monitored"):
+            remain.add(n)
+    return sorted(remain)
+
+
+def sonarr_delete_seasons(series_id: int, seasons: List[int], api_key: str) -> int:
+    """Delete episode files and unmonitor the given seasons. Returns file-delete count."""
+    if not seasons:
+        return 0
+    wanted = set(seasons)
+    status, files = _sonarr_request(
+        "GET", f"/api/v3/episodefile?seriesId={series_id}", api_key
+    )
+    if status != 200 or not isinstance(files, list):
+        raise RuntimeError(f"sonarr GET episodefile HTTP {status}")
+    deleted = 0
+    for f in files:
+        if not isinstance(f, dict):
+            continue
+        try:
+            sn = int(f.get("seasonNumber"))
+            fid = int(f.get("id"))
+        except (TypeError, ValueError):
+            continue
+        if sn not in wanted:
+            continue
+        dstatus, _ = _sonarr_request("DELETE", f"/api/v3/episodefile/{fid}", api_key)
+        if dstatus in (200, 204):
+            deleted += 1
+        elif dstatus == 404:
+            continue
+        else:
+            raise RuntimeError(f"sonarr DELETE episodefile/{fid} HTTP {dstatus}")
+
+    status, series = _sonarr_request("GET", f"/api/v3/series/{series_id}", api_key)
+    if status == 200 and isinstance(series, dict):
+        changed = False
+        for s in series.get("seasons") or []:
+            if isinstance(s, dict) and s.get("seasonNumber") in wanted and s.get("monitored"):
+                s["monitored"] = False
+                changed = True
+        if changed:
+            pstatus, _ = _sonarr_request("PUT", f"/api/v3/series/{series_id}", api_key, series)
+            if pstatus not in (200, 202):
+                raise RuntimeError(f"sonarr PUT series/{series_id} unmonitor HTTP {pstatus}")
+    elif status not in (200, 404):
+        raise RuntimeError(f"sonarr GET series/{series_id} HTTP {status}")
+
+    status, episodes = _sonarr_request(
+        "GET", f"/api/v3/episode?seriesId={series_id}", api_key
+    )
+    if status == 200 and isinstance(episodes, list):
+        ids = []
+        for ep in episodes:
+            if not isinstance(ep, dict):
+                continue
+            try:
+                if int(ep.get("seasonNumber")) in wanted:
+                    ids.append(int(ep["id"]))
+            except (TypeError, ValueError, KeyError):
+                continue
+        if ids:
+            pstatus, _ = _sonarr_request(
+                "PUT",
+                "/api/v3/episode/monitor",
+                api_key,
+                {"episodeIds": ids, "monitored": False},
+            )
+            if pstatus not in (200, 202):
+                raise RuntimeError(f"sonarr PUT episode/monitor HTTP {pstatus}")
+    elif status not in (200, 404):
+        raise RuntimeError(f"sonarr GET episode HTTP {status}")
+    return deleted
+
+
+def seasons_cover_remaining(requested: List[int], remaining: List[int]) -> bool:
+    if not remaining:
+        return True
+    want = set(requested)
+    return all(n in want for n in remaining)
+
+
+def _delete_media_file(
+    media_id: int,
+    is4k: bool,
+    headers: Dict[str, str],
+) -> Tuple[str, int]:
+    is4k_q = "true" if is4k else "false"
+    file_path = f"/api/v1/media/{media_id}/file?is4k={is4k_q}"
+    file_status, _, file_body = proxy_once("DELETE", file_path, headers, None)
+    if 200 <= file_status < 300 or file_status == 404:
+        note = f"media_file_deleted:{media_id}:{file_status}"
+        log.info(
+            "DELETE media/%s/file is4k=%s → HTTP %s",
+            media_id,
+            is4k_q,
+            file_status,
+        )
+        return note, file_status
+    log.warning(
+        "media file delete failed HTTP %s: %s",
+        file_status,
+        file_body[:200],
+    )
+    return f"media_file_failed:{media_id}:{file_status}", file_status
+
+
+def _season_purge_fail(detail: str, note: str) -> Tuple[int, List[Tuple[str, str]], bytes, str]:
+    return (
+        502,
+        [
+            ("Content-Type", "application/json"),
+            ("X-Assemblrr-Request-Delete-Purge", "1"),
+            ("X-Assemblrr-Purge-Detail", note[:200]),
+        ],
+        json.dumps({"error": "seerr-gateway season purge failed", "detail": detail}).encode(),
+        note,
+    )
+
+
 def purge_then_delete_request(
     request_id: str,
     path: str,
@@ -196,13 +461,18 @@ def purge_then_delete_request(
 ) -> Tuple[int, List[Tuple[str, str]], bytes, str]:
     """
     Cascade:
-      GET request → DELETE media/:id/file (if linked) → DELETE request
-    Always attempts request delete so Seerr state stays consistent.
+      GET request
+        movie / TV covering every remaining season → DELETE media/:id/file
+        TV subset of seasons → Sonarr season file delete only
+      DELETE request
+    Auth failure on GET, or any TV-scope / Sonarr uncertainty, returns without
+    deleting the request (no title-level wipe).
     Returns (status, headers, body, purge_note).
     """
     get_status, _, get_body = proxy_once("GET", f"/api/v1/request/{request_id}", headers, None)
     media_id = None
     is4k = False
+    payload: dict = {}
     if get_status == 200:
         payload = parse_request_payload(get_body)
         media_id, is4k = media_ids_from_request(payload)
@@ -214,26 +484,49 @@ def purge_then_delete_request(
 
     purge_note = "no_media"
     if media_id is not None:
-        is4k_q = "true" if is4k else "false"
-        file_path = f"/api/v1/media/{media_id}/file?is4k={is4k_q}"
-        file_status, _, file_body = proxy_once("DELETE", file_path, headers, None)
-        if 200 <= file_status < 300 or file_status == 404:
-            purge_note = f"media_file_deleted:{media_id}:{file_status}"
-            log.info(
-                "request %s: DELETE media/%s/file is4k=%s → HTTP %s",
-                request_id,
-                media_id,
-                is4k_q,
-                file_status,
-            )
+        if request_is_tv(payload):
+            requested = seasons_from_request(payload)
+            if not requested:
+                log.warning("request %s: TV request has no season list; refusing title delete", request_id)
+                return _season_purge_fail("tv request has no seasons", "tv_seasons_unknown")
+            api_key = discover_sonarr_api_key()
+            if not api_key:
+                log.warning("request %s: no Sonarr API key; refusing title delete", request_id)
+                return _season_purge_fail("sonarr api key missing", "sonarr_key_missing")
+            try:
+                series_id = sonarr_lookup_series_id(payload, api_key)
+                if series_id is None:
+                    # Not in Sonarr — drop the request only (under-delete).
+                    log.info("request %s: series not in Sonarr; request-delete only", request_id)
+                    purge_note = "sonarr_series_missing"
+                else:
+                    remaining = sonarr_remaining_seasons(series_id, api_key)
+                    if remaining and not seasons_cover_remaining(requested, remaining):
+                        deleted = sonarr_delete_seasons(series_id, requested, api_key)
+                        purge_note = (
+                            f"seasons_deleted:{media_id}:{series_id}:"
+                            f"{','.join(str(s) for s in requested)}:{deleted}"
+                        )
+                        log.info(
+                            "request %s: season-scoped purge seasons=%s remaining_after_intent=%s files=%s",
+                            request_id,
+                            requested,
+                            [n for n in remaining if n not in set(requested)],
+                            deleted,
+                        )
+                    else:
+                        log.info(
+                            "request %s: seasons %s cover remaining %s; title delete",
+                            request_id,
+                            requested,
+                            remaining,
+                        )
+                        purge_note, _ = _delete_media_file(media_id, is4k, headers)
+            except Exception as exc:
+                log.error("request %s: season purge failed: %s", request_id, exc)
+                return _season_purge_fail(str(exc), "season_purge_failed")
         else:
-            purge_note = f"media_file_failed:{media_id}:{file_status}"
-            log.warning(
-                "request %s: media file delete failed HTTP %s: %s",
-                request_id,
-                file_status,
-                file_body[:200],
-            )
+            purge_note, _ = _delete_media_file(media_id, is4k, headers)
     else:
         log.info("request %s: no linked media id; deleting request only", request_id)
 
@@ -491,6 +784,93 @@ class _MockSeerr(BaseHTTPRequestHandler):
         self._send(404, b'{"error":"not found"}')
 
 
+class _MockSonarr(BaseHTTPRequestHandler):
+    """Sonarr stand-in: series 10 has S01+S02 files unless deleted."""
+
+    protocol_version = "HTTP/1.1"
+    calls: List[str] = []
+    files: List[dict] = []
+    series: dict = {}
+    episodefile_status: int = 200
+    delete_episodefile_status: int = 200
+
+    def log_message(self, fmt: str, *args) -> None:
+        return
+
+    def _send(self, status: int, body: bytes = b"") -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if self.command != "HEAD" and body:
+            self.wfile.write(body)
+
+    def do_GET(self) -> None:  # noqa: N802
+        path = self.path.split("?", 1)[0]
+        _MockSonarr.calls.append(f"GET {self.path}")
+        if path == "/api/v3/series/10":
+            self._send(200, json.dumps(_MockSonarr.series).encode())
+            return
+        if path == "/api/v3/series":
+            self._send(200, json.dumps([_MockSonarr.series]).encode())
+            return
+        if path == "/api/v3/episodefile":
+            if _MockSonarr.episodefile_status != 200:
+                self._send(_MockSonarr.episodefile_status, b'{"error":"episodefile failed"}')
+                return
+            self._send(200, json.dumps(_MockSonarr.files).encode())
+            return
+        if path == "/api/v3/episode":
+            eps = [
+                {"id": 100 + f["id"], "seasonNumber": f["seasonNumber"], "seriesId": 10}
+                for f in _MockSonarr.files
+            ]
+            self._send(200, json.dumps(eps).encode())
+            return
+        self._send(404, b"{}")
+
+    def do_DELETE(self) -> None:  # noqa: N802
+        path = self.path.split("?", 1)[0]
+        _MockSonarr.calls.append(f"DELETE {path}")
+        m = re.match(r"^/api/v3/episodefile/(\d+)$", path)
+        if m:
+            if _MockSonarr.delete_episodefile_status != 200:
+                self._send(_MockSonarr.delete_episodefile_status, b'{"error":"delete failed"}')
+                return
+            fid = int(m.group(1))
+            _MockSonarr.files = [f for f in _MockSonarr.files if f.get("id") != fid]
+            self._send(200, b"")
+            return
+        self._send(404, b"{}")
+
+    def do_PUT(self) -> None:  # noqa: N802
+        path = self.path.split("?", 1)[0]
+        _MockSonarr.calls.append(f"PUT {path}")
+        length = int(self.headers.get("Content-Length") or "0")
+        if length:
+            self.rfile.read(length)
+        self._send(202, b"{}")
+
+
+def _reset_mock_sonarr() -> None:
+    _MockSonarr.calls = []
+    _MockSonarr.episodefile_status = 200
+    _MockSonarr.delete_episodefile_status = 200
+    _MockSonarr.files = [
+        {"id": 1, "seasonNumber": 1, "seriesId": 10},
+        {"id": 2, "seasonNumber": 2, "seriesId": 10},
+    ]
+    _MockSonarr.series = {
+        "id": 10,
+        "title": "Loki",
+        "tvdbId": 362472,
+        "seasons": [
+            {"seasonNumber": 1, "monitored": True},
+            {"seasonNumber": 2, "monitored": True},
+        ],
+    }
+
+
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
@@ -511,6 +891,7 @@ def self_test() -> int:
             failures += 1
 
     mock_port = _free_port()
+    sonarr_port = _free_port()
     gw_port = _free_port()
 
     _MockSeerr.calls = []
@@ -527,14 +908,21 @@ def self_test() -> int:
     mock_httpd.daemon_threads = True
     threading.Thread(target=mock_httpd.serve_forever, daemon=True).start()
 
+    _reset_mock_sonarr()
+    sonarr_httpd = ThreadingHTTPServer(("127.0.0.1", sonarr_port), _MockSonarr)
+    sonarr_httpd.daemon_threads = True
+    threading.Thread(target=sonarr_httpd.serve_forever, daemon=True).start()
+
     os.environ["SEERR_UPSTREAM"] = f"http://127.0.0.1:{mock_port}"
     os.environ["SEERR_DELETE_REQUEST_PURGE"] = "1"
     # Re-bind module globals used by handlers
-    global UPSTREAM, PURGE_ON_DELETE_REQUEST, LISTEN_HOST, LISTEN_PORT
+    global UPSTREAM, PURGE_ON_DELETE_REQUEST, LISTEN_HOST, LISTEN_PORT, SONARR_URL, SONARR_API_KEY, SONARR_CONFIG
     UPSTREAM = os.environ["SEERR_UPSTREAM"].rstrip("/")
     PURGE_ON_DELETE_REQUEST = True
     LISTEN_HOST = "127.0.0.1"
     LISTEN_PORT = gw_port
+    SONARR_URL = f"http://127.0.0.1:{sonarr_port}"
+    SONARR_API_KEY = "sonarr-test-key"
 
     gw = ThreadingHTTPServer((LISTEN_HOST, LISTEN_PORT), GatewayHandler)
     gw.daemon_threads = True
@@ -639,8 +1027,180 @@ def self_test() -> int:
         "purge detail notes no_media",
     )
 
+    # TV S01-only request: do not wipe S02 (no Seerr title-level file delete).
+    _reset_mock_sonarr()
+    _MockSeerr.request_payload = {
+        "id": 8,
+        "type": "tv",
+        "is4k": False,
+        "seasons": [{"seasonNumber": 1, "status": 2}],
+        "media": {
+            "id": 6,
+            "tmdbId": 84958,
+            "tvdbId": 362472,
+            "mediaType": "tv",
+            "externalServiceId": 10,
+        },
+    }
+    _MockSeerr.calls = []
+    st, hdrs, _ = http_call(
+        "DELETE",
+        f"http://127.0.0.1:{gw_port}/api/v1/request/8",
+        {"X-Api-Key": "test-key"},
+    )
+    check(st == 204, f"TV S01 request delete → 204 (got {st})")
+    check(
+        not any("DELETE /api/v1/media/6/file" in c for c in _MockSeerr.calls),
+        "TV S01 request does not title-delete media files",
+    )
+    check(
+        any(c.startswith("DELETE /api/v1/request/8") for c in _MockSeerr.calls),
+        "TV S01 still deletes the request row",
+    )
+    check(
+        any(c == "DELETE /api/v3/episodefile/1" for c in _MockSonarr.calls),
+        "TV S01 deletes Sonarr S01 episode file",
+    )
+    check(
+        not any(c == "DELETE /api/v3/episodefile/2" for c in _MockSonarr.calls),
+        "TV S01 does not delete Sonarr S02 episode file",
+    )
+    check(
+        "seasons_deleted" in (hdrs.get("X-Assemblrr-Purge-Detail") or ""),
+        f"purge detail is season-scoped ({hdrs.get('X-Assemblrr-Purge-Detail')})",
+    )
+    check(
+        all(f.get("seasonNumber") != 1 for f in _MockSonarr.files),
+        "S01 file removed from mock Sonarr",
+    )
+    check(
+        any(f.get("seasonNumber") == 2 for f in _MockSonarr.files),
+        "S02 file still in mock Sonarr",
+    )
+
+    # TV request covering every remaining season → title-level delete.
+    _reset_mock_sonarr()
+    _MockSeerr.request_payload = {
+        "id": 9,
+        "type": "tv",
+        "is4k": False,
+        "seasons": [{"seasonNumber": 1}, {"seasonNumber": 2}],
+        "media": {
+            "id": 6,
+            "mediaType": "tv",
+            "externalServiceId": 10,
+            "tvdbId": 362472,
+        },
+    }
+    _MockSeerr.calls = []
+    _MockSonarr.calls = []
+    st, hdrs, _ = http_call(
+        "DELETE",
+        f"http://127.0.0.1:{gw_port}/api/v1/request/9",
+        {"X-Api-Key": "test-key"},
+    )
+    check(st == 204, f"TV all-seasons request → 204 (got {st})")
+    check(
+        any("DELETE /api/v1/media/6/file" in c for c in _MockSeerr.calls),
+        "TV all-seasons uses title-level media file delete",
+    )
+    check(
+        not any(c.startswith("DELETE /api/v3/episodefile/") for c in _MockSonarr.calls),
+        "TV all-seasons does not piecemeal-delete episode files",
+    )
+
+    tv_s01 = {
+        "id": 8,
+        "type": "tv",
+        "is4k": False,
+        "seasons": [{"seasonNumber": 1, "status": 2}],
+        "media": {
+            "id": 6,
+            "tmdbId": 84958,
+            "tvdbId": 362472,
+            "mediaType": "tv",
+            "externalServiceId": 10,
+        },
+    }
+
+    # Missing Sonarr key → 502, no title wipe, request kept.
+    saved_key = SONARR_API_KEY
+    saved_cfg = SONARR_CONFIG
+    SONARR_API_KEY = ""
+    SONARR_CONFIG = "/tmp/assemblrr-no-such-sonarr-config.xml"
+    _reset_mock_sonarr()
+    _MockSeerr.request_payload = dict(tv_s01)
+    _MockSeerr.calls = []
+    st, hdrs, _ = http_call(
+        "DELETE",
+        f"http://127.0.0.1:{gw_port}/api/v1/request/8",
+        {"X-Api-Key": "test-key"},
+    )
+    check(st == 502, f"missing Sonarr key → 502 (got {st})")
+    check(
+        not any("DELETE /api/v1/media/6/file" in c for c in _MockSeerr.calls),
+        "missing key does not title-delete",
+    )
+    check(
+        not any(c.startswith("DELETE /api/v1/request/") for c in _MockSeerr.calls),
+        "missing key keeps the request",
+    )
+    check(
+        "sonarr_key_missing" in (hdrs.get("X-Assemblrr-Purge-Detail") or ""),
+        "missing key purge detail",
+    )
+    SONARR_API_KEY = saved_key
+    SONARR_CONFIG = saved_cfg
+
+    # TV request with empty seasons → 502 (unknown scope).
+    _reset_mock_sonarr()
+    _MockSeerr.request_payload = {
+        "id": 11,
+        "type": "tv",
+        "is4k": False,
+        "seasons": [],
+        "media": {"id": 6, "mediaType": "tv", "externalServiceId": 10, "tvdbId": 362472},
+    }
+    _MockSeerr.calls = []
+    st, hdrs, _ = http_call(
+        "DELETE",
+        f"http://127.0.0.1:{gw_port}/api/v1/request/11",
+        {"X-Api-Key": "test-key"},
+    )
+    check(st == 502, f"empty TV seasons → 502 (got {st})")
+    check(
+        not any("DELETE /api/v1/media/" in c for c in _MockSeerr.calls),
+        "empty seasons does not title-delete",
+    )
+    check(
+        not any(c.startswith("DELETE /api/v1/request/") for c in _MockSeerr.calls),
+        "empty seasons keeps the request",
+    )
+
+    # Failed episodefile GET → 502, no title wipe.
+    _reset_mock_sonarr()
+    _MockSonarr.episodefile_status = 500
+    _MockSeerr.request_payload = dict(tv_s01)
+    _MockSeerr.calls = []
+    st, _, _ = http_call(
+        "DELETE",
+        f"http://127.0.0.1:{gw_port}/api/v1/request/8",
+        {"X-Api-Key": "test-key"},
+    )
+    check(st == 502, f"episodefile 500 → 502 (got {st})")
+    check(
+        not any("DELETE /api/v1/media/6/file" in c for c in _MockSeerr.calls),
+        "episodefile 500 does not title-delete",
+    )
+    check(
+        not any(c.startswith("DELETE /api/v1/request/") for c in _MockSeerr.calls),
+        "episodefile 500 keeps the request",
+    )
+    _MockSonarr.episodefile_status = 200
+
     gw.shutdown()
     mock_httpd.shutdown()
+    sonarr_httpd.shutdown()
 
     print("")
     if failures:

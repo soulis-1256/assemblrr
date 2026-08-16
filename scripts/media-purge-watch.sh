@@ -58,6 +58,45 @@ purge_watch_library_folder() {
     esac
 }
 
+# Season number from a library path (.../Season 2/ep.mkv or .../Specials/...). Empty if none.
+purge_watch_season_number() {
+    local p="${1:-}"
+    local n
+    n=$(printf '%s' "$p" | sed -nE 's|.*/[Ss]eason[[:space:]]*0*([0-9]+)/.*|\1|p')
+    if [ -z "$n" ]; then
+        n=$(printf '%s' "$p" | sed -nE 's|.*/[Ss]eason[[:space:]]*0*([0-9]+)$|\1|p')
+    fi
+    if [ -z "$n" ]; then
+        case "$p" in
+            */[Ss]pecials|*/[Ss]pecials/*) echo 0; return 0 ;;
+        esac
+        return 0
+    fi
+    echo $((10#$n))
+}
+
+purge_watch_season_folder() {
+    local series_folder="$1"
+    local season="$2"
+    local cand
+    [ -n "$series_folder" ] || return 1
+    if [ "$season" = "0" ]; then
+        for cand in "${series_folder}/Specials" "${series_folder}/specials"; do
+            [ -d "$cand" ] && echo "$cand" && return 0
+        done
+        return 1
+    fi
+    for cand in \
+        "${series_folder}/Season ${season}" \
+        "${series_folder}/Season $(printf '%02d' "$season")" \
+        "${series_folder}/season ${season}" \
+        "${series_folder}/season $(printf '%02d' "$season")"
+    do
+        [ -d "$cand" ] && echo "$cand" && return 0
+    done
+    return 1
+}
+
 purge_watch_folder_has_video() {
     local folder="$1"
     [ -d "$folder" ] || return 1
@@ -103,11 +142,44 @@ handle_event() {
 
     local now
     now=$(date +%s)
-    if [ "$folder" = "$LAST_PURGE_PATH" ] && [ $((now - LAST_PURGE_TS)) -lt 15 ]; then
+
+    local season
+    season=$(purge_watch_season_number "$path")
+    # Dedup per season so S01 then S02 in the same window both run.
+    local dedup_key="$folder"
+    [ -n "$season" ] && dedup_key="${folder}/s${season}"
+    if [ "$dedup_key" = "$LAST_PURGE_PATH" ] && [ $((now - LAST_PURGE_TS)) -lt 15 ]; then
         return 0
     fi
 
     sleep "$DEBOUNCE_SEC"
+
+    local arr_path
+    case "$folder" in
+        /data/*) arr_path="$folder" ;;
+        *) arr_path=$(echo "$folder" | sed -E 's|.*/media/|/data/media/|') ;;
+    esac
+
+    if [ -n "$season" ]; then
+        # Other seasons may only be monitored or still downloading — never
+        # treat an empty series folder as "the show is done".
+        local sfolder
+        sfolder=$(purge_watch_season_folder "$folder" "$season" || true)
+        if [ -n "$sfolder" ] && purge_watch_folder_has_video "$sfolder"; then
+            return 0
+        fi
+        sleep "$UPGRADE_GRACE_SEC"
+        sfolder=$(purge_watch_season_folder "$folder" "$season" || true)
+        if [ -n "$sfolder" ] && purge_watch_folder_has_video "$sfolder"; then
+            return 0
+        fi
+        LAST_PURGE_PATH="$dedup_key"
+        LAST_PURGE_TS=$(date +%s)
+        log "purge $arr_path season ${season}"
+        "$PURGE" --path "$arr_path" --seasons "$season" || log "purge failed for $arr_path season ${season}"
+        return 0
+    fi
+
     if purge_watch_folder_has_video "$folder"; then
         return 0
     fi
@@ -116,13 +188,8 @@ handle_event() {
         return 0
     fi
 
-    LAST_PURGE_PATH="$folder"
+    LAST_PURGE_PATH="$dedup_key"
     LAST_PURGE_TS=$(date +%s)
-    local arr_path
-    case "$folder" in
-        /data/*) arr_path="$folder" ;;
-        *) arr_path=$(echo "$folder" | sed -E 's|.*/media/|/data/media/|') ;;
-    esac
     log "purge $arr_path"
     "$PURGE" --path "$arr_path" || log "purge failed for $arr_path"
 }
