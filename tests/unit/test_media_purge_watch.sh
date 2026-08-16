@@ -10,6 +10,9 @@ PURGE_WATCH_SOURCE_ONLY=1
 # shellcheck disable=SC1091
 source "$REPO_ROOT/scripts/media-purge-watch.sh"
 
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
 test_suite "purge_watch_is_ignored"
 assert_true "write test" "purge_watch_is_ignored /data/media/movies/radarr_write_test.txt"
 assert_true "sonarr write test" "purge_watch_is_ignored /data/media/tv/sonarr_write_test.txt"
@@ -32,6 +35,27 @@ assert_eq "/data/media/tv/Show Name" \
     "$(purge_watch_library_folder '/data/media/tv/Show Name/Season 01/ep.mkv')" \
     "series title dir"
 assert_eq "" "$(purge_watch_library_folder /data/torrents/movies/x.mkv)" "torrents path ignored"
+
+test_suite "purge_watch_folder_busy"
+busy="$tmp/busy-title"
+mkdir -p "$busy"
+assert_false "empty folder is not busy" "purge_watch_folder_busy '$busy'"
+: > "$busy/copying.mkv.part"
+assert_true "partial file is busy" "purge_watch_folder_busy '$busy'"
+rm -f "$busy/copying.mkv.part"
+: > "$busy/movie.mkv"
+assert_true "video is busy" "purge_watch_folder_busy '$busy'"
+
+test_suite "purge_watch_json_has_upgrade_delete"
+upg='{"records":[{"eventType":"movieFileDeleted","data":{"reason":"Upgrade"}}]}'
+manual='{"records":[{"eventType":"movieFileDeleted","data":{"reason":"Manual"}}]}'
+assert_success "upgrade delete is a hold" purge_watch_json_has_upgrade_delete "$upg"
+assert_failure "manual delete is not a hold" purge_watch_json_has_upgrade_delete "$manual"
+
+test_suite "purge_watch_queue_mentions_id"
+q='{"records":[{"movieId":12},{"movieId":99}]}'
+assert_success "queued movie is a hold" purge_watch_queue_mentions_id "$q" movieId 12
+assert_failure "other movie is not queued" purge_watch_queue_mentions_id "$q" movieId 3
 
 test_suite "purge_watch_season_number"
 assert_eq "2" "$(purge_watch_season_number '/data/media/tv/Show Name/Season 2/ep.mkv')" "Season 2 file"

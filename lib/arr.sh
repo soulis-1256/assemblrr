@@ -71,9 +71,12 @@ qbit_vpn_enabled() {
 #    e.g. ',"web_ui_username":"x","web_ui_password":"y"'
 qbit_core_prefs_json() {
     local extras="${1:-}"
-    local iface=""
+    local iface
     if qbit_vpn_enabled; then
         iface=',"current_network_interface":"tun0"'
+    else
+        # Empty string clears a leftover tun0 bind after VPN is turned off.
+        iface=',"current_network_interface":""'
     fi
     printf '%s' "{\"save_path\":\"/data/torrents\",\"temp_path\":\"/data/torrents/incomplete\",\"temp_path_enabled\":true,\"auto_tmm_enabled\":true${iface}${extras}}"
 }
@@ -190,6 +193,35 @@ qbit_create_category() {
     log_step "${service_name}: qBittorrent '${category}' category → ${save_path}"
     rm -f "$qbit_cookie_jar"
     return 0
+}
+
+# Point an existing *arr qBittorrent client at the current host
+# (gluetun when VPN is on, qbittorrent when off).
+arr_update_qb_host() {
+    local service_name="$1"
+    local port="$2"
+    local apikey="$3"
+    local host="${QBITTORRENT_HOST:-qbittorrent}"
+    local clients dc_id existing updated result
+
+    [ -n "$apikey" ] || return 1
+    clients=$(api_get "$port" "/api/v3/downloadclient" "$apikey")
+    dc_id=$(echo "$clients" | jq -r \
+        '[.[] | select(.implementationName == "qBittorrent" or .implementation == "QBittorrent")][0].id // empty' \
+        2>/dev/null || true)
+    [ -n "$dc_id" ] || return 1
+    existing=$(echo "$clients" | jq --argjson id "$dc_id" '.[] | select(.id == $id)' 2>/dev/null || true)
+    [ -n "$existing" ] || return 1
+    updated=$(echo "$existing" | jq --arg host "$host" \
+        '.fields = [.fields[] | if .name == "host" then .value = $host else . end]' \
+        2>/dev/null || true)
+    [ -n "$updated" ] || return 1
+    result=$(api_put "$port" "/api/v3/downloadclient/${dc_id}" "$apikey" "$updated")
+    if jq_json_has_key "$result" "id"; then
+        log_step "${service_name}: qBittorrent host → ${host}"
+        return 0
+    fi
+    return 1
 }
 
 # --- Shared *arr service configuration ---
@@ -585,13 +617,11 @@ prowlarr_set_app_profile_min_seeders() {
     return 1
 }
 
-# Indexer defaults: minSeeders=0, seed ratio 1.0, seed time 7d (override: ASSEMBLRR_SEED_RATIO / ASSEMBLRR_SEED_TIME_MINUTES).
+# Indexer default: minSeeders=0 only. Seed ratio/time are left as the user set them.
 arr_set_indexer_min_seeders() {
     local service_name="$1"
     local port="$2"
     local apikey="$3"
-    local seed_ratio="${ASSEMBLRR_SEED_RATIO:-1.0}"
-    local seed_time="${ASSEMBLRR_SEED_TIME_MINUTES:-10080}"
 
     [ -z "$apikey" ] && return 1
 
@@ -607,13 +637,9 @@ arr_set_indexer_min_seeders() {
         [ -z "$idx" ] && continue
         idx_id=$(echo "$idx" | jq -r '.id // empty')
         [ -z "$idx_id" ] && continue
-        idx_payload=$(echo "$idx" | jq \
-            --argjson ratio "$seed_ratio" \
-            --argjson stime "$seed_time" '
+        idx_payload=$(echo "$idx" | jq '
             .fields = [.fields[] |
                 if .name == "minimumSeeders" then .value = 0
-                elif .name == "seedCriteria.seedRatio" then .value = $ratio
-                elif .name == "seedCriteria.seedTime" then .value = $stime
                 else . end
             ]
         ' 2>/dev/null || echo "")
@@ -625,7 +651,7 @@ arr_set_indexer_min_seeders() {
     done < <(echo "$indexers" | jq -c '.[]' 2>/dev/null || true)
 
     if [ "$ok" -gt 0 ]; then
-        log_step "${service_name}: indexer seedCriteria ratio=${seed_ratio} time=${seed_time}m, minSeeders=0 (${ok})"
+        log_step "${service_name}: indexer minSeeders=0 (${ok})"
         return 0
     fi
     return 1

@@ -191,18 +191,37 @@ wait_for_services() {
         ready=0
         waiting=()
 
-        local svc state health
+        local svc state health label port path kind
+        declare -A st_state=()
+        declare -A st_health=()
         while IFS=$'\t' read -r svc state health; do
             [ -z "$svc" ] && continue
-            total=$((total + 1))
-            if type service_row_ready >/dev/null 2>&1 && service_row_ready "$state" "$health"; then
-                ready=$((ready + 1))
-            elif ! type service_row_ready >/dev/null 2>&1 && [ "$(echo "$state" | tr '[:upper:]' '[:lower:]')" = "running" ]; then
-                ready=$((ready + 1))
-            else
-                waiting+=("$svc")
-            fi
+            st_state["$svc"]="$state"
+            st_health["$svc"]="$health"
         done < <(_status_compose_rows)
+
+        if type list_service_catalog >/dev/null 2>&1; then
+            while IFS='|' read -r svc label port path kind; do
+                [ -z "$svc" ] && continue
+                total=$((total + 1))
+                state="${st_state[$svc]:-}"
+                health="${st_health[$svc]:-}"
+                if type service_row_ready >/dev/null 2>&1 && service_row_ready "$state" "$health"; then
+                    ready=$((ready + 1))
+                else
+                    waiting+=("$svc")
+                fi
+            done < <(list_service_catalog)
+        else
+            for svc in "${!st_state[@]}"; do
+                total=$((total + 1))
+                if [ "$(echo "${st_state[$svc]}" | tr '[:upper:]' '[:lower:]')" = "running" ]; then
+                    ready=$((ready + 1))
+                else
+                    waiting+=("$svc")
+                fi
+            done
+        fi
 
         if [ "$total" -gt 0 ] && [ "$ready" -eq "$total" ]; then
             echo >&2
@@ -558,7 +577,7 @@ stop_app() {
 # Uses Service name (compose key), not container name.
 _status_compose_rows() {
     # format: service<TAB>state<TAB>health  (health may be empty)
-    "${DC[@]}" ps --format '{{.Service}}\t{{.State}}\t{{.Health}}' 2>/dev/null
+    "${DC[@]}" ps -a --format '{{.Service}}\t{{.State}}\t{{.Health}}' 2>/dev/null
 }
 
 _status_normalize() {

@@ -107,6 +107,87 @@ purge_watch_folder_has_video() {
     \) 2>/dev/null | grep -q .
 }
 
+# Incomplete copies / qB leftovers mean an upgrade is still writing.
+purge_watch_folder_busy() {
+    local folder="$1"
+    [ -d "$folder" ] || return 1
+    purge_watch_folder_has_video "$folder" && return 0
+    find "$folder" -type f \( \
+        -iname '*.part' -o -iname '*.!qB' -o -iname '*.partial' -o \
+        -iname '*.tmp' -o -iname '*.temp' \
+    \) 2>/dev/null | grep -q .
+}
+
+purge_watch_arr_key() {
+    local svc="$1"
+    local f="${CONFIG_DIR:-/config}/${svc}/config.xml"
+    [ -f "$f" ] || return 1
+    sed -n 's/.*<ApiKey>\(.*\)<\/ApiKey>.*/\1/p' "$f" 2>/dev/null | head -1
+}
+
+# History JSON: hold if a recent file-delete was an *arr upgrade.
+purge_watch_json_has_upgrade_delete() {
+    printf '%s' "${1:-}" | jq -e '
+        def recs: if type == "array" then . elif has("records") then .records else [] end;
+        recs[]
+        | ((.eventType // "") | ascii_downcase) as $e
+        | ((.data.reason // "") | ascii_downcase) as $r
+        | select(($e == "moviefiledeleted" or $e == "episodefiledeleted") and $r == "upgrade")
+    ' >/dev/null 2>&1
+}
+
+# Queue JSON: hold if movieId/seriesId is in the queue.
+purge_watch_queue_mentions_id() {
+    local json="${1:-}"
+    local key="$2"
+    local id="$3"
+    [ -n "$id" ] || return 1
+    printf '%s' "$json" | jq -e --arg k "$key" --argjson id "$id" '
+        def recs: if type == "array" then . elif has("records") then .records else [] end;
+        recs | any(.[]; ((.[$k] // 0) | tonumber) == $id)
+    ' >/dev/null 2>&1
+}
+
+purge_watch_arr_get() {
+    local url="$1" key="$2" path="$3"
+    curl -sf --connect-timeout 3 -H "X-Api-Key: ${key}" "${url}${path}" 2>/dev/null || true
+}
+
+# 0 = do not purge (upgrade/import still in flight, or *arr unreachable).
+purge_watch_arr_hold() {
+    local arr_path="$1"
+    local season="${2:-}"
+    local key json id hist queue
+
+    if [ -n "$season" ]; then
+        key=$(purge_watch_arr_key sonarr || true)
+        [ -n "$key" ] || return 0
+        json=$(purge_watch_arr_get "${SONARR_URL:-http://sonarr:8989}" "$key" "/api/v3/series")
+        id=$(printf '%s' "$json" | jq -r --arg p "$arr_path" '
+            .[]? | select((.path // "") == $p) | .id
+        ' 2>/dev/null | head -1)
+        [ -n "$id" ] || return 1
+        queue=$(purge_watch_arr_get "${SONARR_URL:-http://sonarr:8989}" "$key" "/api/v3/queue")
+        purge_watch_queue_mentions_id "$queue" "seriesId" "$id" && return 0
+        hist=$(purge_watch_arr_get "${SONARR_URL:-http://sonarr:8989}" "$key" "/api/v3/history?seriesId=${id}&pageSize=20")
+        purge_watch_json_has_upgrade_delete "$hist" && return 0
+        return 1
+    fi
+
+    key=$(purge_watch_arr_key radarr || true)
+    [ -n "$key" ] || return 0
+    json=$(purge_watch_arr_get "${RADARR_URL:-http://radarr:7878}" "$key" "/api/v3/movie")
+    id=$(printf '%s' "$json" | jq -r --arg p "$arr_path" '
+        .[]? | select((.path // "") == $p) | .id
+    ' 2>/dev/null | head -1)
+    [ -n "$id" ] || return 1
+    queue=$(purge_watch_arr_get "${RADARR_URL:-http://radarr:7878}" "$key" "/api/v3/queue")
+    purge_watch_queue_mentions_id "$queue" "movieId" "$id" && return 0
+    hist=$(purge_watch_arr_get "${RADARR_URL:-http://radarr:7878}" "$key" "/api/v3/history?movieId=${id}&pageSize=20")
+    purge_watch_json_has_upgrade_delete "$hist" && return 0
+    return 1
+}
+
 # --- sourced by unit tests: stop here ---
 if [ "${PURGE_WATCH_SOURCE_ONLY:-0}" = "1" ]; then
     return 0 2>/dev/null || exit 0
@@ -165,12 +246,16 @@ handle_event() {
         # treat an empty series folder as "the show is done".
         local sfolder
         sfolder=$(purge_watch_season_folder "$folder" "$season" || true)
-        if [ -n "$sfolder" ] && purge_watch_folder_has_video "$sfolder"; then
+        if [ -n "$sfolder" ] && purge_watch_folder_busy "$sfolder"; then
             return 0
         fi
         sleep "$UPGRADE_GRACE_SEC"
         sfolder=$(purge_watch_season_folder "$folder" "$season" || true)
-        if [ -n "$sfolder" ] && purge_watch_folder_has_video "$sfolder"; then
+        if [ -n "$sfolder" ] && purge_watch_folder_busy "$sfolder"; then
+            return 0
+        fi
+        if purge_watch_arr_hold "$arr_path" "$season"; then
+            log "hold $arr_path season ${season} (queue or upgrade in *arr)"
             return 0
         fi
         LAST_PURGE_PATH="$dedup_key"
@@ -180,11 +265,15 @@ handle_event() {
         return 0
     fi
 
-    if purge_watch_folder_has_video "$folder"; then
+    if purge_watch_folder_busy "$folder"; then
         return 0
     fi
     sleep "$UPGRADE_GRACE_SEC"
-    if purge_watch_folder_has_video "$folder"; then
+    if purge_watch_folder_busy "$folder"; then
+        return 0
+    fi
+    if purge_watch_arr_hold "$arr_path" ""; then
+        log "hold $arr_path (queue or upgrade in *arr)"
         return 0
     fi
 

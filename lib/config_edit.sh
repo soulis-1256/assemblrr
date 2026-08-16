@@ -256,6 +256,19 @@ _config_edit_indexers() {
     if ui_picker_cancelled; then
         return 0
     fi
+    if [ "${#SELECTED_INDEXERS[@]}" -eq 0 ]; then
+        local wipe="n"
+        if [ -t 0 ] && [ "${ASSEMBLRR_NONINTERACTIVE:-0}" != "1" ]; then
+            echo
+            log_warning "No indexers selected."
+            read -p "Remove ALL Prowlarr indexers? (y/N) [Default = n]: " wipe
+            wipe=${wipe:-n}
+        fi
+        if [ "${wipe,,}" != "y" ]; then
+            log_info "Leaving Prowlarr indexers unchanged."
+            return 0
+        fi
+    fi
     sync_selected_indexers "$PROWLARR_API_KEY"
     wait_for_arr_indexer_sync "$RADARR_API_KEY" || true
     arr_set_indexer_min_seeders "Radarr" "7878" "$RADARR_API_KEY" || true
@@ -392,6 +405,14 @@ _config_edit_vpn() {
     fi
     _config_edit_restart_stack
     qbit_set_credentials || true
+    if [ -n "${RADARR_API_KEY:-}" ]; then
+        wait_for_api "Radarr" "7878" "$RADARR_API_KEY" || true
+        arr_update_qb_host "Radarr" "7878" "$RADARR_API_KEY" || true
+    fi
+    if [ -n "${SONARR_API_KEY:-}" ]; then
+        wait_for_api "Sonarr" "8989" "$SONARR_API_KEY" || true
+        arr_update_qb_host "Sonarr" "8989" "$SONARR_API_KEY" || true
+    fi
 }
 
 _config_edit_media() {

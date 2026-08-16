@@ -20,10 +20,10 @@ assert_contains "$json" '"save_path":"/data/torrents"' "save path always set"
 assert_contains "$json" '"temp_path_enabled":true' "incomplete path on"
 assert_contains "$json" '"auto_tmm_enabled":true' "ATM on so category paths are used"
 
-test_suite "qbit_core_prefs_json VPN off leaves interface unset"
+test_suite "qbit_core_prefs_json VPN off clears interface"
 VPN_ENABLED=n
 json=$(qbit_core_prefs_json)
-assert_not_contains "$json" "current_network_interface" "VPN=n does not force an interface"
+assert_contains "$json" '"current_network_interface":""' "VPN=n clears leftover tun0"
 assert_contains "$json" '"save_path":"/data/torrents"' "save path still set"
 assert_contains "$json" '"auto_tmm_enabled":true' "ATM still on without VPN"
 
