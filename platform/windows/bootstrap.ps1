@@ -69,7 +69,7 @@ $wslSourcePath = "/mnt/$driveLetter" + ($tempDir.Substring(2) -replace '\\', '/'
 wsl -d $defaultDistro -- bash -c "cp -r $wslSourcePath/* /tmp/$AppName/ && cp -r $wslSourcePath/.env.example $wslSourcePath/.gitignore /tmp/$AppName/ 2>/dev/null; true"
 
 # Fix line endings and set permissions
-wsl -d $defaultDistro -- bash -c "sed -i 's/\r$//' /tmp/$AppName/bin/*.sh /tmp/$AppName/lib/*.sh /tmp/$AppName/branding.conf /tmp/$AppName/compose/*.yaml /tmp/$AppName/compose/examples/*.yaml /tmp/$AppName/templates/*.env /tmp/$AppName/templates/*.yml /tmp/$AppName/scripts/*.sh /tmp/$AppName/platform/linux/bootstrap.sh 2>/dev/null; true"
+wsl -d $defaultDistro -- bash -c "sed -i 's/\r$//' /tmp/$AppName/.env.example /tmp/$AppName/bin/*.sh /tmp/$AppName/lib/*.sh /tmp/$AppName/branding.conf /tmp/$AppName/compose/*.yaml /tmp/$AppName/compose/examples/*.yaml /tmp/$AppName/templates/*.env /tmp/$AppName/templates/*.yml /tmp/$AppName/scripts/*.sh /tmp/$AppName/platform/linux/bootstrap.sh 2>/dev/null; true"
 wsl -d $defaultDistro -- bash -c "chmod +x /tmp/$AppName/bin/*.sh /tmp/$AppName/lib/*.sh /tmp/$AppName/scripts/*.sh /tmp/$AppName/platform/linux/bootstrap.sh 2>/dev/null; true"
 
 # Cleanup temp directory

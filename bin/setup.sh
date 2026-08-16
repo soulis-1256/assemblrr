@@ -347,7 +347,7 @@ generate_env_file() {
     fi
     # Explicit key list so envsubst does not pull in unrelated shell variables
     envsubst '${PUID} ${PGID} ${MEDIA_DIRECTORY} ${INSTALL_DIRECTORY} ${MEDIA_SERVICE} ${TZ} ${VPN_ENABLED} ${VPN_SERVICE} ${VPN_TYPE} ${WIREGUARD_ADDRESSES} ${PORT_FORWARD_ONLY} ${VPN_PORT_FORWARDING} ${API_HOST}' \
-        < "$env_template" > "$env_file" || \
+        < "$env_template" | tr -d '\r' > "$env_file" || \
         log_error "Failed to generate .env file"
 
     chmod 600 "$env_file"

@@ -263,6 +263,7 @@ services:
   # Deletes under /data/media → purge *arr entry + qB torrent/files
   media-purge-watch:
     image: assemblrr/media-purge-watch:local
+    pull_policy: build
     build:
       context: ${INSTALL_DIRECTORY}/compose/sidecars
       dockerfile: media-purge-watch.Dockerfile

@@ -44,6 +44,7 @@ safe_source() {
 
     local line
     while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%$'\r'}"
         # Skip blank lines and comments
         [[ "$line" =~ ^[[:space:]]*$ ]] && continue
         [[ "$line" =~ ^[[:space:]]*# ]] && continue
@@ -63,8 +64,9 @@ safe_source() {
         esac
     done < "$file"
 
+    # Strip CR so a .env written from a Windows clone / drvfs mount can be sourced
     # shellcheck disable=SC1090
-    source "$file"
+    source <(tr -d '\r' < "$file")
 }
 
 # --- Install directory discovery ---

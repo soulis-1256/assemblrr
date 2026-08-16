@@ -46,4 +46,10 @@ assert_contains "$recyclarr_image" "ghcr.io/recyclarr/recyclarr:8" "pins major t
 assert_not_contains "$recyclarr_image" ":latest" "does not use unpublished :latest"
 assert_contains "$(grep CRON "$REPO_ROOT/compose/base.yaml")" "CRON_SCHEDULE" "uses CRON_SCHEDULE"
 
+test_suite "local sidecar images do not pull from a registry"
+assert_contains "$(awk '/media-purge-watch:/,/^  [a-z]/{print}' "$REPO_ROOT/compose/base.yaml")" \
+    "pull_policy: build" "media-purge-watch builds locally"
+assert_contains "$(awk '/vpn-watchdog:/,/^  [a-z]/{print}' "$REPO_ROOT/compose/vpn.yaml")" \
+    "pull_policy: build" "vpn-watchdog builds locally"
+
 test_summary

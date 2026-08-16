@@ -58,6 +58,17 @@ assert_failure "fails on missing file" bash -c "
   safe_source '$tmp/no-such-file'
 "
 
+crlf="$tmp/crlf.env"
+printf 'FOO=from_crlf\r\nBAZ=ok\r\n' > "$crlf"
+assert_success "accepts CRLF KEY=VALUE file" bash -c "
+  source '$REPO_ROOT/lib/core.sh'
+  safe_source '$crlf'
+"
+unset FOO BAZ
+safe_source "$crlf"
+assert_eq "from_crlf" "${FOO:-}" "CRLF FOO has no carriage return"
+assert_eq "ok" "${BAZ:-}" "CRLF BAZ sourced"
+
 # --- _is_safe_rm_path ---
 test_suite "_is_safe_rm_path"
 assert_failure "refuses empty path" _is_safe_rm_path ""

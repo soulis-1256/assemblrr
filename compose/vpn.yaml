@@ -74,6 +74,7 @@ services:
 
   vpn-watchdog:
     image: assemblrr/vpn-watchdog:local
+    pull_policy: build
     build:
       context: ${INSTALL_DIRECTORY}/compose/sidecars
       dockerfile: vpn-watchdog.Dockerfile
