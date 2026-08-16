@@ -1,10 +1,31 @@
 # assemblrr Windows Bootstrap
 # Clones the repository, copies to WSL2, and launches setup.sh
+#
+# Usage:
+#   irm https://raw.githubusercontent.com/soulis-1256/assemblrr/main/platform/windows/bootstrap.ps1 | iex
+#   $env:ASSEMBLRR_REF = "dev"; irm ... | iex
+#   .\bootstrap.ps1 -Ref dev
+#
+# Ref: -Ref / -Branch / $env:ASSEMBLRR_REF (default: main)
+
+param(
+    [Parameter(Mandatory = $false)]
+    [Alias("Branch")]
+    [string]$Ref = ""
+)
 
 $ErrorActionPreference = "Stop"
 
 $AppName = "assemblrr"
 $RepoURL = "https://github.com/soulis-1256/assemblrr"
+
+if (-not $Ref) {
+    if ($env:ASSEMBLRR_REF) {
+        $Ref = $env:ASSEMBLRR_REF
+    } else {
+        $Ref = "main"
+    }
+}
 
 # Step 1: Check WSL2 is available
 if (-not (Get-Command wsl -ErrorAction SilentlyContinue)) {
@@ -46,12 +67,11 @@ Write-Host "Using WSL2 distro: $defaultDistro" -ForegroundColor Green
 Write-Host ""
 
 # Step 4: Clone repository to temporary Windows directory
-Write-Host "Cloning repository..." -ForegroundColor White
+Write-Host "Cloning repository @ $Ref..." -ForegroundColor White
 $tempDir = [System.IO.Path]::GetTempPath() + $AppName + "." + [System.Guid]::NewGuid().ToString("N").Substring(0, 8)
-try {
-    git clone --depth=1 $RepoURL $tempDir
-} catch {
-    Write-Host "Failed to clone repository. Is git installed?" -ForegroundColor Red
+git clone --depth=1 --branch $Ref $RepoURL $tempDir
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Failed to clone repository @ $Ref. Is git installed and is the ref valid?" -ForegroundColor Red
     exit 1
 }
 Write-Host "Repository cloned." -ForegroundColor Green

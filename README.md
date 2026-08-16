@@ -44,12 +44,29 @@ fish (no `<(...)` process substitution — use `psub` instead):
 bash (curl -fsSL https://raw.githubusercontent.com/soulis-1256/assemblrr/main/platform/linux/bootstrap.sh | psub)
 ```
 
+Install a branch or tag (always curl bootstrap from `main`; pass the ref to the installer):
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/soulis-1256/assemblrr/main/platform/linux/bootstrap.sh) --ref dev
+# or: ASSEMBLRR_REF=dev bash <(curl -fsSL https://raw.githubusercontent.com/soulis-1256/assemblrr/main/platform/linux/bootstrap.sh)
+```
+
+```fish
+bash (curl -fsSL https://raw.githubusercontent.com/soulis-1256/assemblrr/main/platform/linux/bootstrap.sh | psub) --ref dev
+```
+
 ### Windows (PowerShell)
 
 Ensure Docker Desktop is running before execution.
 
 ```powershell
 irm https://raw.githubusercontent.com/soulis-1256/assemblrr/main/platform/windows/bootstrap.ps1 | iex
+```
+
+Install a branch or tag:
+
+```powershell
+$env:ASSEMBLRR_REF = "dev"; irm https://raw.githubusercontent.com/soulis-1256/assemblrr/main/platform/windows/bootstrap.ps1 | iex
 ```
 
 ## Usage (CLI)
