@@ -467,30 +467,60 @@ get_user_info() {
     export username puid pgid
 }
 
+_probe_selected_storage() {
+    local p root
+    local -A seen=()
+    for p in "$install_directory" "$media_directory"; do
+        storage_needs_probe "$p" || continue
+        root=$(storage_mount_root "$p")
+        [ -n "$root" ] || continue
+        [ -n "${seen[$root]:-}" ] && continue
+        seen[$root]=1
+        log_info "Checking ${root} is responding..."
+        if ! probe_writable_path "$root"; then
+            echo
+            log_info "Pick another location (Home is safest), or fix the drive and choose it again."
+            return 1
+        fi
+    done
+    return 0
+}
+
 get_installation_paths() {
     ui_intro \
         "Where should assemblrr store config and media? External drives (WSL E:, USB, …) show up in the list." \
         "Change install and media directories. This does not move existing files."
 
-    pick_storage_paths
-    install_directory=$(expand_path "$install_directory")
-    media_directory=$(expand_path "$media_directory")
+    while true; do
+        pick_storage_paths
+        install_directory=$(expand_path "$install_directory")
+        media_directory=$(expand_path "$media_directory")
 
-    # VPN gate bootstraps ~/assemblrr first. If the user then picked another
-    # install path, drop that leftover tree so CLI discovery cannot shadow it.
-    if [ -n "${_ASSEMBLRR_PROVISIONAL_INSTALL:-}" ] && \
-       [ "$install_directory" != "$_ASSEMBLRR_PROVISIONAL_INSTALL" ] && \
-       [ -d "$_ASSEMBLRR_PROVISIONAL_INSTALL" ]; then
-        log_info "Install path changed — removing temporary files at $_ASSEMBLRR_PROVISIONAL_INSTALL"
-        safe_rm_rf "$_ASSEMBLRR_PROVISIONAL_INSTALL"
-    fi
+        if ! _probe_selected_storage; then
+            continue
+        fi
 
-    create_and_verify_directory "$install_directory" "installation"
-    setup_directory_structure "$media_directory"
-    verify_user_permissions "$username" "$media_directory"
+        # Record both paths before any copy so uninstall can find an external
+        # drive even if setup dies mid-copy.
+        write_install_pointer "$install_directory" "$media_directory"
 
-    log_success "Install directory: $install_directory"
-    log_success "Media directory: $media_directory"
+        # VPN gate bootstraps ~/assemblrr first. If the user then picked another
+        # install path, drop that leftover tree so CLI discovery cannot shadow it.
+        if [ -n "${_ASSEMBLRR_PROVISIONAL_INSTALL:-}" ] && \
+           [ "$install_directory" != "$_ASSEMBLRR_PROVISIONAL_INSTALL" ] && \
+           [ -d "$_ASSEMBLRR_PROVISIONAL_INSTALL" ]; then
+            log_info "Install path changed — removing temporary files at $_ASSEMBLRR_PROVISIONAL_INSTALL"
+            safe_rm_rf "$_ASSEMBLRR_PROVISIONAL_INSTALL"
+        fi
+
+        create_and_verify_directory "$install_directory" "installation"
+        setup_directory_structure "$media_directory"
+        verify_user_permissions "$username" "$media_directory"
+
+        log_success "Install directory: $install_directory"
+        log_success "Media directory: $media_directory"
+        break
+    done
 
     export install_directory media_directory
 }

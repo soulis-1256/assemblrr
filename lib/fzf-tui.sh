@@ -67,19 +67,36 @@ format_path_menu() {
 }
 
 _fzf_select_path_row() {
-    local data="$1"
-    local selected=""
+    local def_install="${1:-}"
+    local def_media="${2:-}"
+    local data selected="" gen=""
+    poke_wsl_automounts 2>/dev/null || true
+    data=$(format_path_menu "$def_install" "$def_media")
     if _fzf_can_render && _fzf_has_tty; then
+        gen=$(mktemp)
+        cat > "$gen" <<EOF
+#!/bin/bash
+set -euo pipefail
+# shellcheck source=/dev/null
+source $(printf '%q' "$_fzf_tui_dir/core.sh")
+# shellcheck source=/dev/null
+source $(printf '%q' "$_fzf_tui_dir/fzf-tui.sh")
+poke_wsl_automounts 2>/dev/null || true
+format_path_menu $(printf '%q' "$def_install") $(printf '%q' "$def_media")
+EOF
+        chmod +x "$gen"
         selected=$(echo "$data" | fzf \
             --delimiter=$'\t' \
             --with-nth=2,3 \
             --prompt="Install location> " \
-            --header="↑↓=navigate  Enter=confirm  Esc=home default" \
+            --header="↑↓=navigate  Enter=confirm  r=refresh drives  Esc=home default" \
+            --bind="r:reload($gen)+clear-query" \
             --height=60% \
             --reverse \
             --border \
             --scrollbar='│' \
             2>/dev/null) || true
+        rm -f "$gen"
         echo "$selected"
         return 0
     fi
@@ -178,8 +195,7 @@ pick_storage_paths() {
     fi
 
     while true; do
-        data=$(format_path_menu "$def_install" "$def_media")
-        row=$(_fzf_select_path_row "$data")
+        row=$(_fzf_select_path_row "$def_install" "$def_media")
         if [ -z "$row" ]; then
             install_directory="$def_install"
             media_directory="$def_media"

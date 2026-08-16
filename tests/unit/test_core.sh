@@ -83,12 +83,53 @@ printf 'INSTALL_DIRECTORY="%s"\n' "$fid_home/on-disk" > "$fid_home/.assemblrr-co
 assert_eq "$fid_home/on-disk" "$(HOME="$fid_home" find_install_directory)" \
     "pointer wins over leftover ~/assemblrr"
 
+test_suite "write_install_pointer + leftovers"
+ptr_home="$tmp/ptr-home"
+mkdir -p "$ptr_home"
+HOME="$ptr_home" write_install_pointer /mnt/e/assemblrr /mnt/e/assemblrr-media
+assert_contains "$(cat "$ptr_home/.assemblrr-config")" 'INSTALL_DIRECTORY="/mnt/e/assemblrr"' "pointer has install"
+assert_contains "$(cat "$ptr_home/.assemblrr-config")" 'MEDIA_DIRECTORY="/mnt/e/assemblrr-media"' "pointer has media"
+HOME="$ptr_home" load_install_pointer
+assert_eq "/mnt/e/assemblrr" "${INSTALL_DIRECTORY:-}" "load install"
+assert_eq "/mnt/e/assemblrr-media" "${MEDIA_DIRECTORY:-}" "load media"
+
+empty_inst="$ptr_home/assemblrr"
+mkdir -p "$empty_inst"
+mkdir -p "$ptr_home/assemblrr-media/torrents/movies"
+mkdir -p "$ptr_home/not-ours/assemblrr-media"
+assert_success "empty named tree is leftover install" is_assemblrr_install_tree "$empty_inst"
+assert_success "torrents/movies is leftover media" is_assemblrr_media_tree "$ptr_home/assemblrr-media"
+assert_failure "unrelated folder is not leftover media" is_assemblrr_media_tree "$ptr_home/not-ours/assemblrr-media"
+left=$(HOME="$ptr_home" list_assemblrr_leftovers)
+assert_contains "$left" $'install\t'"$empty_inst" "lists home leftover install"
+assert_contains "$left" $'media\t'"$ptr_home/assemblrr-media" "lists home leftover media"
+skipped=$(HOME="$ptr_home" list_assemblrr_leftovers "$empty_inst" "$ptr_home/assemblrr-media")
+assert_eq "" "$skipped" "skips known paths"
+
 test_suite "storage_root_label"
 assert_eq "Windows E:" "$(storage_root_label /mnt/e)" "WSL E:"
 assert_eq "Windows C:" "$(storage_root_label /mnt/c/)" "strips trailing slash"
 assert_eq "Seagate" "$(storage_root_label /media/user/Seagate)" "linux /media"
 assert_eq "USB" "$(storage_root_label /run/media/user/USB)" "linux /run/media"
 assert_eq "/data" "$(storage_root_label /data)" "other path unchanged"
+
+test_suite "storage_mount_root / storage_needs_probe"
+assert_eq "/mnt/e" "$(storage_mount_root /mnt/e)" "letter is the root"
+assert_eq "/mnt/e" "$(storage_mount_root /mnt/e/assemblrr)" "strips under WSL letter"
+assert_eq "/mnt/e" "$(storage_mount_root /mnt/e/assemblrr-media/)" "media path"
+assert_eq "/media/u/disk" "$(storage_mount_root /media/u/disk/foo)" "linux /media label"
+assert_eq "/run/media/u/USB" "$(storage_mount_root /run/media/u/USB/data)" "run/media label"
+assert_eq "/home/u/assemblrr" "$(storage_mount_root /home/u/assemblrr)" "home unchanged"
+assert_success "WSL letter needs probe" storage_needs_probe /mnt/e/assemblrr
+assert_success "linux media needs probe" storage_needs_probe /media/u/disk
+assert_failure "home does not need probe" storage_needs_probe /home/u/assemblrr
+
+test_suite "probe_writable_path"
+probe_ok="$tmp/probe-ok"
+mkdir -p "$probe_ok"
+assert_success "writable tmp is ok" probe_writable_path "$probe_ok"
+assert_true "probe file cleaned up" "[ -z \"\$(ls -A \"$probe_ok\"/.assemblrr-write-test.* 2>/dev/null)\" ]"
+assert_failure "missing path fails" probe_writable_path "$tmp/no-such-dir/nested"
 
 test_suite "ensure_local_bin_on_path"
 path_home="$tmp/path-home"

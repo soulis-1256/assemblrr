@@ -44,7 +44,9 @@ if [ -z "$INSTALL_DIR" ]; then
     log_error "Could not find ${APP_NAME:-assemblrr} installation. Run setup first."
 fi
 
-# Source runtime config (may be partial during mid-setup abort)
+# Pointer first — has MEDIA_DIRECTORY even when the install tree never finished
+# (path picker chose /mnt/e, then copy hung). Install-dir config overrides.
+load_install_pointer || true
 if [ -f "$INSTALL_DIR/.assemblrr-config" ]; then
     safe_source "$INSTALL_DIR/.assemblrr-config"
 elif [ -f "$INSTALL_DIR/.${APP_NAME:-assemblrr}-config" ]; then
@@ -428,6 +430,30 @@ uninstall_app() {
     else
         log_info "Media directory preserved at $MEDIA_DIRECTORY"
     fi
+
+    # Path picker / hung setup can leave assemblrr trees on other mounts
+    # (e.g. /mnt/e) that the pointer never recorded.
+    poke_wsl_automounts 2>/dev/null || true
+    local leftover_kind leftover_path
+    while IFS=$'\t' read -r leftover_kind leftover_path; do
+        [ -n "$leftover_path" ] || continue
+        case "$leftover_kind" in
+            install)
+                log_warning "Found leftover install at $leftover_path"
+                safe_rm_rf "$leftover_path"
+                log_warning "Leftover install deleted"
+                ;;
+            media)
+                if [ "$delete_media" = true ]; then
+                    log_warning "Found leftover media at $leftover_path"
+                    safe_rm_rf "$leftover_path"
+                    log_warning "Leftover media deleted"
+                else
+                    log_info "Left leftover media at $leftover_path (pass --media to delete)"
+                fi
+                ;;
+        esac
+    done < <(list_assemblrr_leftovers "$INSTALL_DIR" "$MEDIA_DIRECTORY")
 
     echo "Removing CLI..."
     if [ -n "${APP_CLI_NAME:-}" ]; then

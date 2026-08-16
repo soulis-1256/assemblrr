@@ -98,6 +98,78 @@ find_install_directory() {
     return 1
 }
 
+# Home pointer so the CLI can find a non-default (or mid-setup) install.
+# Includes MEDIA_DIRECTORY so uninstall --media can see an external drive
+# even if the install tree was never finished.
+write_install_pointer() {
+    local install_dir="$1"
+    local media_dir="${2:-}"
+    local pointer="$HOME/.assemblrr-config"
+    {
+        printf 'INSTALL_DIRECTORY="%s"\n' "$install_dir"
+        if [ -n "$media_dir" ]; then
+            printf 'MEDIA_DIRECTORY="%s"\n' "$media_dir"
+        fi
+    } > "$pointer"
+    chmod 600 "$pointer"
+}
+
+load_install_pointer() {
+    local pointer=""
+    if [ -f "$HOME/.assemblrr-config" ]; then
+        pointer="$HOME/.assemblrr-config"
+    elif [ -f "$HOME/.${APP_NAME:-assemblrr}-config" ]; then
+        pointer="$HOME/.${APP_NAME:-assemblrr}-config"
+    else
+        return 1
+    fi
+    safe_source "$pointer"
+}
+
+is_assemblrr_install_tree() {
+    local d="$1"
+    local name="${APP_NAME:-assemblrr}"
+    [ -d "$d" ] || return 1
+    [ "$(basename "$d")" = "$name" ] || return 1
+    if [ -f "$d/.assemblrr-config" ] || [ -f "$d/.${name}-config" ] || \
+       [ -f "$d/cli.sh" ] || [ -f "$d/compose/base.yaml" ] || [ -d "$d/lib" ]; then
+        return 0
+    fi
+    # mkdir-only leftover from a setup that died before copying files
+    [ -z "$(find "$d" -mindepth 1 -maxdepth 1 2>/dev/null | head -1)" ]
+}
+
+is_assemblrr_media_tree() {
+    local d="$1"
+    local name="${APP_NAME:-assemblrr}"
+    [ -d "$d" ] || return 1
+    [ "$(basename "$d")" = "${name}-media" ] || return 1
+    [ -d "$d/torrents/movies" ] || [ -d "$d/media/movies" ] || [ -d "$d/blackhole" ]
+}
+
+# TSV: kind<TAB>path   kind is install|media
+# Optional $1/$2 are already-known paths to skip.
+list_assemblrr_leftovers() {
+    local skip_install="${1:-}"
+    local skip_media="${2:-}"
+    local root d
+    local -A seen=()
+
+    while IFS= read -r root; do
+        [ -n "$root" ] || continue
+        [ -n "${seen[$root]:-}" ] && continue
+        seen[$root]=1
+        d="${root}/${APP_NAME:-assemblrr}"
+        if [ -d "$d" ] && [ "$d" != "$skip_install" ] && is_assemblrr_install_tree "$d"; then
+            printf 'install\t%s\n' "$d"
+        fi
+        d="${root}/${APP_NAME:-assemblrr}-media"
+        if [ -d "$d" ] && [ "$d" != "$skip_media" ] && is_assemblrr_media_tree "$d"; then
+            printf 'media\t%s\n' "$d"
+        fi
+    done < <({ printf '%s\n' "${HOME:-}"; list_storage_roots; })
+}
+
 # --- Path utilities ---
 
 # Expand tilde in user input paths (no eval — safe from code injection)
@@ -165,6 +237,107 @@ list_storage_roots() {
         [ -r "$d" ] || continue
         _list_storage_emit "$d"
     done
+}
+
+# WSL often does not attach a USB letter until something touches /mnt/<letter>.
+# Ask Windows which letters exist, then ls each so automount can catch up.
+poke_wsl_automounts() {
+    grep -qi microsoft /proc/version 2>/dev/null || return 0
+    local letters letter mountpoint
+    letters=$(timeout 5 cmd.exe /c "wmic logicaldisk get name" 2>/dev/null \
+        | tr -d '\r' | grep -Eo '[A-Za-z]:' | tr -d ':' | tr '[:upper:]' '[:lower:]' || true)
+    for letter in $letters; do
+        mountpoint="/mnt/$letter"
+        mkdir -p "$mountpoint" 2>/dev/null || true
+        timeout 2 ls "$mountpoint" >/dev/null 2>&1 || true
+        if ! grep -Eq "[[:space:]]${mountpoint}[[:space:]]" /proc/mounts 2>/dev/null; then
+            rmdir "$mountpoint" 2>/dev/null || true
+        fi
+    done
+    for mountpoint in /mnt/[a-z]; do
+        [ -d "$mountpoint" ] || continue
+        timeout 2 ls "$mountpoint" >/dev/null 2>&1 || true
+    done
+}
+
+# Mount root for a path we might install onto (/mnt/e/foo → /mnt/e).
+storage_mount_root() {
+    local p="${1%/}"
+    local rest
+    case "$p" in
+        /mnt/[a-z])
+            echo "$p"
+            ;;
+        /mnt/[a-z]/*)
+            rest="${p#/mnt/}"
+            echo "/mnt/${rest%%/*}"
+            ;;
+        /run/media/*)
+            echo "$p" | awk -F/ '{ if (NF >= 5) print "/"$2"/"$3"/"$4"/"$5; else print $0 }'
+            ;;
+        /media/*)
+            echo "$p" | awk -F/ '{ if (NF >= 4) print "/"$2"/"$3"/"$4; else print $0 }'
+            ;;
+        *)
+            echo "$p"
+            ;;
+    esac
+}
+
+# True for WSL drive letters and typical removable-media mounts.
+storage_needs_probe() {
+    case "${1%/}" in
+        /mnt/[a-z]|/mnt/[a-z]/*|/media/*|/run/media/*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+run_with_timeout() {
+    local secs="$1"
+    shift
+    if command -v timeout >/dev/null 2>&1; then
+        timeout --foreground "$secs" "$@"
+    else
+        "$@"
+    fi
+}
+
+# Timed write/read/unlink on the mount. 0 = ok, 1 = fail/timeout (already logged).
+probe_writable_path() {
+    local path="$1"
+    local secs="${2:-8}"
+    local root probe start now elapsed rc=0
+
+    root=$(storage_mount_root "$path")
+    [ -n "$root" ] || return 1
+    probe="$root/.assemblrr-write-test.$$"
+    start=$(date +%s)
+
+    export ASSEMBLRR_PROBE_FILE="$probe"
+    run_with_timeout "$secs" bash -c \
+        'printf ok > "$ASSEMBLRR_PROBE_FILE" && grep -qx ok "$ASSEMBLRR_PROBE_FILE" && rm -f "$ASSEMBLRR_PROBE_FILE"' \
+        || rc=$?
+    unset ASSEMBLRR_PROBE_FILE
+    rm -f "$probe" 2>/dev/null || true
+
+    now=$(date +%s)
+    elapsed=$((now - start))
+
+    if [ "$rc" -eq 124 ]; then
+        log_warning "No response from ${root} after ${secs}s — the drive looks stuck."
+        log_info "Common on flaky USB / WSL drive letters (Explorer may freeze on that disk too)."
+        log_info "From PowerShell:  wsl --shutdown"
+        log_info "Then check the drive in Explorer, or pick Home in the list."
+        return 1
+    fi
+    if [ "$rc" -ne 0 ]; then
+        log_warning "Cannot write to ${root} (disconnected, or no permission)."
+        return 1
+    fi
+    if [ "$elapsed" -ge 3 ]; then
+        log_warning "${root} is slow (${elapsed}s). USB/WSL mounts can stall setup and Docker later."
+    fi
+    return 0
 }
 
 # Persist ~/.local/bin on PATH for bash, zsh, and fish.
@@ -255,13 +428,17 @@ safe_rm_rf() {
 create_and_verify_directory() {
     local dir="$1"
     local dir_type="$2"
+    local rc=0
 
     if [ ! -d "$dir" ]; then
         echo "The directory \"$dir\" does not exist. Attempting to create..."
-        if mkdir -p "$dir"; then
-            log_success "Directory $dir created"
-        else
+        run_with_timeout 15 mkdir -p "$dir" || rc=$?
+        if [ "$rc" -eq 124 ]; then
+            log_error "Timed out creating \"$dir\" (15s). The drive looks stuck (flaky USB / WSL). From PowerShell: wsl --shutdown — then check the drive in Explorer, or re-run setup and pick Home."
+        elif [ "$rc" -ne 0 ]; then
             log_error "Failed to create $dir_type directory at \"$dir\". Check permissions"
+        else
+            log_success "Directory $dir created"
         fi
     fi
 

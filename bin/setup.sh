@@ -249,16 +249,32 @@ source "$APP_ROOT/lib/fzf-tui.sh"
 source "$APP_ROOT/lib/services.sh"
 source "$APP_ROOT/lib/prompts.sh"
 
+_copy_stall_error() {
+    log_error "Timed out writing to ${install_directory} — the drive looks stuck (flaky USB / WSL). From PowerShell: wsl --shutdown — then check the drive in Explorer, or re-run setup and pick Home."
+}
+
 copy_configuration_files() {
-    local copied=0 src dest src_path dest_path dest_dir
-    log_debug "Copying install tree into $install_directory"
+    local copied=0 src dest src_path dest_path dest_dir rc
+    if storage_needs_probe "$install_directory"; then
+        log_info "Copying install files to ${install_directory}..."
+        if ! probe_writable_path "$(storage_mount_root "$install_directory")"; then
+            log_error "Cannot copy install files to ${install_directory}. Pick Home, or fix the drive and re-run setup."
+        fi
+    else
+        log_debug "Copying install tree into $install_directory"
+    fi
     UPGRADE_SOURCE_ROOT="${UPGRADE_SOURCE_ROOT:-$APP_ROOT}"
     while IFS='|' read -r src dest; do
         [ -z "$src" ] && continue
         [[ "$src" =~ ^# ]] && continue
         dest_path="$install_directory/$dest"
         dest_dir=$(dirname "$dest_path")
-        [ -d "$dest_dir" ] || mkdir -p "$dest_dir"
+        if [ ! -d "$dest_dir" ]; then
+            rc=0
+            run_with_timeout 15 mkdir -p "$dest_dir" || rc=$?
+            [ "$rc" -eq 124 ] && _copy_stall_error
+            [ "$rc" -eq 0 ] || log_error "Failed to create $dest_dir"
+        fi
 
         if ! src_path=$(resolve_project_file "$src"); then
             if [[ "$src" == compose/examples/* ]]; then
@@ -269,7 +285,11 @@ copy_configuration_files() {
         fi
 
         log_debug "  $src -> $dest_path"
-        if cp "$src_path" "$dest_path"; then
+        rc=0
+        run_with_timeout 20 cp "$src_path" "$dest_path" || rc=$?
+        if [ "$rc" -eq 124 ]; then
+            _copy_stall_error
+        elif [ "$rc" -eq 0 ]; then
             case "$src" in
                 scripts/*|bin/cli.sh|bin/config.sh|bin/setup.sh) chmod +x "$dest_path" ;;
             esac
@@ -541,11 +561,7 @@ SUBTITLE_LANGUAGE="${subtitle_language:-}"
 SETUP_MODE="${SETUP_MODE:-manual}"
 EOF
     chmod 600 "$config_file"
-    # Pointer so CLI discovery works even for non-default install paths
-    if [ "$config_file" != "$HOME/.${APP_NAME}-config" ]; then
-        printf 'INSTALL_DIRECTORY="%s"\n' "$install_directory" > "$HOME/.${APP_NAME}-config"
-        chmod 600 "$HOME/.${APP_NAME}-config"
-    fi
+    write_install_pointer "$install_directory" "$media_directory"
     log_debug "Runtime config written to $config_file"
 }
 
