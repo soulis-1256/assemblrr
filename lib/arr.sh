@@ -120,7 +120,6 @@ qbit_set_credentials() {
     local wait_time=0
     local max_wait=60
 
-    echo -n "Waiting for qBittorrent to initialize" >&2
     while [ $wait_time -lt $max_wait ]; do
         local qbit_temp_pass
         qbit_temp_pass=$(docker logs qbittorrent 2>&1 | awk -F': ' '/temporary password is provided for this session:/ { print $NF; exit }' || true)
@@ -145,9 +144,9 @@ qbit_set_credentials() {
                 return 0
             fi
         fi
+        wait_inline "Waiting for qBittorrent to initialize" "$wait_time"
         sleep 3
         wait_time=$((wait_time + 3))
-        dot_inline
     done
     echo >&2
     log_warning "Could not login to qBittorrent with temp password"

@@ -12,6 +12,11 @@ stub_log_error_no_exit
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
+# --- wait_inline ---
+test_suite "wait_inline"
+assert_contains "$(wait_inline "Waiting for Radarr API" 12 2>&1)" \
+    "Waiting for Radarr API (12s)" "shows elapsed seconds"
+
 # --- expand_path ---
 test_suite "expand_path"
 assert_eq "$HOME/foo" "$(expand_path "~/foo")" "expands leading tilde"

@@ -24,17 +24,16 @@ test_vpn_connection_shared() {
 
     local wait_time=0
     local max_wait=90
-    echo -n "Waiting for VPN connection"
     while [ $wait_time -lt $max_wait ]; do
         local health
         health=$(docker inspect --format='{{.State.Health.Status}}' gluetun 2>/dev/null || echo "unknown")
 
         if [ "$health" = "healthy" ]; then
-            echo
+            echo >&2
             log_success "VPN connection established successfully!"
             return 0
         elif [ "$health" = "unhealthy" ]; then
-            echo
+            echo >&2
             log_warning "VPN connection failed. Gluetun logs:"
             "${docker_cmd[@]}" logs gluetun --tail=20 2>/dev/null
             echo
@@ -43,12 +42,12 @@ test_vpn_connection_shared() {
             return 1
         fi
 
+        wait_inline "Waiting for VPN connection" "$wait_time"
         sleep 3
         wait_time=$((wait_time + 3))
-        echo -n "."
     done
 
-    echo
+    echo >&2
     log_warning "VPN connection timed out after ${max_wait}s. Gluetun logs:"
     "${docker_cmd[@]}" logs gluetun --tail=20 2>/dev/null
     echo

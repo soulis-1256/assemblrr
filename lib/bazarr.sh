@@ -62,7 +62,6 @@ read_bazarr_api_key() {
     local wait_time=0
     local cfg key
 
-    echo -n "Waiting for Bazarr to initialize" >&2
     while [ $wait_time -lt $max_wait ]; do
         if cfg=$(_bazarr_config_file 2>/dev/null); then
             key=$(_bazarr_extract_apikey "$cfg")
@@ -72,9 +71,9 @@ read_bazarr_api_key() {
                 return 0
             fi
         fi
+        wait_inline "Waiting for Bazarr to initialize" "$wait_time"
         sleep 3
         wait_time=$((wait_time + 3))
-        dot_inline
     done
     echo >&2
     log_step_fail "Bazarr: config.yaml/ini ApiKey missing after ${max_wait}s"
@@ -87,7 +86,6 @@ wait_for_bazarr() {
     local wait_time=0
     local code
 
-    echo -n "Waiting for Bazarr API" >&2
     while [ $wait_time -lt $max_wait ]; do
         code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 3 \
             "http://${API_HOST}:${BAZARR_PORT}/api/system/status?apikey=${apikey}" 2>/dev/null || echo "000")
@@ -95,9 +93,9 @@ wait_for_bazarr() {
             echo >&2
             return 0
         fi
+        wait_inline "Waiting for Bazarr API" "$wait_time"
         sleep 3
         wait_time=$((wait_time + 3))
-        dot_inline
     done
     echo >&2
     log_step_fail "Bazarr: API not ready after ${max_wait}s"

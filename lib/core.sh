@@ -1,7 +1,7 @@
 #!/bin/bash
 # assemblrr core library — sourced by all other lib modules and entry points
 # Provides: color codes, logging, safe_source, find_install_directory,
-#           path utilities, directory helpers, dot_inline
+#           path utilities, directory helpers, wait_inline
 
 # Guard against double-sourcing (readonly arrays would fail on re-source)
 if [ -n "${_ASSEMBLRR_CORE_SOURCED:-}" ]; then
@@ -30,8 +30,12 @@ log_info()    { echo "$1"; _log_to_file "INFO: $1"; return 0; }
 log_debug()   { _log_to_file "DEBUG: $1"; return 0; }
 
 # --- Progress indicators ---
-# Inline dot for polling loops (simple, foreground, no process management)
-dot_inline() { printf "." >&2; }
+# Rewrite the current line as "Waiting for Radarr API (12s)".
+wait_inline() {
+    local label="$1"
+    local secs="${2:-0}"
+    printf '\r%s (%ss)   ' "$label" "$secs" >&2
+}
 
 # --- Safe source ---
 # Safely source a config file — validates that it contains only KEY=VALUE
@@ -616,9 +620,8 @@ verify_docker() {
         if [ "$is_wsl" = true ] && [ -f "$docker_exe" ] && command -v cmd.exe &>/dev/null; then
             log_info "Docker Desktop integration is offline. Attempting to start Docker Desktop on Windows..."
             cmd.exe /c start "" "C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe" < /dev/null > /dev/null 2>&1 &
-            log_info "Waiting for Docker Desktop integration to become ready (up to 45s)..."
             for i in {1..45}; do
-                dot_inline
+                wait_inline "Waiting for Docker Desktop integration" "$i"
                 sleep 1
                 if command -v docker &>/dev/null && docker info &>/dev/null; then
                     echo ""
@@ -637,9 +640,8 @@ verify_docker() {
         if [ "$is_wsl" = true ] && [ -f "$docker_exe" ] && command -v cmd.exe &>/dev/null; then
             log_info "Docker daemon is not running. Attempting to start Docker Desktop on Windows..."
             cmd.exe /c start "" "C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe" < /dev/null > /dev/null 2>&1 &
-            log_info "Waiting for Docker daemon to become ready (up to 45s)..."
             for i in {1..45}; do
-                dot_inline
+                wait_inline "Waiting for Docker daemon" "$i"
                 sleep 1
                 if docker info &>/dev/null; then
                     echo ""

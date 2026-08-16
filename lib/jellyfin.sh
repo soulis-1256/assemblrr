@@ -16,7 +16,6 @@ configure_jellyfin() {
 
     # Step 1: Wait for Jellyfin to be responsive
     echo >&2
-    echo -n "Waiting for Jellyfin to start" >&2
     while [ $wait_time -lt $max_wait ]; do
         local http_code
         http_code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 3 \
@@ -24,9 +23,9 @@ configure_jellyfin() {
         if [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]; then
             break
         fi
+        wait_inline "Waiting for Jellyfin to start" "$wait_time"
         sleep 3
         wait_time=$((wait_time + 3))
-        dot_inline
     done
     echo >&2
 
@@ -59,7 +58,6 @@ configure_jellyfin() {
     # will return 500 if we hit it before the default user exists in the DB
     _cfg_log_info "Jellyfin: attempting startup wizard bypass via API..."
     echo >&2
-    echo -n "Waiting for Jellyfin startup user to initialize" >&2
     local first_user_wait=0
     while [ $first_user_wait -lt 60 ]; do
         local first_user_resp
@@ -72,9 +70,9 @@ configure_jellyfin() {
                 break
             fi
         fi
+        wait_inline "Waiting for Jellyfin startup user to initialize" "$first_user_wait"
         sleep 3
         first_user_wait=$((first_user_wait + 3))
-        dot_inline
     done
     echo >&2
 
@@ -166,14 +164,13 @@ configure_jellyfin_xml_fallback() {
 
     # Wait for system.xml to appear
     echo >&2
-    echo -n "Waiting for Jellyfin system.xml" >&2
     while [ $wait_time -lt $max_wait ]; do
         if [ -f "$system_xml" ]; then
             break
         fi
+        wait_inline "Waiting for Jellyfin system.xml" "$wait_time"
         sleep 3
         wait_time=$((wait_time + 3))
-        dot_inline
     done
     echo >&2
 
@@ -201,15 +198,14 @@ configure_jellyfin_xml_fallback() {
 
     # Wait for Jellyfin to come back online
     echo >&2
-    echo -n "Waiting for Jellyfin to come back online" >&2
     local back_wait=0
     while [ $back_wait -lt 60 ]; do
         if curl -sf --connect-timeout 3 "http://${API_HOST}:8096/health" >/dev/null 2>&1; then
             break
         fi
+        wait_inline "Waiting for Jellyfin to come back online" "$back_wait"
         sleep 3
         back_wait=$((back_wait + 3))
-        dot_inline
     done
     echo >&2
 }

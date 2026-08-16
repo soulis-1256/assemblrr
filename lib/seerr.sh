@@ -257,7 +257,6 @@ configure_seerr() {
 
     # Step 1: Wait for Seerr to be responsive
     echo >&2
-    echo -n "Waiting for Seerr to start" >&2
     while [ $wait_time -lt $max_wait ]; do
         local http_code
         http_code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 3 \
@@ -265,9 +264,9 @@ configure_seerr() {
         if [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]; then
             break
         fi
+        wait_inline "Waiting for Seerr to start" "$wait_time"
         sleep 3
         wait_time=$((wait_time + 3))
-        dot_inline
     done
     echo >&2
 

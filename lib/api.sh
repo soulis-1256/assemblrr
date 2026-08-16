@@ -33,7 +33,6 @@ read_api_key() {
     local max_wait=120
     local wait_time=0
 
-    echo -n "Waiting for $service to initialize" >&2
     while [ $wait_time -lt $max_wait ]; do
         if [ -f "$config_file" ]; then
             local key
@@ -44,9 +43,9 @@ read_api_key() {
                 return 0
             fi
         fi
+        wait_inline "Waiting for $service to initialize" "$wait_time"
         sleep 3
         wait_time=$((wait_time + 3))
-        dot_inline
     done
     echo >&2
     log_step_fail "$service: config.xml not found or ApiKey missing after ${max_wait}s"
@@ -133,13 +132,12 @@ wait_for_api() {
         return 0
     fi
 
-    echo -n "Waiting for $name API" >&2
     while [ $wait_time -lt $max_wait ]; do
         if _api_ready "$port" "$apikey" "$api_path"; then
             echo >&2
             return 0
         fi
-        dot_inline
+        wait_inline "Waiting for $name API" "$wait_time"
         sleep 2
         wait_time=$((wait_time + 2))
     done

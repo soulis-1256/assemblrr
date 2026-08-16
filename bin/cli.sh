@@ -186,8 +186,6 @@ wait_for_services() {
     local total=0 ready=0
     local -a waiting=()
 
-    echo -n "Waiting for services to become ready"
-
     while [ $wait_time -lt "$timeout" ]; do
         total=0
         ready=0
@@ -207,25 +205,21 @@ wait_for_services() {
         done < <(_status_compose_rows)
 
         if [ "$total" -gt 0 ] && [ "$ready" -eq "$total" ]; then
-            echo
+            echo >&2
             log_success "All $total services are ready."
             return 0
         fi
 
-        echo -n "."
+        if [ "${#waiting[@]}" -gt 0 ] && [ "${#waiting[@]}" -le 6 ]; then
+            wait_inline "Waiting for services ($ready/$total ready: ${waiting[*]})" "$wait_time"
+        else
+            wait_inline "Waiting for services ($ready/$total ready)" "$wait_time"
+        fi
         sleep 1
         wait_time=$((wait_time + 1))
-
-        if [ $((wait_time % 10)) -eq 0 ]; then
-            echo
-            echo -n "$ready/$total ready"
-            if [ "${#waiting[@]}" -gt 0 ] && [ "${#waiting[@]}" -le 6 ]; then
-                echo -n " (${waiting[*]})"
-            fi
-        fi
     done
 
-    echo
+    echo >&2
     log_error "Not all services became ready within ${timeout}s ($ready/$total ready${waiting[*]:+: ${waiting[*]}})"
 }
 
