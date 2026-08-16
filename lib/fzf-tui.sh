@@ -533,18 +533,31 @@ configure_subtitle_providers() {
     fi
 
     formatted=$(echo "$names" | awk '{print $1 "\t"}')
-    local prompt header
+    local prompt header preselect_names=""
     if ui_is_edit; then
         prompt="Bazarr providers> "
         header="Enter/TAB=toggle  Ctrl-O=save  Esc=cancel"
+        if type _bazarr_config_file >/dev/null 2>&1 && type _bazarr_extract_apikey >/dev/null 2>&1; then
+            local bcfg bkey
+            bcfg=$(_bazarr_config_file 2>/dev/null || true)
+            if [ -n "$bcfg" ]; then
+                bkey=$(_bazarr_extract_apikey "$bcfg")
+            fi
+            if [ -n "${bkey:-}" ]; then
+                preselect_names=$(curl -s --connect-timeout 5 \
+                    "http://${API_HOST:-127.0.0.1}:${BAZARR_PORT:-6767}/api/system/settings?apikey=${bkey}" \
+                    2>/dev/null | jq -r '.general.enabled_providers[]? // empty' 2>/dev/null || true)
+            fi
+        fi
     else
         prompt="Bazarr providers (optional)> "
-        header="Enter/TAB=toggle  Ctrl-O=confirm  Esc=skip (enable none)"
+        header="Enter/TAB=toggle  Ctrl-O=confirm  Esc=skip"
     fi
     fzf_multi_select "$formatted" \
         "$prompt" \
         "$header" \
         SELECTED_SUBTITLE_PROVIDERS \
-        "provider" || true
+        "provider" \
+        "$preselect_names" || true
     ui_picker_done "providers"
 }

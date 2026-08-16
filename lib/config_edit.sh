@@ -282,6 +282,19 @@ _config_edit_providers() {
     if ui_picker_cancelled; then
         return 0
     fi
+    if [ "${#SELECTED_SUBTITLE_PROVIDERS[@]}" -eq 0 ]; then
+        local wipe="n"
+        if [ -t 0 ] && [ "${ASSEMBLRR_NONINTERACTIVE:-0}" != "1" ]; then
+            echo
+            log_warning "No subtitle providers selected."
+            read -p "Disable ALL Bazarr providers? (y/N) [Default = n]: " wipe
+            wipe=${wipe:-n}
+        fi
+        if [ "${wipe,,}" != "y" ]; then
+            log_info "Leaving Bazarr providers unchanged."
+            return 0
+        fi
+    fi
     configure_bazarr
 }
 

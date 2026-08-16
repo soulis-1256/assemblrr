@@ -220,36 +220,37 @@ configure_bazarr() {
         os_pass=$(cat "$INSTALL_DIR/secrets/opensubtitles_password.txt" 2>/dev/null || echo "")
     fi
 
-    # Providers: user selection from live Bazarr catalog (configure_subtitle_providers).
-    # No hardcoded third-party defaults — same model as Prowlarr indexers.
+    # Providers: picker confirm = desired set (may be empty). Esc / no picker
+    # leaves Bazarr's current enabled list alone.
     providers=()
-    if [ -n "${SELECTED_SUBTITLE_PROVIDERS+x}" ] && [ "${#SELECTED_SUBTITLE_PROVIDERS[@]}" -gt 0 ]; then
-        providers=("${SELECTED_SUBTITLE_PROVIDERS[@]}")
-    fi
-    # User supplied OS.com credentials during setup → enable that provider
-    if [ -n "$os_user" ] && [ -n "$os_pass" ]; then
-        local has_os=0
-        local p
-        for p in "${providers[@]+"${providers[@]}"}"; do
-            [ "$p" = "opensubtitlescom" ] && has_os=1 && break
-        done
-        if [ "$has_os" -eq 0 ]; then
-            providers+=(opensubtitlescom)
+    if [ "${FZF_SELECT_STATUS:-}" = "confirmed" ]; then
+        if [ "${#SELECTED_SUBTITLE_PROVIDERS[@]}" -gt 0 ]; then
+            providers=("${SELECTED_SUBTITLE_PROVIDERS[@]}")
         fi
-    fi
-    if [ "${#providers[@]}" -eq 0 ]; then
-        # Upgrade / skipped picker: keep whatever Bazarr already has enabled.
-        local current_p
-        current_p=$(curl -s --connect-timeout 8 \
-            "http://${API_HOST}:${BAZARR_PORT}/api/system/settings?apikey=${bazarr_key}" 2>/dev/null \
-            | jq -r '.general.enabled_providers[]? // empty' 2>/dev/null || true)
-        if [ -n "$current_p" ]; then
-            while IFS= read -r p; do
-                [ -n "$p" ] && providers+=("$p")
-            done <<< "$current_p"
-            log_step "Bazarr: keeping existing providers ($(IFS=,; echo "${providers[*]}"))"
-        else
-            log_step "Bazarr: no subtitle providers selected (configure later in Bazarr UI)"
+    else
+        if [ -n "${SELECTED_SUBTITLE_PROVIDERS+x}" ] && [ "${#SELECTED_SUBTITLE_PROVIDERS[@]}" -gt 0 ]; then
+            providers=("${SELECTED_SUBTITLE_PROVIDERS[@]}")
+        fi
+        if [ -n "$os_user" ] && [ -n "$os_pass" ]; then
+            local has_os=0 p
+            for p in "${providers[@]+"${providers[@]}"}"; do
+                [ "$p" = "opensubtitlescom" ] && has_os=1 && break
+            done
+            [ "$has_os" -eq 0 ] && providers+=(opensubtitlescom)
+        fi
+        if [ "${#providers[@]}" -eq 0 ]; then
+            local current_p
+            current_p=$(curl -s --connect-timeout 8 \
+                "http://${API_HOST}:${BAZARR_PORT}/api/system/settings?apikey=${bazarr_key}" 2>/dev/null \
+                | jq -r '.general.enabled_providers[]? // empty' 2>/dev/null || true)
+            if [ -n "$current_p" ]; then
+                while IFS= read -r p; do
+                    [ -n "$p" ] && providers+=("$p")
+                done <<< "$current_p"
+                log_step "Bazarr: keeping existing providers ($(IFS=,; echo "${providers[*]}"))"
+            else
+                log_step "Bazarr: no subtitle providers selected (configure later in Bazarr UI)"
+            fi
         fi
     fi
 
