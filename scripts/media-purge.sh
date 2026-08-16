@@ -169,7 +169,8 @@ qbit_login() {
     QBIT_JAR="$jar"
     curl -s --connect-timeout 8 -c "$QBIT_JAR" \
         -H "Referer: ${QBIT_BASE}/" \
-        -d "username=${user}&password=${pass}" \
+        --data-urlencode "username=${user}" \
+        --data-urlencode "password=${pass}" \
         "${QBIT_BASE}/api/v2/auth/login" >/dev/null || true
     if ! curl -s --connect-timeout 5 -b "$QBIT_JAR" -H "Referer: ${QBIT_BASE}/" \
         "${QBIT_BASE}/api/v2/app/version" 2>/dev/null | grep -q .; then
@@ -219,13 +220,14 @@ qb_match_jq() {
         def has_year: test("\\([0-9]{4}\\)");
         def basename_norm:
           gsub("/+$"; "") | split("/") | map(select(length > 0)) | .[-1] // "" | norm;
-        # After token, only end / " (YYYY" / " [" / " - " / " /" / ".YYYY" — not more title words.
+        # After token: end, year, tag, separator — or a season token (Loki.S02.COMPLETE).
+        # "Lost in Space" still fails: remainder is " in space", not a season.
         def boundary_ok($t; $tok):
           ($tok | length) as $m
           | ($t | length) as $n
           | if $n < $m then false
             elif $n == $m then true
-            else ($t[$m:] | test("^($| \\([0-9]{4}\\)| \\[| - | /|\\.[0-9]{4})"))
+            else ($t[$m:] | test("^($| \\([0-9]{4}\\)| \\[| - | /|\\.[0-9]{4}| s[0-9]| season |[-.]s[0-9])"))
             end;
         def folder_hit($text; $tok):
           ($text | norm) as $t
@@ -348,7 +350,7 @@ qbit_filter_hashes_jq() {
           | ($t | length) as $n
           | if $n < $m then false
             elif $n == $m then true
-            else ($t[$m:] | test("^($| \\([0-9]{4}\\)| \\[| - | /|\\.[0-9]{4})"))
+            else ($t[$m:] | test("^($| \\([0-9]{4}\\)| \\[| - | /|\\.[0-9]{4}| s[0-9]| season |[-.]s[0-9])"))
             end;
         def folder_hit($text; $tok):
           ($tok | length) == 0 or (
@@ -386,23 +388,61 @@ qbit_delete_by_folder_key() {
 
     local info hashes hash_count tokens_json
     info=$(qbit_torrents_info)
-    [ -n "$info" ] && [ "$info" != "[]" ] || { log "qB: no torrents"; return 0; }
+    if [ -n "$info" ] && [ "$info" != "[]" ]; then
+        tokens_json=$(jq -nc --arg k "$folder_key" '[$k]')
+        log "qB: folder key: $folder_key"
+        hashes=$(echo "$info" | qb_match_jq "$tokens_json" 2>/dev/null || true)
+
+        if [ -z "${hashes// }" ]; then
+            log "qB: no torrents matched folder key"
+        else
+            hash_count=$(echo "$hashes" | grep -c . || true)
+            if [ "${hash_count:-0}" -gt 1 ]; then
+                log "qB: WARNING ${hash_count} torrents matched folder key (refusing multi-delete). hashes=$(echo "$hashes" | tr '\n' ' ')"
+            else
+                # shellcheck disable=SC2086
+                qbit_delete_hashes $hashes
+            fi
+        fi
+    else
+        log "qB: no torrents (will still remove leftover download dirs)"
+    fi
+    remove_orphan_torrent_dirs "$folder_key"
+}
+
+# *arr Completed Download Handling often removes the qB item but leaves
+# torrents/tv|movies/<release>. Title-delete then finds no qB row.
+remove_orphan_torrent_dirs() {
+    local folder_key="$1"
+    local seasons_json="${2:-}"
+    local root="${MEDIA_ROOT:-/data}/torrents"
+    local d base info tokens_json hashes
+    [ -n "$folder_key" ] || return 0
+    [ -d "$root/tv" ] || [ -d "$root/movies" ] || return 0
 
     tokens_json=$(jq -nc --arg k "$folder_key" '[$k]')
-    log "qB: folder key: $folder_key"
-    hashes=$(echo "$info" | qb_match_jq "$tokens_json" 2>/dev/null || true)
-
-    if [ -z "${hashes// }" ]; then
-        log "qB: no torrents matched folder key"
-        return 0
-    fi
-    hash_count=$(echo "$hashes" | grep -c . || true)
-    if [ "${hash_count:-0}" -gt 1 ]; then
-        log "qB: WARNING ${hash_count} torrents matched folder key (refusing multi-delete). hashes=$(echo "$hashes" | tr '\n' ' ')"
-        return 0
-    fi
-    # shellcheck disable=SC2086
-    qbit_delete_hashes $hashes
+    shopt -s nullglob
+    for d in "$root/tv"/* "$root/movies"/*; do
+        [ -d "$d" ] || continue
+        base=$(basename_of "$d")
+        case "$base" in
+            tv|movies|incomplete|""|.) continue ;;
+        esac
+        info=$(jq -nc --arg n "$base" --arg p "$d" '[{hash:"fs",name:$n,content_path:$p}]')
+        if [ -n "$seasons_json" ] && [ "$seasons_json" != "[]" ]; then
+            hashes=$(echo "$info" | qb_match_season_jq "$folder_key" "$seasons_json" 2>/dev/null || true)
+        else
+            hashes=$(echo "$info" | qb_match_jq "$tokens_json" 2>/dev/null || true)
+        fi
+        [ -n "${hashes// }" ] || continue
+        log "removing leftover download dir: $d"
+        if [ "$DRY_RUN" = "1" ]; then
+            log "DRY_RUN: skip rm $d"
+            continue
+        fi
+        rm -rf -- "$d" && PURGE_TOUCHED=1
+    done
+    shopt -u nullglob
 }
 
 qbit_delete_by_folder_key_seasons() {
@@ -413,19 +453,22 @@ qbit_delete_by_folder_key_seasons() {
 
     local info hashes hash_count
     info=$(qbit_torrents_info)
-    [ -n "$info" ] && [ "$info" != "[]" ] || { log "qB: no torrents"; return 0; }
+    if [ -n "$info" ] && [ "$info" != "[]" ]; then
+        log "qB: folder key: $folder_key seasons: $seasons_json"
+        hashes=$(echo "$info" | qb_match_season_jq "$folder_key" "$seasons_json" 2>/dev/null || true)
 
-    log "qB: folder key: $folder_key seasons: $seasons_json"
-    hashes=$(echo "$info" | qb_match_season_jq "$folder_key" "$seasons_json" 2>/dev/null || true)
-
-    if [ -z "${hashes// }" ]; then
-        log "qB: no torrents matched folder key + seasons"
-        return 0
+        if [ -z "${hashes// }" ]; then
+            log "qB: no torrents matched folder key + seasons"
+        else
+            hash_count=$(echo "$hashes" | grep -c . || true)
+            log "qB: ${hash_count} torrent(s) matched folder key + seasons"
+            # shellcheck disable=SC2086
+            qbit_delete_hashes $hashes
+        fi
+    else
+        log "qB: no torrents (will still remove leftover download dirs)"
     fi
-    hash_count=$(echo "$hashes" | grep -c . || true)
-    log "qB: ${hash_count} torrent(s) matched folder key + seasons"
-    # shellcheck disable=SC2086
-    qbit_delete_hashes $hashes
+    remove_orphan_torrent_dirs "$folder_key" "$seasons_json"
 }
 
 # Back-compat name used by older call sites / mental model.
@@ -525,20 +568,41 @@ arr_delete_series() {
     fi
 }
 
+# Remaining seasons from Sonarr series + episodefile JSON (includes specials / 0).
+# Used to decide series delete vs season-scoped delete.
+seasons_remaining_json() {
+    local series="${1:-}"
+    local files="${2:-}"
+    local out
+    [ -n "$series" ] || series='{}'
+    [ -n "$files" ] || files='[]'
+    out=$(jq -nc --argjson series "$series" --argjson files "$files" '
+        ([ $files[]? | select(.seasonNumber != null) | .seasonNumber ] | unique) as $on_disk
+        | ([ $series.seasons[]? | select(.monitored == true) | .seasonNumber ] | unique) as $mon
+        | ($on_disk + $mon) | unique | sort
+    ' 2>/dev/null) || out='[]'
+    [ -n "$out" ] || out='[]'
+    printf '%s\n' "$out"
+}
+
 # True when this season list covers every remaining on-disk / monitored season
-# (specials/0 ignored unless listed). Used to decide series delete vs season.
+# (specials/0 count; deleting S01 must not wipe Specials).
+seasons_list_covers_remaining() {
+    local seasons_json="$1"
+    local remain_json="$2"
+    jq -en --argjson seasons "$seasons_json" --argjson remain "$remain_json" '
+        ($remain | length) > 0
+        and (($remain - $seasons) | length) == 0
+    ' >/dev/null 2>&1
+}
+
 seasons_cover_remaining() {
     local key="$1" id="$2" seasons_json="$3"
-    local series files
+    local series files remain
     series=$(arr_get "$SONARR_URL" "$key" "/api/v3/series/${id}")
     files=$(arr_get "$SONARR_URL" "$key" "/api/v3/episodefile?seriesId=${id}")
-    echo "$series" | jq -e --argjson seasons "$seasons_json" --argjson files "${files:-[]}" '
-        ([ $files[]? | .seasonNumber ] | unique) as $on_disk
-        | ([ .seasons[]? | select(.monitored == true) | .seasonNumber ]) as $mon
-        | (($on_disk + $mon) | unique | map(select(. != 0 or ($seasons | index(0)) != null))) as $remain
-        | ($remain | length) > 0
-        and (all($remain[]; ($seasons | index(.)) != null))
-    ' >/dev/null 2>&1
+    remain=$(seasons_remaining_json "$series" "${files:-[]}")
+    seasons_list_covers_remaining "$seasons_json" "$remain"
 }
 
 arr_unmonitor_seasons() {
@@ -661,11 +725,13 @@ purge_qb() {
                 if [ "${#kept[@]}" -gt 0 ]; then
                     log "qB: history hashes validated (${#kept[@]}): ${kept[*]}"
                     qbit_delete_hashes "${kept[@]}"
+                    remove_orphan_torrent_dirs "$folder" "$seasons_json"
                     return 0
                 fi
             else
                 log "qB: history hashes validated (${#filtered[@]}): ${filtered[*]}"
                 qbit_delete_hashes "${filtered[@]}"
+                remove_orphan_torrent_dirs "$folder" "$seasons_json"
                 return 0
             fi
         fi
@@ -824,6 +890,71 @@ if [ "${1:-}" = "--match-self-test" ]; then
     check_season "hash_e1 hash_e2" "multiple S01E0x torrents all match" \
         "Loki" '[1]' \
         '[{"hash":"hash_e1","name":"Loki.S01E01","content_path":"/data/torrents/tv/Loki.S01E01"},{"hash":"hash_e2","name":"Loki.S01E02","content_path":"/data/torrents/tv/Loki.S01E02"}]'
+    check "hash_s2" "title-level Loki matches S02 complete pack" \
+        '["Loki"]' \
+        '[{"hash":"hash_s2","name":"Loki.S02.COMPLETE.1080p.DSNP.WEB-DL","content_path":"/data/torrents/tv/Loki.S02.COMPLETE.1080p.DSNP.WEB-DL"}]'
+    check "" "title-level Lost still does not match Lost in Space pack" \
+        '["Lost"]' \
+        '[{"hash":"hash_lis","name":"Lost in Space.S01.COMPLETE","content_path":"/data/torrents/tv/Lost in Space.S01.COMPLETE"}]'
+
+    echo "=== media-purge remaining-season cover ==="
+    cover_check() {
+        local want="$1" name="$2" seasons="$3" series="$4" files="$5"
+        local remain got
+        remain=$(seasons_remaining_json "$series" "$files")
+        if seasons_list_covers_remaining "$seasons" "$remain"; then
+            got="cover"
+        else
+            got="partial"
+        fi
+        if [ "$got" = "$want" ]; then
+            echo "  PASS: $name"
+        else
+            echo "  FAIL: $name (want='$want' got='$got' remain='$remain')"
+            failures=$((failures + 1))
+        fi
+    }
+    _series_s01s02='{"seasons":[{"seasonNumber":1,"monitored":true},{"seasonNumber":2,"monitored":true}]}'
+    _files_s01s02='[{"seasonNumber":1},{"seasonNumber":2}]'
+    _series_s01_spec='{"seasons":[{"seasonNumber":0,"monitored":true},{"seasonNumber":1,"monitored":true}]}'
+    _files_s01_spec='[{"seasonNumber":0},{"seasonNumber":1}]'
+    _series_spec_only='{"seasons":[{"seasonNumber":0,"monitored":true}]}'
+    _files_spec_only='[{"seasonNumber":0}]'
+    cover_check "partial" "S01 request does not cover S01+S02" \
+        '[1]' "$_series_s01s02" "$_files_s01s02"
+    cover_check "cover" "S01+S02 request covers S01+S02" \
+        '[1,2]' "$_series_s01s02" "$_files_s01s02"
+    cover_check "partial" "S01 request does not cover S01+specials" \
+        '[1]' "$_series_s01_spec" "$_files_s01_spec"
+    cover_check "cover" "S01+specials request covers both" \
+        '[0,1]' "$_series_s01_spec" "$_files_s01_spec"
+    cover_check "partial" "S01 request does not cover specials-only leftover" \
+        '[1]' "$_series_spec_only" "$_files_spec_only"
+    cover_check "cover" "specials request covers specials-only leftover" \
+        '[0]' "$_series_spec_only" "$_files_spec_only"
+
+    echo "=== media-purge leftover download dirs ==="
+    _old_root="${MEDIA_ROOT:-}"
+    MEDIA_ROOT=$(mktemp -d)
+    mkdir -p "$MEDIA_ROOT/torrents/tv/Loki.S02.COMPLETE.1080p.DSNP.WEB-DL" \
+             "$MEDIA_ROOT/torrents/tv/Lost in Space.S01.COMPLETE"
+    DRY_RUN=0
+    remove_orphan_torrent_dirs "Loki"
+    if [ ! -d "$MEDIA_ROOT/torrents/tv/Loki.S02.COMPLETE.1080p.DSNP.WEB-DL" ]; then
+        echo "  PASS: Loki leftover pack dir removed"
+    else
+        echo "  FAIL: Loki leftover pack dir still present"
+        failures=$((failures + 1))
+    fi
+    if [ -d "$MEDIA_ROOT/torrents/tv/Lost in Space.S01.COMPLETE" ]; then
+        echo "  PASS: Lost in Space leftover left alone"
+    else
+        echo "  FAIL: Lost in Space leftover was removed"
+        failures=$((failures + 1))
+    fi
+    rm -rf "$MEDIA_ROOT"
+    MEDIA_ROOT="${_old_root}"
+
     if [ "$failures" -gt 0 ]; then
         echo "match-self-test: FAILED ($failures)"
         exit 1

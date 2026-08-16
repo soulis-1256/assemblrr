@@ -2,7 +2,7 @@ services:
   # Jellyfin — open source media server (recommended)
   jellyfin:
     profiles: ["jellyfin"]
-    image: lscr.io/linuxserver/jellyfin
+    image: lscr.io/linuxserver/jellyfin:10.11.11
     container_name: jellyfin
     environment:
       - PUID=${PUID}
@@ -26,7 +26,7 @@ services:
       assemblrr_network:
         ipv4_address: 172.60.0.11
 
-  # Emby — media server with premium features
+  # Emby — UNSUPPORTED optional profile (express/default is Jellyfin only).
   emby:
     profiles: ["emby"]
     image: lscr.io/linuxserver/emby
@@ -53,7 +53,7 @@ services:
       assemblrr_network:
         ipv4_address: 172.60.0.11
 
-  # Plex — popular media server with advanced features (uses host networking)
+  # Plex — UNSUPPORTED optional profile (express/default is Jellyfin only).
   plex:
     profiles: ["plex"]
     image: lscr.io/linuxserver/plex
@@ -78,7 +78,7 @@ services:
 
   # qBittorrent — torrent client (ports added by overlay)
   qbittorrent:
-    image: lscr.io/linuxserver/qbittorrent:latest
+    image: lscr.io/linuxserver/qbittorrent:5.2.3
     container_name: qbittorrent
     environment:
       - PUID=${PUID}
@@ -99,7 +99,7 @@ services:
 
   # Sonarr — TV show management and automation
   sonarr:
-    image: lscr.io/linuxserver/sonarr
+    image: lscr.io/linuxserver/sonarr:4.0.19.2979-ls321
     container_name: sonarr
     environment:
       - PUID=${PUID}
@@ -126,7 +126,7 @@ services:
 
   # Radarr — movie management and automation
   radarr:
-    image: lscr.io/linuxserver/radarr
+    image: lscr.io/linuxserver/radarr:6.3.0.10514-ls313
     container_name: radarr
     environment:
       - PUID=${PUID}
@@ -153,7 +153,7 @@ services:
 
   # Prowlarr — indexer management for *arr apps
   prowlarr:
-    image: lscr.io/linuxserver/prowlarr
+    image: lscr.io/linuxserver/prowlarr:2.5.2.5491-ls156
     container_name: prowlarr
     environment:
       - PUID=${PUID}
@@ -180,7 +180,7 @@ services:
   # can cascade into media file purge. Seerr stays on the Docker network only.
   # Retirement: see docs/seerr-delete-request.md
   seerr:
-    image: ghcr.io/seerr-team/seerr:latest
+    image: ghcr.io/seerr-team/seerr:v3.4.1
     container_name: seerr
     init: true
     environment:
@@ -205,7 +205,7 @@ services:
   # TV: season-scoped via Sonarr when the request is a subset of remaining seasons.
   # SEERR_DELETE_REQUEST_PURGE=0 disables intercept (stock Seerr semantics).
   seerr-gateway:
-    image: python:3.12-alpine
+    image: python:3.12.14-alpine
     container_name: seerr-gateway
     environment:
       - TZ=${TZ}
@@ -244,9 +244,9 @@ services:
         ipv4_address: 172.60.0.24
 
   # Recyclarr - automatically syncs TRaSH guides
-  # :latest is no longer published; :8 tracks the current major (see recyclarr.dev).
+  # :latest is no longer published; pin a 8.x release (see recyclarr.dev).
   recyclarr:
-    image: ghcr.io/recyclarr/recyclarr:8
+    image: ghcr.io/recyclarr/recyclarr:8.7.1
     container_name: recyclarr
     user: ${PUID}:${PGID}
     environment:
@@ -291,7 +291,7 @@ services:
 
   # Bazarr — automatic subtitle management (Sonarr/Radarr companion)
   bazarr:
-    image: lscr.io/linuxserver/bazarr
+    image: lscr.io/linuxserver/bazarr:1.6.0
     container_name: bazarr
     environment:
       - PUID=${PUID}

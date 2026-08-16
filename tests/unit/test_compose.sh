@@ -42,9 +42,22 @@ assert_contains "$joined" "vpn.yaml" "VPN=Y treated as enabled"
 
 test_suite "recyclarr image tag"
 recyclarr_image=$(grep -E '^\s+image:.*recyclarr' "$REPO_ROOT/compose/base.yaml")
-assert_contains "$recyclarr_image" "ghcr.io/recyclarr/recyclarr:8" "pins major tag 8"
+assert_contains "$recyclarr_image" "ghcr.io/recyclarr/recyclarr:8.7.1" "pins recyclarr 8.7.1"
 assert_not_contains "$recyclarr_image" ":latest" "does not use unpublished :latest"
 assert_contains "$(grep CRON "$REPO_ROOT/compose/base.yaml")" "CRON_SCHEDULE" "uses CRON_SCHEDULE"
+
+test_suite "default stack images are version-pinned"
+images=$(grep -E '^\s+image:' "$REPO_ROOT/compose/base.yaml" "$REPO_ROOT/compose/vpn.yaml")
+assert_not_contains "$images" ":latest" "no :latest in default compose"
+assert_contains "$images" "linuxserver/jellyfin:10.11.11" "jellyfin pinned"
+assert_contains "$images" "linuxserver/qbittorrent:5.2.3" "qbittorrent pinned"
+assert_contains "$images" "seerr-team/seerr:v3.4.1" "seerr pinned"
+assert_contains "$images" "python:3.12.14-alpine" "gateway python pinned"
+assert_contains "$images" "gluetun:v3.41.3" "gluetun pinned"
+assert_contains "$images" "deunhealth:v0.3.0" "deunhealth pinned"
+# Local sidecar tags are not registry floats
+assert_contains "$images" "assemblrr/media-purge-watch:local" "purge sidecar is local"
+assert_contains "$images" "assemblrr/vpn-watchdog:local" "watchdog sidecar is local"
 
 test_suite "local sidecar images do not pull from a registry"
 assert_contains "$(awk '/media-purge-watch:/,/^  [a-z]/{print}' "$REPO_ROOT/compose/base.yaml")" \

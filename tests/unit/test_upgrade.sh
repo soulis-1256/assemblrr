@@ -115,4 +115,22 @@ refresh=$(sed -n '/^refresh_user_cli()/,/^}/p' "$REPO_ROOT/lib/upgrade.sh")
 assert_contains "$refresh" "install_user_cli_wrapper" "refresh writes PATH wrapper"
 assert_not_contains "$refresh" "list_cli_lib_modules" "refresh does not copy PATH libs"
 
+test_suite "arr-purge-hook reads in-container API key and media root"
+hook=$(cat "$REPO_ROOT/scripts/arr-purge-hook.sh")
+assert_contains "$hook" "/config/config.xml" "hook reads /config/config.xml"
+assert_contains "$hook" "MEDIA_ROOT=" "hook sets MEDIA_ROOT"
+assert_contains "$hook" "SONARR_API_KEY" "hook exports Sonarr key"
+
+test_suite "Windows bootstrap strips CRLF on new file types"
+win=$(cat "$REPO_ROOT/platform/windows/bootstrap.ps1")
+dev=$(cat "$REPO_ROOT/platform/windows/bootstrap-dev.ps1")
+assert_contains "$win" "find /tmp/\$AppName -type f" "bootstrap.ps1 uses find for CRLF strip"
+assert_contains "$win" "-name '*.py'" "bootstrap.ps1 strips Python"
+assert_contains "$win" "-name '*.Dockerfile'" "bootstrap.ps1 strips sidecar Dockerfiles"
+assert_contains "$dev" "find /tmp/\$AppName -type f" "bootstrap-dev.ps1 uses find for CRLF strip"
+assert_contains "$dev" "-name '*.py'" "bootstrap-dev.ps1 strips Python"
+assert_contains "$dev" "-name '*.Dockerfile'" "bootstrap-dev.ps1 strips sidecar Dockerfiles"
+assert_not_contains "$win" "sed -i 's/\\r\$//' /tmp/\$AppName/.env.example /tmp/\$AppName/bin/*.sh" \
+    "bootstrap.ps1 no longer uses the stale glob list"
+
 test_summary

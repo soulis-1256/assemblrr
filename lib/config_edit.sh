@@ -23,7 +23,7 @@ opensubtitles|OpenSubtitles.com credentials
 auth|Shared login for every service UI
 timezone|Container timezone
 vpn|VPN on/off, provider, and credentials (restarts stack)
-media|Jellyfin / Emby / Plex (restarts stack)
+media|Jellyfin (supported) / Emby / Plex unsupported (restarts stack)
 all|Re-run the full setup wizard
 EOF
 }

@@ -64,4 +64,16 @@ assert_eq "0" "$(purge_watch_season_number '/data/media/tv/Show Name/Specials/ep
 assert_eq "" "$(purge_watch_season_number '/data/media/tv/Show Name/ep.mkv')" "no season folder"
 assert_eq "" "$(purge_watch_season_number '/data/media/movies/Title (2012)/movie.mkv')" "movie path"
 
+test_suite "purge_watch recycle and title-folder events"
+assert_true "recycle path ignored" \
+    "purge_watch_is_ignored '/data/media/.recycle/Loki'"
+assert_true "recycle file ignored" \
+    "purge_watch_is_ignored '/data/media/.recycle/Loki/Season 2/ep.mkv'"
+assert_true "tv title folder" \
+    "purge_watch_is_title_folder '/data/media/tv/Loki'"
+assert_true "movie title folder" \
+    "purge_watch_is_title_folder '/data/media/movies/Title (2012)'"
+assert_false "episode path is not the title folder" \
+    "purge_watch_is_title_folder '/data/media/tv/Loki/Season 2/ep.mkv'"
+
 test_summary

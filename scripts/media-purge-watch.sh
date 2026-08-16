@@ -34,8 +34,17 @@ purge_watch_is_ignored() {
     esac
     case "$p" in
         */.nfs*|*/.tmp*|*/tmp/*|*/.git/*) return 0 ;;
+        */media/.recycle|*/media/.recycle/*|*/.recycle|*/.recycle/*) return 0 ;;
     esac
     return 1
+}
+
+# Title-folder recycle/delete (not an nfo/jpg inside the tree).
+purge_watch_is_title_folder() {
+    local p="${1%/}"
+    local folder
+    folder=$(purge_watch_library_folder "$p")
+    [ -n "$folder" ] && [ "$p" = "$folder" ]
 }
 
 purge_watch_is_video() {
@@ -304,10 +313,13 @@ inotifywait -m -r \
         handle_event "$full"
         continue
     fi
-    # Title folder removed (not a sidecar nfo/jpg delete).
-    case ",${events}," in
-        *,DELETE_SELF,*)
-            handle_event "$full"
-            ;;
-    esac
+    # Title folder removed or moved to the recycle bin (MOVED_FROM).
+    # Sonarr "delete files" often renames media/tv/Show → media/.recycle/...
+    if purge_watch_is_title_folder "$full"; then
+        case ",${events}," in
+            *,DELETE_SELF,*|*,MOVED_FROM,*|*,DELETE,*)
+                handle_event "$full"
+                ;;
+        esac
+    fi
 done

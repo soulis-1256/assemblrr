@@ -67,29 +67,47 @@ qbit_vpn_enabled() {
 # qB 5.x + WireGuard does not bind the POINTOPOINT tun by itself; "Any"
 # listens on eth0 and Gluetun's kill switch then drops tracker/DHT packets
 # ("Operation not permitted" → stalledDL).
-# $1 optional extra JSON object fields, including a leading comma
-#    e.g. ',"web_ui_username":"x","web_ui_password":"y"'
+# Optional $1/$2 = WebUI username/password (jq-escaped).
 qbit_core_prefs_json() {
-    local extras="${1:-}"
-    local iface
+    local user="${1:-}"
+    local pass="${2:-}"
+    local iface=""
     if qbit_vpn_enabled; then
-        iface=',"current_network_interface":"tun0"'
-    else
-        # Empty string clears a leftover tun0 bind after VPN is turned off.
-        iface=',"current_network_interface":""'
+        iface="tun0"
     fi
-    printf '%s' "{\"save_path\":\"/data/torrents\",\"temp_path\":\"/data/torrents/incomplete\",\"temp_path_enabled\":true,\"auto_tmm_enabled\":true${iface}${extras}}"
+    if [ -n "$user" ]; then
+        jq -nc --arg iface "$iface" --arg user "$user" --arg pass "$pass" \
+            '{save_path:"/data/torrents",temp_path:"/data/torrents/incomplete",temp_path_enabled:true,auto_tmm_enabled:true,current_network_interface:$iface,web_ui_username:$user,web_ui_password:$pass}'
+    else
+        jq -nc --arg iface "$iface" \
+            '{save_path:"/data/torrents",temp_path:"/data/torrents/incomplete",temp_path_enabled:true,auto_tmm_enabled:true,current_network_interface:$iface}'
+    fi
+}
+
+qbit_login_form() {
+    local cookie_jar="$1"
+    local user="$2"
+    local pass="$3"
+    local qbit_port="${4:-8081}"
+    curl -s --connect-timeout 5 -c "$cookie_jar" \
+        -H "Referer: http://${API_HOST}:${qbit_port}" \
+        --data-urlencode "username=${user}" \
+        --data-urlencode "password=${pass}" \
+        "http://${API_HOST}:${qbit_port}/api/v2/auth/login" 2>/dev/null >/dev/null || true
 }
 
 qbit_apply_prefs() {
     local cookie_jar="$1"
-    local extras="${2:-}"
+    local user="${2:-}"
+    local pass="${3:-}"
     local qbit_port=8081
+    local json
+    json=$(qbit_core_prefs_json "$user" "$pass")
     curl -s --connect-timeout 5 \
         "http://${API_HOST}:${qbit_port}/api/v2/app/setPreferences" \
         -b "$cookie_jar" \
         -H "Referer: http://${API_HOST}:${qbit_port}" \
-        -d "json=$(qbit_core_prefs_json "$extras")" \
+        --data-urlencode "json=${json}" \
         2>/dev/null >/dev/null || true
 }
 
@@ -101,10 +119,7 @@ qbit_set_credentials() {
 
     # Idempotent: succeed if final credentials already work
     if [ -n "$AUTH_USERNAME" ] && [ -n "$AUTH_PASSWORD" ]; then
-        curl -s --connect-timeout 5 -c "$qbit_cookie_jar" \
-            -H "Referer: http://${API_HOST}:${qbit_port}" \
-            -d "username=${AUTH_USERNAME}&password=${AUTH_PASSWORD}" \
-            "http://${API_HOST}:${qbit_port}/api/v2/auth/login" 2>/dev/null >/dev/null || true
+        qbit_login_form "$qbit_cookie_jar" "$AUTH_USERNAME" "$AUTH_PASSWORD" "$qbit_port"
         local qbit_sid
         qbit_sid=$(qbit_cookie_sid "$qbit_cookie_jar")
         if [ -n "$qbit_sid" ]; then
@@ -128,15 +143,11 @@ qbit_set_credentials() {
         qbit_temp_pass=$(docker logs qbittorrent 2>&1 | awk -F': ' '/temporary password is provided for this session:/ { print $NF; exit }' || true)
 
         if [ -n "$qbit_temp_pass" ]; then
-            curl -s --connect-timeout 5 -c "$qbit_cookie_jar" \
-                -H "Referer: http://${API_HOST}:${qbit_port}" \
-                -d "username=admin&password=${qbit_temp_pass}" \
-                "http://${API_HOST}:${qbit_port}/api/v2/auth/login" 2>/dev/null >/dev/null || true
+            qbit_login_form "$qbit_cookie_jar" "admin" "$qbit_temp_pass" "$qbit_port"
             local qbit_sid
             qbit_sid=$(qbit_cookie_sid "$qbit_cookie_jar")
             if [ -n "$qbit_sid" ]; then
-                qbit_apply_prefs "$qbit_cookie_jar" \
-                    ",\"web_ui_username\":\"${AUTH_USERNAME}\",\"web_ui_password\":\"${AUTH_PASSWORD}\""
+                qbit_apply_prefs "$qbit_cookie_jar" "$AUTH_USERNAME" "$AUTH_PASSWORD"
                 echo >&2
                 if qbit_vpn_enabled; then
                     _cfg_log_info "Set qBittorrent credentials, save path, and tun0 bind"
@@ -165,10 +176,7 @@ qbit_try_login() {
 
     [ -n "$user" ] && [ -n "$pass" ] || return 1
     : >"$cookie_jar"
-    curl -s --connect-timeout 5 -c "$cookie_jar" \
-        -H "Referer: http://${API_HOST}:${qbit_port}" \
-        -d "username=${user}&password=${pass}" \
-        "http://${API_HOST}:${qbit_port}/api/v2/auth/login" 2>/dev/null >/dev/null || true
+    qbit_login_form "$cookie_jar" "$user" "$pass" "$qbit_port"
     [ -n "$(qbit_cookie_sid "$cookie_jar")" ]
 }
 
@@ -204,8 +212,7 @@ qbit_change_credentials() {
         fi
     fi
 
-    qbit_apply_prefs "$cookie_jar" \
-        ",\"web_ui_username\":\"${new_user}\",\"web_ui_password\":\"${new_pass}\""
+    qbit_apply_prefs "$cookie_jar" "$new_user" "$new_pass"
     rm -f "$cookie_jar"
 
     if qbit_try_login "$new_user" "$new_pass" "$verify_jar"; then
@@ -226,10 +233,7 @@ qbit_create_category() {
 
     local qbit_port=8081
     local qbit_cookie_jar="/tmp/qb_cookie_jar_${service_name}_$$_${qbit_port}"
-    curl -s --connect-timeout 10 -c "$qbit_cookie_jar" \
-        -H "Referer: http://${API_HOST}:${qbit_port}" \
-        -d "username=${AUTH_USERNAME}&password=${AUTH_PASSWORD}" \
-        "http://${API_HOST}:${qbit_port}/api/v2/auth/login" 2>/dev/null >/dev/null || true
+    qbit_login_form "$qbit_cookie_jar" "$AUTH_USERNAME" "$AUTH_PASSWORD" "$qbit_port"
     local qbit_sid
     qbit_sid=$(qbit_cookie_sid "$qbit_cookie_jar")
     if [ -z "$qbit_sid" ]; then

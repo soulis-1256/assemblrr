@@ -1,11 +1,9 @@
-# Custom services overlay
-# Rename this file to custom.yaml to enable optional services
-# They will automatically join the assemblrr_network
+# Custom services overlay — NOT officially supported.
+# Rename this file to custom.yaml to add extra containers. They join assemblrr_network
+# but are not wired, upgraded, or bugfixed by assemblrr. Express/default support is
+# Jellyfin + qBittorrent + Sonarr/Radarr/Prowlarr/Bazarr/Seerr/Recyclarr (+ optional VPN).
 #
 # Usage: docker compose -f base.yaml -f [direct-access|vpn].yaml -f custom.yaml --profile <media_service> up -d
-#
-# These services are NOT auto-configured by assemblrr.
-# You will need to configure them manually through their web UIs after enabling.
 
 networks:
   default:
@@ -18,7 +16,7 @@ services:
   # Requires: Prowlarr indexer, qBittorrent download client (configure manually)
   # Web UI: http://<host>:8686
   # lidarr:
-  #   image: lscr.io/linuxserver/lidarr
+  #   image: lscr.io/linuxserver/lidarr:3.1.0.4875-ls39
   #   container_name: lidarr
   #   environment:
   #     - PUID=${PUID}
@@ -40,7 +38,7 @@ services:
   # Note: Routes through VPN if enabled (same as qBittorrent)
   # Web UI: http://<host>:8080
   # sabnzbd:
-  #   image: lscr.io/linuxserver/sabnzbd:latest
+  #   image: lscr.io/linuxserver/sabnzbd:5.1.0-ls267
   #   container_name: sabnzbd
   #   environment:
   #     - PUID=${PUID}

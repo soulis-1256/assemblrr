@@ -86,8 +86,8 @@ function Copy-ProjectToWSL2 {
 
     wsl -d $Distro -- bash -c "chmod +x /tmp/$AppName/bin/setup.sh /tmp/$AppName/bin/cli.sh /tmp/$AppName/bin/docker-install.sh /tmp/$AppName/bin/config.sh /tmp/$AppName/lib/*.sh /tmp/$AppName/scripts/*.sh 2>/dev/null"
 
-    # Convert CRLF to LF on shell scripts (Windows line endings break bash)
-    wsl -d $Distro -- bash -c "sed -i 's/\r$//' /tmp/$AppName/.env.example /tmp/$AppName/bin/*.sh /tmp/$AppName/lib/*.sh /tmp/$AppName/branding.conf /tmp/$AppName/compose/*.yaml /tmp/$AppName/compose/examples/*.yaml /tmp/$AppName/templates/*.env /tmp/$AppName/templates/*.yml /tmp/$AppName/scripts/*.sh 2>/dev/null; true"
+    # Convert CRLF to LF (Windows line endings break bash / Dockerfiles / Python)
+    wsl -d $Distro -- bash -c "find /tmp/$AppName -type f \( -name '*.sh' -o -name '*.py' -o -name '*.yaml' -o -name '*.yml' -o -name '*.conf' -o -name '.env.example' -o -name 'Dockerfile' -o -name '*.Dockerfile' \) -exec sed -i 's/\r$//' {} + 2>/dev/null; true"
     Write-Host "Files copied successfully." -ForegroundColor Green
 }
 

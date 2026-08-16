@@ -89,4 +89,33 @@ assert_true "config apply is a subcommand" "grep -q 'apply|wire)' \"$REPO_ROOT/b
 assert_true "config apply runs config.sh" "grep -q 'ASSEMBLRR_NONINTERACTIVE=1 bash' \"$REPO_ROOT/bin/cli.sh\""
 assert_contains "$(grep 'config apply' "$REPO_ROOT/README.md" || true)" "config apply" "README lists config apply"
 
+test_suite "config show survives missing VPN_TYPE/TZ"
+cli="$REPO_ROOT/bin/cli.sh"
+assert_contains "$(grep -n 'VPN_TYPE=' "$cli" | head -5)" 'VPN_TYPE="${VPN_TYPE:-openvpn}"' "CLI defaults VPN_TYPE"
+assert_contains "$(grep -n 'TZ=' "$cli" | head -5)" 'TZ="${TZ:-UTC}"' "CLI defaults TZ"
+show_fn=$(sed -n '/^show_config()/,/^}/p' "$cli")
+assert_contains "$show_fn" '${VPN_TYPE:-openvpn}' "show_config defaults VPN type"
+assert_contains "$show_fn" '${TZ:-UTC}' "show_config defaults timezone"
+
+# Reproduce the old set -u crash: print those fields with vars unset.
+out=$(bash -c 'set -u
+MEDIA_SERVICE=jellyfin
+VPN_ENABLED=n
+# VPN_TYPE and TZ deliberately unset
+echo "  Media service:      ${MEDIA_SERVICE:-jellyfin}"
+echo "  VPN enabled:        ${VPN_ENABLED:-n}"
+echo "  VPN type:           ${VPN_TYPE:-openvpn}"
+echo "  Timezone:           ${TZ:-UTC}"
+')
+assert_contains "$out" "VPN type:           openvpn" "unset VPN_TYPE prints default"
+assert_contains "$out" "Timezone:           UTC" "unset TZ prints default"
+
+test_suite "seerr and jellyfin first-run auth use jq --arg"
+assert_contains "$(sed -n '/^seerr_get_cookie()/,/^}/p' "$REPO_ROOT/lib/seerr.sh")" \
+    '--arg pass' "seerr cookie payload jq-escapes password"
+assert_contains "$(sed -n '/^configure_seerr()/,/^seerr_verify_login()/p' "$REPO_ROOT/lib/seerr.sh")" \
+    '--arg pass' "seerr setup payload jq-escapes password"
+assert_contains "$(sed -n '/^configure_jellyfin_libraries()/,/^}/p' "$REPO_ROOT/lib/jellyfin.sh")" \
+    'jq -nc --arg u' "jellyfin library auth jq-escapes password"
+
 test_summary

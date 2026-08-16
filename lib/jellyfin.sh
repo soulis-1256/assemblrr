@@ -215,10 +215,12 @@ configure_jellyfin_libraries() {
 
     # Authenticate to get access token
     local auth_response
+    local auth_payload
+    auth_payload=$(jq -nc --arg u "$AUTH_USERNAME" --arg p "$AUTH_PASSWORD" '{Username:$u,Pw:$p}')
     auth_response=$(curl -sf --connect-timeout 10 -X POST \
         -H "Content-Type: application/json" \
         -H 'X-Emby-Authorization: MediaBrowser Client="assemblrr", Version="1.0", Device="setup-script", DeviceId="assemblrr-setup"' \
-        -d "{\"Username\":\"${AUTH_USERNAME}\",\"Pw\":\"${AUTH_PASSWORD}\"}" \
+        -d "$auth_payload" \
         "http://${API_HOST}:${jellyfin_port}/Users/AuthenticateByName" 2>/dev/null || echo "")
 
     if [ -z "$auth_response" ]; then

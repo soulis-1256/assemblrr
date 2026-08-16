@@ -197,7 +197,8 @@ qbit_login() {
     http_code=$(curl -s -o /tmp/assemblrr_qbit_login_body.txt -w "%{http_code}" \
         -c "$cookie_jar" \
         -H "Referer: http://${QBIT_HOST}" \
-        --data "username=${user}&password=${pass}" \
+        --data-urlencode "username=${user}" \
+        --data-urlencode "password=${pass}" \
         "${QBIT_API}/auth/login" 2>/dev/null || echo "000")
     [ "$http_code" = "200" ] || [ "$http_code" = "204" ]
 }

@@ -5,7 +5,8 @@ should also remove **that request’s** library files under `media/` and the
 matching qBittorrent torrent/data under `torrents/` (hardlink-aware).
 
 - **Movies:** the whole title.
-- **TV:** only the seasons on that request. Other seasons of the same show stay.
+- **TV:** only the seasons on that request. Other seasons of the same show stay,
+  including **specials** (season 0) unless that request listed them.
 
 Stock Seerr does **not** do that. `DELETE /api/v1/request/:id` only removes the
 request row. The path that frees an entire title is
@@ -23,8 +24,8 @@ On **`DELETE /api/v1/request/:id`** only (when purge is enabled):
    requested season numbers (same auth headers as the client).
 2. Purge files:
    - **Movie**, or a TV request that covers every remaining on-disk/monitored
-     season → `DELETE /api/v1/media/:mediaId/file?is4k=…` (Seerr → *arr
-     `deleteFiles` → assemblrr purge hooks / qB).
+     season (specials count as remaining) → `DELETE /api/v1/media/:mediaId/file?is4k=…`
+     (Seerr → *arr `deleteFiles` → assemblrr purge hooks / qB).
    - **TV subset of seasons** → Sonarr `DELETE /episodefile/{id}` for those
      seasons only, then unmonitor them. Seerr title-level file-delete is
      **not** called, so `/data/media/tv/Show` is not wiped. `media-purge-watch`
@@ -53,8 +54,10 @@ series** from Sonarr (`deleteFiles: true`). assemblrr does **not** intercept
 that path: it means “this title”.
 
 A recycle bin at `/data/media/.recycle` (Sonarr/Radarr, 7-day cleanup) makes a
-mistaken title delete recoverable for library files. qB torrents may still be
-removed by the series-delete hook.
+mistaken title delete recoverable for library files. The series-delete hook
+then removes the matching qB torrent **and** leftover folders under
+`torrents/tv` / `torrents/movies` (Completed Download Handling often drops the
+qB row first, which used to leave the download directory behind).
 
 ### Purge safety (qB)
 

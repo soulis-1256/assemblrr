@@ -70,8 +70,10 @@ elif [ -f "$INSTALL_DIR/.${APP_NAME:-assemblrr}-config" ]; then
     safe_source "$INSTALL_DIR/.${APP_NAME:-assemblrr}-config"
 fi
 VPN_ENABLED="${VPN_ENABLED:-n}"
+VPN_TYPE="${VPN_TYPE:-openvpn}"
 MEDIA_SERVICE="${MEDIA_SERVICE:-jellyfin}"
 MEDIA_DIRECTORY="${MEDIA_DIRECTORY:-${HOME}/assemblrr-media}"
+TZ="${TZ:-UTC}"
 
 # Source branding from install directory
 load_branding "$INSTALL_DIR" 2>/dev/null || true
@@ -764,10 +766,10 @@ update_containers() {
 show_config() {
     echo "${APP_DISPLAY_NAME} Configuration:"
     print_detected_locations
-    echo "  Media service:      $MEDIA_SERVICE"
-    echo "  VPN enabled:        $VPN_ENABLED"
-    echo "  VPN type:           $VPN_TYPE"
-    echo "  Timezone:           $TZ"
+    echo "  Media service:      ${MEDIA_SERVICE:-jellyfin}"
+    echo "  VPN enabled:        ${VPN_ENABLED:-n}"
+    echo "  VPN type:           ${VPN_TYPE:-openvpn}"
+    echo "  Timezone:           ${TZ:-UTC}"
     if [ "${VPN_ENABLED:-n}" = "y" ]; then
         echo "  VPN secrets:        $INSTALL_DIR/secrets/"
     fi

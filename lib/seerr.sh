@@ -149,28 +149,17 @@ seerr_get_cookie() {
             plex)     media_host="host.docker.internal"; media_port=32400; media_type=1 ;;
         esac
 
-        payload=$(cat <<EOF
-{
-  "username": "${AUTH_USERNAME}",
-  "password": "${AUTH_PASSWORD}",
-  "hostname": "${media_host}",
-  "port": ${media_port},
-  "useSsl": false,
-  "urlBase": "",
-  "email": "",
-  "serverType": ${media_type}
-}
-EOF
-)
+        payload=$(jq -nc \
+            --arg user "$AUTH_USERNAME" \
+            --arg pass "$AUTH_PASSWORD" \
+            --arg host "$media_host" \
+            --argjson port "$media_port" \
+            --argjson stype "$media_type" \
+            '{username:$user,password:$pass,hostname:$host,port:$port,useSsl:false,urlBase:"",email:"",serverType:$stype}')
     else
         # Login-only (for re-runs when media server is already configured)
-        payload=$(cat <<EOF
-{
-  "username": "${AUTH_USERNAME}",
-  "password": "${AUTH_PASSWORD}"
-}
-EOF
-)
+        payload=$(jq -nc --arg user "$AUTH_USERNAME" --arg pass "$AUTH_PASSWORD" \
+            '{username:$user,password:$pass}')
     fi
 
     local auth_endpoint="jellyfin"
@@ -365,19 +354,13 @@ configure_seerr() {
     # Jellyfin/Emby: use credential-based auth (both use /auth/jellyfin endpoint)
     local auth_endpoint="jellyfin"
 
-    auth_payload=$(cat <<EOF
-{
-  "username": "${AUTH_USERNAME}",
-  "password": "${AUTH_PASSWORD}",
-  "hostname": "${media_server_host}",
-  "port": ${media_server_port},
-  "useSsl": false,
-  "urlBase": "",
-  "email": "",
-  "serverType": ${media_server_type}
-}
-EOF
-)
+    auth_payload=$(jq -nc \
+        --arg user "$AUTH_USERNAME" \
+        --arg pass "$AUTH_PASSWORD" \
+        --arg host "$media_server_host" \
+        --argjson port "$media_server_port" \
+        --argjson stype "$media_server_type" \
+        '{username:$user,password:$pass,hostname:$host,port:$port,useSsl:false,urlBase:"",email:"",serverType:$stype}')
 
     _cfg_log_info "Seerr: authenticating against ${MEDIA_SERVICE:-jellyfin}..."
 

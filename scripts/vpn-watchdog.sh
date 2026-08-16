@@ -39,10 +39,11 @@ login_qbit() {
     local http_code
     http_code=$(curl -s -o /tmp/qbit_watchdog_login_body.txt -w "%{http_code}" -c "$COOKIE_JAR" \
         -H "Referer: http://${QBIT_HOST}" \
-        --data "username=${QBIT_USER}&password=${QBIT_PASS}" \
+        --data-urlencode "username=${QBIT_USER}" \
+        --data-urlencode "password=${QBIT_PASS}" \
         "http://${QBIT_HOST}/api/v2/auth/login" 2>/dev/null || true)
 
-    if [ "$http_code" != "204" ]; then
+    if [ "$http_code" != "200" ] && [ "$http_code" != "204" ]; then
         return 1
     fi
 

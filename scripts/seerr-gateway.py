@@ -346,7 +346,7 @@ def sonarr_lookup_series_id(payload: dict, api_key: str) -> Optional[int]:
 
 
 def sonarr_remaining_seasons(series_id: int, api_key: str) -> List[int]:
-    """Seasons that still have files or are monitored (skip specials)."""
+    """Seasons that still have files or are monitored (includes specials / 0)."""
     status, series = _sonarr_request("GET", f"/api/v3/series/{series_id}", api_key)
     if status == 404:
         return []
@@ -359,16 +359,18 @@ def sonarr_remaining_seasons(series_id: int, api_key: str) -> List[int]:
         raise RuntimeError(f"sonarr GET episodefile HTTP {status_f}")
     remain: set = set()
     for f in files:
-        if isinstance(f, dict) and f.get("seasonNumber") not in (None, 0):
+        if not isinstance(f, dict) or f.get("seasonNumber") is None:
+            continue
+        try:
             remain.add(int(f["seasonNumber"]))
+        except (TypeError, ValueError):
+            continue
     for s in series.get("seasons") or []:
         if not isinstance(s, dict):
             continue
         try:
             n = int(s.get("seasonNumber"))
         except (TypeError, ValueError):
-            continue
-        if n == 0:
             continue
         if s.get("monitored"):
             remain.add(n)
@@ -1146,6 +1148,99 @@ def self_test() -> int:
     check(
         any(f.get("seasonNumber") == 2 for f in _MockSonarr.files),
         "S02 file still in mock Sonarr",
+    )
+
+    # S01 + specials on disk: deleting the S01 request must not title-wipe specials.
+    _reset_mock_sonarr()
+    _MockSonarr.files = [
+        {"id": 1, "seasonNumber": 1, "seriesId": 10},
+        {"id": 3, "seasonNumber": 0, "seriesId": 10},
+    ]
+    _MockSonarr.series = {
+        "id": 10,
+        "title": "Loki",
+        "tvdbId": 362472,
+        "seasons": [
+            {"seasonNumber": 0, "monitored": True},
+            {"seasonNumber": 1, "monitored": True},
+        ],
+    }
+    _MockSeerr.request_payload = {
+        "id": 8,
+        "type": "tv",
+        "is4k": False,
+        "seasons": [{"seasonNumber": 1, "status": 2}],
+        "media": {
+            "id": 6,
+            "tmdbId": 84958,
+            "tvdbId": 362472,
+            "mediaType": "tv",
+            "externalServiceId": 10,
+        },
+    }
+    _MockSeerr.calls = []
+    _MockSonarr.calls = []
+    st, hdrs, _ = http_call(
+        "DELETE",
+        f"http://127.0.0.1:{gw_port}/api/v1/request/8",
+        {"X-Api-Key": "test-key"},
+    )
+    check(st == 204, f"TV S01 with specials → 204 (got {st})")
+    check(
+        not any("DELETE /api/v1/media/6/file" in c for c in _MockSeerr.calls),
+        "TV S01 with specials does not title-delete",
+    )
+    check(
+        any(c == "DELETE /api/v3/episodefile/1" for c in _MockSonarr.calls),
+        "TV S01 with specials deletes S01 file",
+    )
+    check(
+        not any(c == "DELETE /api/v3/episodefile/3" for c in _MockSonarr.calls),
+        "TV S01 with specials keeps specials file",
+    )
+    check(
+        any(f.get("seasonNumber") == 0 for f in _MockSonarr.files),
+        "specials file still in mock Sonarr",
+    )
+    check(
+        "seasons_deleted" in (hdrs.get("X-Assemblrr-Purge-Detail") or ""),
+        f"S01+specials purge is season-scoped ({hdrs.get('X-Assemblrr-Purge-Detail')})",
+    )
+
+    # Only specials remain: last regular-season request still must not title-delete.
+    _reset_mock_sonarr()
+    _MockSonarr.files = [{"id": 3, "seasonNumber": 0, "seriesId": 10}]
+    _MockSonarr.series = {
+        "id": 10,
+        "title": "Loki",
+        "tvdbId": 362472,
+        "seasons": [
+            {"seasonNumber": 0, "monitored": True},
+            {"seasonNumber": 1, "monitored": False},
+        ],
+    }
+    _MockSeerr.request_payload = {
+        "id": 8,
+        "type": "tv",
+        "is4k": False,
+        "seasons": [{"seasonNumber": 1}],
+        "media": {"id": 6, "mediaType": "tv", "externalServiceId": 10, "tvdbId": 362472},
+    }
+    _MockSeerr.calls = []
+    _MockSonarr.calls = []
+    st, hdrs, _ = http_call(
+        "DELETE",
+        f"http://127.0.0.1:{gw_port}/api/v1/request/8",
+        {"X-Api-Key": "test-key"},
+    )
+    check(st == 204, f"S01 request with only specials left → 204 (got {st})")
+    check(
+        not any("DELETE /api/v1/media/6/file" in c for c in _MockSeerr.calls),
+        "specials-only leftover does not title-delete",
+    )
+    check(
+        any(f.get("seasonNumber") == 0 for f in _MockSonarr.files),
+        "specials survive last regular-season request delete",
     )
 
     # TV request covering every remaining season → title-level delete.
