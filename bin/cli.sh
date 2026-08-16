@@ -1,27 +1,44 @@
 #!/bin/bash
 set -euo pipefail
 
-# assemblrr CLI — manages your media server
-# This file is installed to ~/.local/bin/<APP_CLI_NAME> during setup
+# assemblrr CLI — lives in the install tree (or repo bin/). PATH is a wrapper.
 
-# Source shared library (safe_source, find_install_directory, logging, colors)
-# CLI is installed to ~/.local/bin, lib/ lives next to it or in the install dir
 _cli_self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Locate lib directory (repo: lib/ sibling of bin/; installed: lib/ next to CLI)
+# Leftover full copies in ~/.local/bin must not run; exec the install-tree CLI.
+if [ "$_cli_self" = "$HOME/.local/bin" ] || [ "$_cli_self" = "/usr/local/bin" ]; then
+    _wrap_dir="${ASSEMBLRR_DIR:-}"
+    if [ -z "$_wrap_dir" ]; then
+        for _wrap_f in \
+            /opt/assemblrr/.assemblrr-config \
+            "$HOME/.assemblrr-config" \
+            "$HOME/assemblrr/.assemblrr-config"
+        do
+            if [ -f "$_wrap_f" ]; then
+                _wrap_dir=$(grep -E '^INSTALL_DIRECTORY=' "$_wrap_f" | head -1 || true)
+                _wrap_dir="${_wrap_dir#INSTALL_DIRECTORY=}"
+                _wrap_dir="${_wrap_dir%$'\r'}"
+                _wrap_dir="${_wrap_dir#\"}"
+                _wrap_dir="${_wrap_dir%\"}"
+                [ -n "$_wrap_dir" ] && break
+            fi
+        done
+    fi
+    if [ -n "${_wrap_dir:-}" ] && [ -f "$_wrap_dir/cli.sh" ]; then
+        exec bash "$_wrap_dir/cli.sh" "$@"
+    fi
+    echo "assemblrr: could not find the install. Run setup, or set ASSEMBLRR_DIR." >&2
+    exit 1
+fi
+
+# Locate lib (repo: sibling of bin/; install: lib/ next to cli.sh)
 if [ -f "$_cli_self/../lib/core.sh" ]; then
     _lib_dir="$_cli_self/../lib"
 elif [ -f "$_cli_self/lib/core.sh" ]; then
     _lib_dir="$_cli_self/lib"
 else
-    # Fallback: find install dir first, then source from there
-    _tmp_install=$(grep -r "^INSTALL_DIRECTORY=" /opt/assemblrr/.assemblrr-config "$HOME/assemblrr/.assemblrr-config" "$HOME/.assemblrr-config" 2>/dev/null | head -1 | cut -d= -f2 | tr -d '"' || true)
-    if [ -n "$_tmp_install" ] && [ -f "$_tmp_install/lib/core.sh" ]; then
-        _lib_dir="$_tmp_install/lib"
-    else
-        echo -e "\033[0;31mError: lib/core.sh not found. Re-run setup.\033[0m" >&2
-        exit 1
-    fi
+    echo -e "\033[0;31mError: lib/core.sh not found. Re-run setup.\033[0m" >&2
+    exit 1
 fi
 
 source "$_lib_dir/core.sh"
@@ -92,7 +109,6 @@ declare -A COMMANDS=(
     ["backup"]="backs up to the destination location"
     ["restore"]="restores from a backup archive"
     ["update-containers"]="updates all containers"
-    ["update-cli"]="updates the CLI script to the latest version"
     ["upgrade"]="upgrade install files from git (or --from DIR); runs migrations"
     ["logs"]="shows container logs (optionally specify service name)"
     ["health"]="checks health status of all services"
@@ -129,7 +145,6 @@ show_help() {
     echo "  ${APP_CLI_NAME} logs               # View all container logs"
     echo "  ${APP_CLI_NAME} logs jellyfin       # View specific service logs"
     echo "  ${APP_CLI_NAME} health              # Check health of all services"
-    echo "  ${APP_CLI_NAME} update-cli          # Update CLI to latest version"
     echo "  ${APP_CLI_NAME} upgrade             # Upgrade from git main (backup first)"
     echo "  ${APP_CLI_NAME} upgrade --from DIR  # Upgrade from a local source tree"
     echo "  ${APP_CLI_NAME} upgrade --check     # Dry-run upgrade plan"
@@ -309,18 +324,6 @@ backup_app() {
 
     echo -e "\nBacking up ${APP_DISPLAY_NAME} to $destination..."
 
-    # Copy current CLI script and lib modules, create backup (skip copy if running from install dir)
-    local running_cli; running_cli="$(realpath "${BASH_SOURCE[0]}" 2>/dev/null || echo "${_cli_self}/cli.sh")"
-    local target_cli; target_cli="$(realpath "$INSTALL_DIR/cli.sh" 2>/dev/null || echo "$INSTALL_DIR/cli.sh")"
-    if [ -f "$running_cli" ] && [ "$running_cli" != "$target_cli" ]; then
-        cp "$running_cli" "$INSTALL_DIR/cli.sh" 2>/dev/null || log_warning "Failed to backup CLI script"
-    fi
-    
-    # Copy lib modules if they exist outside target dir
-    if [ -d "$HOME/.local/bin/lib" ] && [ "$(realpath "$HOME/.local/bin/lib" 2>/dev/null)" != "$(realpath "$INSTALL_DIR/lib" 2>/dev/null)" ]; then
-        cp -r "$HOME/.local/bin/lib" "$INSTALL_DIR/" 2>/dev/null || true
-    fi
-    
     # Run tar inside an alpine container bound to the INSTALL_DIR and the destination (excluding temp/cache and sockets)
     if ! wait_while "Creating backup archive" run_docker run --rm \
         -v "$INSTALL_DIR:/source" \
@@ -482,16 +485,12 @@ uninstall_app() {
     if [ -n "${APP_CLI_NAME:-}" ]; then
         rm -f "$HOME/.local/bin/$APP_CLI_NAME" "/usr/local/bin/$APP_CLI_NAME" 2>/dev/null || true
     fi
-    local _lib_module
-    if type list_cli_lib_modules >/dev/null 2>&1; then
-        while IFS= read -r _lib_module; do
-            [ -z "$_lib_module" ] && continue
-            rm -f "$HOME/.local/bin/lib/${_lib_module}.sh" 2>/dev/null || true
-        done < <(list_cli_lib_modules)
+    if type remove_stale_user_cli_libs >/dev/null 2>&1; then
+        remove_stale_user_cli_libs
     else
         rm -f "$HOME/.local/bin/lib/"*.sh 2>/dev/null || true
+        rmdir "$HOME/.local/bin/lib" 2>/dev/null || true
     fi
-    rmdir "$HOME/.local/bin/lib" 2>/dev/null || true
 
     # Setup writes this cheat-sheet under $HOME (outside the install dir)
     # Legacy setup wrote ~/assemblrr_services.txt — remove if present
@@ -944,38 +943,6 @@ check_health() {
     return 0
 }
 
-update_cli() {
-    echo "Updating ${APP_DISPLAY_NAME} CLI..."
-    local tmp_dir
-    tmp_dir=$(mktemp -d)
-
-    if ! wait_while "Updating CLI from git" git clone --depth=1 "${APP_REPO_URL}" "$tmp_dir/assemblrr"; then
-        log_error "Failed to clone ${APP_REPO_URL}. Check your internet connection and repository access."
-    fi
-
-    mkdir -p "$HOME/.local/bin/lib"
-    if [ -f "$tmp_dir/assemblrr/lib/managed_files.sh" ]; then
-        # shellcheck source=/dev/null
-        source "$tmp_dir/assemblrr/lib/managed_files.sh"
-    fi
-    local _m
-    while IFS= read -r _m; do
-        [ -z "$_m" ] && continue
-        if [ -f "$tmp_dir/assemblrr/lib/${_m}.sh" ]; then
-            cp "$tmp_dir/assemblrr/lib/${_m}.sh" "$HOME/.local/bin/lib/${_m}.sh"
-        fi
-    done < <(list_cli_lib_modules)
-    cp "$tmp_dir/assemblrr/bin/cli.sh" "$HOME/.local/bin/$APP_CLI_NAME" && chmod +x "$HOME/.local/bin/$APP_CLI_NAME"
-    # Remove old system-wide install if it exists
-    [ -n "${APP_CLI_NAME:-}" ] && rm -f "/usr/local/bin/$APP_CLI_NAME" 2>/dev/null
-    if type ensure_local_bin_on_path >/dev/null 2>&1; then
-        ensure_local_bin_on_path
-    fi
-    log_success "CLI updated successfully!"
-
-    [ -n "$tmp_dir" ] && rm -rf "$tmp_dir"
-}
-
 main() {
     local command=${1:-"--help"}
     local destination=${2:-.}
@@ -1020,7 +987,7 @@ main() {
             update_containers "${@:2}"
             ;;
         update-cli)
-            update_cli
+            log_info "The CLI is ${INSTALL_DIR}/cli.sh. Update with: ${APP_CLI_NAME} upgrade"
             ;;
         upgrade)
             if ! type upgrade_app >/dev/null 2>&1; then

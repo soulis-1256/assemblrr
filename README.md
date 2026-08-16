@@ -88,7 +88,6 @@ After install, the CLI is on your `PATH` as `assemblrr`. Run `assemblrr <command
 | `backup /target/dir` | Snapshot configuration |
 | `restore /backup.tar.gz` | Restore from a backup archive |
 | `update-containers` | Pull latest images and restart (offers a backup first) |
-| `update-cli` | Update the CLI to the latest version |
 | `upgrade` | Upgrade from git `main` (or `--from DIR`): files, migrations, stack restart, service wiring |
 | `upgrade --skip-stack` | Apply files and CLI without restarting containers |
 | `upgrade --check` | Dry-run: show which managed files and migrations would run |

@@ -17,8 +17,7 @@ root-owned; plain `rm -rf` then fails — use the Docker removal step in Option 
 | Docker network | `assemblrr_network` |
 | Install directory (config, secrets, compose files) | `~/assemblrr` (or the path you chose) |
 | Media directory (your movies/TV/downloads) | `~/assemblrr-media` (or the path you chose) |
-| CLI command | `~/.local/bin/assemblrr` |
-| CLI library modules | `~/.local/bin/lib/*.sh` |
+| CLI command | `~/.local/bin/assemblrr` (wrapper → install `cli.sh`) |
 | Runtime config | `<install>/.assemblrr-config` (written when the install tree is first bootstrapped — early in setup, not only at the end) |
 | Discovery pointer | `~/.assemblrr-config` (points at `INSTALL_DIRECTORY` so the CLI can find non-default paths) |
 | Logs | `/tmp/assemblrr-*.log` |
@@ -133,7 +132,7 @@ rm -rf ~/assemblrr-media    # WARNING: this is your movies/TV/downloads
 
 ```bash
 rm -f ~/.local/bin/assemblrr
-rm -f ~/.local/bin/lib/*.sh
+rm -f ~/.local/bin/lib/*.sh           # leftover from older installs
 rmdir ~/.local/bin/lib 2>/dev/null    # only removed if now empty
 rm -f ~/assemblrr_services.txt 2>/dev/null   # legacy cheat-sheet
 rm -f ~/.assemblrr-config 2>/dev/null        # discovery pointer

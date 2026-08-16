@@ -235,25 +235,10 @@ write_upgrade_version() {
 
 refresh_user_cli() {
     local install_dir="$1"
-    mkdir -p "$HOME/.local/bin/lib"
-    local m
-    if ! type list_cli_lib_modules >/dev/null 2>&1; then
-        # shellcheck source=/dev/null
-        [ -f "$install_dir/lib/managed_files.sh" ] && source "$install_dir/lib/managed_files.sh"
+    if [ -n "$install_dir" ] && [ ! -f "$HOME/.assemblrr-config" ]; then
+        write_install_pointer "$install_dir" "${MEDIA_DIRECTORY:-}"
     fi
-    while IFS= read -r m; do
-        [ -z "$m" ] && continue
-        if [ -f "$install_dir/lib/${m}.sh" ]; then
-            cp "$install_dir/lib/${m}.sh" "$HOME/.local/bin/lib/${m}.sh"
-        fi
-    done < <(list_cli_lib_modules)
-    if [ -f "$install_dir/cli.sh" ]; then
-        cp "$install_dir/cli.sh" "$HOME/.local/bin/${APP_CLI_NAME:-assemblrr}"
-        chmod +x "$HOME/.local/bin/${APP_CLI_NAME:-assemblrr}"
-    fi
-    if type ensure_local_bin_on_path >/dev/null 2>&1; then
-        ensure_local_bin_on_path
-    fi
+    install_user_cli_wrapper
 }
 
 # --- Validate compose after apply ---

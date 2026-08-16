@@ -176,4 +176,35 @@ HOME="$path_home" ensure_local_bin_on_path
 assert_contains "$(cat "$path_home/.bash_profile")" '.local/bin' "appends existing .bash_profile"
 assert_contains "$(cat "$path_home/.config/fish/config.fish")" '.local/bin' "writes fish config"
 
+test_suite "PATH CLI wrapper"
+wrap_home="$tmp/wrap-home"
+wrap_inst="$tmp/wrap-install"
+mkdir -p "$wrap_home/.local/bin/lib" "$wrap_inst"
+printf '%s\n' '#!/bin/bash' 'echo real-cli' >"$wrap_inst/cli.sh"
+chmod +x "$wrap_inst/cli.sh"
+echo stale >"$wrap_home/.local/bin/lib/core.sh"
+echo leftover >"$wrap_home/.local/bin/lib/config_edit.sh"
+HOME="$wrap_home" APP_CLI_NAME=assemblrr install_user_cli_wrapper
+assert_true "wrapper is executable" "[ -x \"$wrap_home/.local/bin/assemblrr\" ]"
+assert_false "stale core.sh removed" "[ -f \"$wrap_home/.local/bin/lib/core.sh\" ]"
+assert_false "stale config_edit.sh removed" "[ -f \"$wrap_home/.local/bin/lib/config_edit.sh\" ]"
+assert_false "empty lib dir removed" "[ -d \"$wrap_home/.local/bin/lib\" ]"
+assert_not_contains "$(cat "$wrap_home/.local/bin/assemblrr")" "find_install_directory" "wrapper is not the full CLI"
+out=$(HOME="$wrap_home" ASSEMBLRR_DIR="$wrap_inst" "$wrap_home/.local/bin/assemblrr")
+assert_eq "real-cli" "$out" "ASSEMBLRR_DIR runs install cli.sh"
+
+printf 'INSTALL_DIRECTORY="%s"\r\n' "$wrap_inst" >"$wrap_home/.assemblrr-config"
+out=$(HOME="$wrap_home" env -u ASSEMBLRR_DIR "$wrap_home/.local/bin/assemblrr")
+assert_eq "real-cli" "$out" "CRLF pointer runs install cli.sh"
+
+assert_failure "missing install fails" \
+    env HOME="$wrap_home" ASSEMBLRR_DIR="$tmp/no-such-install" "$wrap_home/.local/bin/assemblrr"
+
+other="$tmp/wrap-other"
+mkdir -p "$other"
+printf '%s\n' '#!/bin/bash' 'echo other-cli' >"$other/cli.sh"
+chmod +x "$other/cli.sh"
+out=$(HOME="$wrap_home" ASSEMBLRR_DIR="$other" "$wrap_home/.local/bin/assemblrr")
+assert_eq "other-cli" "$out" "ASSEMBLRR_DIR wins over pointer"
+
 test_summary

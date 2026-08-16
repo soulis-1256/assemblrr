@@ -398,6 +398,72 @@ probe_writable_path() {
     return 0
 }
 
+# PATH entry (~/.local/bin/<cli>) is a wrapper that execs $INSTALL_DIR/cli.sh.
+# Older installs copied cli.sh plus a lib/ subset there; those leftovers are removed.
+
+remove_stale_user_cli_libs() {
+    local lib="$HOME/.local/bin/lib"
+    local m
+    [ -d "$lib" ] || return 0
+    for m in core branding compose vpn managed_files upgrade services ui config_edit; do
+        rm -f "$lib/${m}.sh"
+    done
+    rmdir "$lib" 2>/dev/null || true
+}
+
+write_user_cli_wrapper() {
+    local dest="$1"
+    mkdir -p "$(dirname "$dest")"
+    cat >"$dest" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+# PATH wrapper — runs the install-tree CLI.
+
+_read_install_dir() {
+    local f="$1" line
+    [ -f "$f" ] || return 1
+    line=$(grep -E '^INSTALL_DIRECTORY=' "$f" | head -1) || return 1
+    line="${line#INSTALL_DIRECTORY=}"
+    line="${line%$'\r'}"
+    line="${line#\"}"
+    line="${line%\"}"
+    line="${line#\'}"
+    line="${line%\'}"
+    [ -n "$line" ] || return 1
+    printf '%s\n' "$line"
+}
+
+dir="${ASSEMBLRR_DIR:-}"
+if [ -z "$dir" ]; then
+    for f in \
+        /opt/assemblrr/.assemblrr-config \
+        "${HOME}/.assemblrr-config" \
+        "${HOME}/assemblrr/.assemblrr-config"
+    do
+        if dir=$(_read_install_dir "$f"); then
+            break
+        fi
+        dir=""
+    done
+fi
+
+if [ -z "$dir" ] || [ ! -f "$dir/cli.sh" ]; then
+    echo "assemblrr: could not find the install. Run setup, or set ASSEMBLRR_DIR." >&2
+    exit 1
+fi
+
+exec bash "$dir/cli.sh" "$@"
+EOF
+    chmod +x "$dest"
+}
+
+install_user_cli_wrapper() {
+    local dest="$HOME/.local/bin/${APP_CLI_NAME:-assemblrr}"
+    write_user_cli_wrapper "$dest"
+    remove_stale_user_cli_libs
+    ensure_local_bin_on_path
+}
+
 # Persist ~/.local/bin on PATH for bash, zsh, and fish.
 # Does not create ~/.bash_profile (that would hide ~/.profile on login bash).
 _append_path_line() {

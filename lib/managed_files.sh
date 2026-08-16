@@ -68,18 +68,3 @@ EOF
         done < <(find "$UPGRADE_SOURCE_ROOT/migrations" -type f -print0 2>/dev/null | sort -z)
     fi
 }
-
-# Lib modules the user-facing CLI copies next to ~/.local/bin/assemblrr.
-list_cli_lib_modules() {
-    cat <<'EOF'
-core
-branding
-compose
-vpn
-managed_files
-upgrade
-services
-ui
-config_edit
-EOF
-}

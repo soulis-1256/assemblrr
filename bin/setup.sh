@@ -569,23 +569,12 @@ EOF
 # Usage: build_compose_args "$install_directory" "${setup_vpn,,}"
 
 install_cli() {
-    # Copy from install directory (persistent), not SCRIPT_DIR (may be /tmp)
-    local cli_source="$install_directory/cli.sh"
-    if [ ! -f "$cli_source" ]; then
-        log_warning "CLI source missing at $cli_source — skip install"
+    if [ ! -f "$install_directory/cli.sh" ]; then
+        log_warning "CLI source missing at $install_directory/cli.sh — skip install"
         return 1
     fi
-
-    mkdir -p "$HOME/.local/bin/lib"
-    local _lib_module
-    while IFS= read -r _lib_module; do
-        [ -z "$_lib_module" ] && continue
-        if [ -f "$install_directory/lib/${_lib_module}.sh" ]; then
-            cp "$install_directory/lib/${_lib_module}.sh" "$HOME/.local/bin/lib/${_lib_module}.sh"
-        fi
-    done < <(list_cli_lib_modules)
-    cp "$cli_source" "$HOME/.local/bin/$APP_CLI_NAME" && chmod +x "$HOME/.local/bin/$APP_CLI_NAME"
-    ensure_local_bin_on_path
+    write_install_pointer "$install_directory" "${media_directory:-}"
+    install_user_cli_wrapper
     log_debug "CLI installed to $HOME/.local/bin/$APP_CLI_NAME"
 }
 

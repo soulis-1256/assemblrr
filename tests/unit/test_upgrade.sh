@@ -111,8 +111,8 @@ assert_true "upgrade up -d --build --remove-orphans" "grep -q 'up -d --build --r
 assert_true "upgrade wires with ASSEMBLRR_NONINTERACTIVE" "grep -q 'ASSEMBLRR_NONINTERACTIVE=1' \"$REPO_ROOT/lib/upgrade.sh\""
 assert_true "upgrade accepts --skip-stack" "grep -q -- '--skip-stack' \"$REPO_ROOT/lib/upgrade.sh\""
 assert_true "upgrade accepts --skip-wire" "grep -q -- '--skip-wire' \"$REPO_ROOT/lib/upgrade.sh\""
-mods=$(list_cli_lib_modules)
-assert_contains "$mods" "config_edit" "CLI modules include config_edit"
-assert_contains "$mods" "ui" "CLI modules include ui"
+refresh=$(sed -n '/^refresh_user_cli()/,/^}/p' "$REPO_ROOT/lib/upgrade.sh")
+assert_contains "$refresh" "install_user_cli_wrapper" "refresh writes PATH wrapper"
+assert_not_contains "$refresh" "list_cli_lib_modules" "refresh does not copy PATH libs"
 
 test_summary
