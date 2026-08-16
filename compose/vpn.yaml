@@ -27,6 +27,8 @@ services:
       - PORT_FORWARD_ONLY=${PORT_FORWARD_ONLY:-off}
       - VPN_PORT_FORWARDING=${VPN_PORT_FORWARDING:-off}
       - FIREWALL_OUTBOUND_SUBNETS=172.60.0.0/24
+      # Prowlarr indexer HTTP (see prowlarr_sync_gluetun_proxy). Off unless set.
+      - HTTPPROXY=on
       - TZ=${TZ}
     healthcheck:
       test:

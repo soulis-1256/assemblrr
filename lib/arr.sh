@@ -2,7 +2,8 @@
 # assemblrr *arr service configuration — sourced by config.sh
 # Provides: set_arr_auth, qbit helpers, configure_arr_service, profile lookups,
 #           configure_radarr, configure_sonarr, configure_prowlarr,
-#           apply_selected_indexers, sync_selected_indexers
+#           apply_selected_indexers, sync_selected_indexers,
+#           prowlarr_sync_gluetun_proxy
 # Requires: lib/core.sh (logging), lib/api.sh (api_get/post/put/delete helpers),
 #           config.sh (_cfg_log_info, log_step, log_step_fail, AUTH_USERNAME, etc.)
 
@@ -1046,6 +1047,116 @@ wait_for_arr_indexer_sync() {
     return 1
 }
 
+# Route Prowlarr indexer HTTP through Gluetun when VPN is on; remove it when off.
+# Empty tags = every indexer. Does not wrap Radarr/Sonarr app sync (LAN hostnames).
+# Manages only the proxy named below (or an existing Http proxy already on gluetun:8888).
+PROWLARR_GLUETUN_PROXY_NAME="assemblrr Gluetun"
+PROWLARR_GLUETUN_PROXY_HOST="gluetun"
+PROWLARR_GLUETUN_PROXY_PORT="8888"
+
+# $2 = "name" (managed only) or "any" (name or host:port — avoid duplicates)
+_prowlarr_gluetun_proxy_id() {
+    local proxies="$1"
+    local mode="${2:-any}"
+    echo "$proxies" | jq -r \
+        --arg name "$PROWLARR_GLUETUN_PROXY_NAME" \
+        --arg host "$PROWLARR_GLUETUN_PROXY_HOST" \
+        --argjson port "$PROWLARR_GLUETUN_PROXY_PORT" \
+        --arg mode "$mode" '
+        .[] | select(
+            .name == $name
+            or (
+                $mode == "any"
+                and .implementation == "Http"
+                and (([.fields[]? | select(.name == "host") | .value][0] // "") | tostring) == $host
+                and (([.fields[]? | select(.name == "port") | .value][0] // 0) | tonumber) == $port
+            )
+        ) | .id
+    ' 2>/dev/null | head -1
+}
+
+_prowlarr_gluetun_proxy_payload() {
+    local schema="$1"
+    echo "$schema" | jq -c \
+        --arg name "$PROWLARR_GLUETUN_PROXY_NAME" \
+        --arg host "$PROWLARR_GLUETUN_PROXY_HOST" \
+        --argjson port "$PROWLARR_GLUETUN_PROXY_PORT" '
+        [.[] | select(.implementation == "Http")][0] |
+        .fields = [.fields[] | if .name == "host" then .value = $host
+            elif .name == "port" then .value = $port
+            elif .name == "username" then .value = ""
+            elif .name == "password" then .value = ""
+            else . end] |
+        .name = $name | .tags = []
+    ' 2>/dev/null || echo ""
+}
+
+prowlarr_sync_gluetun_proxy() {
+    local apikey="$1"
+    local proxies existing_id
+
+    if [ -z "$apikey" ]; then
+        log_step_fail "Prowlarr: missing API key — cannot sync Gluetun HTTP proxy"
+        return 1
+    fi
+
+    proxies=$(api_get "9696" "/api/v1/indexerProxy" "$apikey")
+    if [ -z "$proxies" ]; then
+        log_step_fail "Prowlarr: failed to list indexer proxies"
+        return 1
+    fi
+    if ! qbit_vpn_enabled; then
+        existing_id=$(_prowlarr_gluetun_proxy_id "$proxies" "name")
+        if [ -z "$existing_id" ]; then
+            log_step "Prowlarr: no Gluetun HTTP proxy (VPN off)"
+            return 0
+        fi
+        local code
+        code=$(api_delete "9696" "/api/v1/indexerProxy/${existing_id}" "$apikey")
+        if [ "$code" = "200" ] || [ "$code" = "204" ]; then
+            log_step "Prowlarr: removed Gluetun HTTP proxy (VPN off)"
+            return 0
+        fi
+        log_step_fail "Prowlarr: failed to remove Gluetun HTTP proxy (HTTP ${code:-?})"
+        return 1
+    fi
+
+    existing_id=$(_prowlarr_gluetun_proxy_id "$proxies" "any")
+
+    local schema payload result
+    schema=$(api_get "9696" "/api/v1/indexerProxy/schema" "$apikey")
+    payload=$(_prowlarr_gluetun_proxy_payload "$schema")
+    if [ -z "$payload" ]; then
+        log_step_fail "Prowlarr: Http indexer-proxy schema not found"
+        return 1
+    fi
+
+    if [ -n "$existing_id" ]; then
+        payload=$(echo "$payload" | jq -c --argjson id "$existing_id" '.id = $id' 2>/dev/null || echo "$payload")
+        result=$(curl -s --connect-timeout 5 -X PUT \
+            -H "Content-Type: application/json" \
+            -d "$payload" \
+            "http://${API_HOST}:9696/api/v1/indexerProxy/${existing_id}?apikey=${apikey}&forceSave=true" 2>/dev/null)
+        if jq_json_has_key "$result" "id"; then
+            log_step "Prowlarr: indexer traffic via Gluetun HTTP proxy"
+            return 0
+        fi
+        log_step_fail "Prowlarr: failed to update Gluetun HTTP proxy"
+        return 1
+    fi
+
+    result=$(curl -s --connect-timeout 5 -X POST \
+        -H "Content-Type: application/json" \
+        -d "$payload" \
+        "http://${API_HOST}:9696/api/v1/indexerProxy?apikey=${apikey}&forceSave=true" 2>/dev/null)
+    if jq_json_has_key "$result" "id"; then
+        log_step "Prowlarr: indexer traffic via Gluetun HTTP proxy"
+        return 0
+    fi
+    log_step_fail "Prowlarr: failed to add Gluetun HTTP proxy"
+    return 1
+}
+
 # POST indexers named in SELECTED_INDEXERS into Prowlarr (skip existing).
 # Used by first-run wiring and `assemblrr config edit`.
 apply_selected_indexers() {
@@ -1097,14 +1208,19 @@ apply_selected_indexers() {
         if jq_json_has_key "$idx_result" "id"; then
             log_step "Prowlarr: added ${indexer_name} indexer"
         else
-            local disabled_payload
+            local err_msg disabled_payload
+            err_msg=$(echo "$idx_result" | jq -r 'if type == "array" then .[0].errorMessage // empty else .errorMessage // empty end' 2>/dev/null || echo "")
             disabled_payload=$(echo "$indexer_payload" | jq -c '.enable = false' 2>/dev/null || echo "")
             idx_result=$(curl -s --connect-timeout 5 -X POST \
                 -H "Content-Type: application/json" \
                 -d "$disabled_payload" \
                 "http://${API_HOST}:9696/api/v1/indexer?apikey=${apikey}&forceSave=true" 2>/dev/null)
             if jq_json_has_key "$idx_result" "id"; then
-                log_step "Prowlarr: added ${indexer_name} indexer (disabled — needs FlareSolverr for Cloudflare)"
+                if [ -n "$err_msg" ]; then
+                    log_step "Prowlarr: added ${indexer_name} indexer (disabled — ${err_msg})"
+                else
+                    log_step "Prowlarr: added ${indexer_name} indexer (disabled — enabled save failed)"
+                fi
             else
                 log_step_fail "Prowlarr: failed to add ${indexer_name} indexer"
             fi
@@ -1223,15 +1339,20 @@ configure_prowlarr() {
         fi
     fi
 
-    # 2. Selected indexers (optional; can add later via `config edit`)
+    # 2. Indexer HTTP via Gluetun when VPN is on (empty tags = all indexers)
+    if ! prowlarr_sync_gluetun_proxy "$apikey"; then
+        critical_errors=$((critical_errors + 1))
+    fi
+
+    # 3. Selected indexers (optional; can add later via `config edit`)
     apply_selected_indexers "$apikey"
 
-    # 3) After fullSync, set min seeders on *arr indexers (best-effort)
+    # 4) After fullSync, set min seeders on *arr indexers (best-effort)
     wait_for_arr_indexer_sync "$radarr_apikey" || true
     arr_set_indexer_min_seeders "Radarr" "7878" "$radarr_apikey" || true
     arr_set_indexer_min_seeders "Sonarr" "8989" "$sonarr_apikey" || true
 
-    # 4. Set authentication
+    # 5. Set authentication
     if ! set_arr_auth "Prowlarr" "9696" "$apikey" "v1"; then
         critical_errors=$((critical_errors + 1))
     fi

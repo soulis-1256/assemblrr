@@ -450,6 +450,10 @@ _config_edit_vpn() {
         wait_for_api "Sonarr" "8989" "$SONARR_API_KEY" || true
         arr_update_qb_host "Sonarr" "8989" "$SONARR_API_KEY" || true
     fi
+    if [ -n "${PROWLARR_API_KEY:-}" ]; then
+        wait_for_api "Prowlarr" "9696" "$PROWLARR_API_KEY" "/api/v1/system/status" || true
+        prowlarr_sync_gluetun_proxy "$PROWLARR_API_KEY" || true
+    fi
 }
 
 _config_edit_media() {
