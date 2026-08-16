@@ -312,6 +312,21 @@ configure_bazarr() {
         )
     fi
 
+    # First wire only: Bazarr hashes the password on save, so later wires
+    # must not resend it (that would MD5 the hash). Auth edit uses bazarr_set_auth.
+    local auth_type=""
+    auth_type=$(curl -s --connect-timeout 8 \
+        "http://${API_HOST}:${BAZARR_PORT}/api/system/settings?apikey=${bazarr_key}" 2>/dev/null \
+        | jq -r '.auth.type // empty' 2>/dev/null || true)
+    if { [ -z "$auth_type" ] || [ "$auth_type" = "null" ] || [ "$auth_type" = "None" ]; } \
+        && [ -n "${AUTH_USERNAME:-}" ] && [ -n "${AUTH_PASSWORD:-}" ]; then
+        form_args+=(
+            -F "settings-auth-type=form"
+            -F "settings-auth-username=${AUTH_USERNAME}"
+            -F "settings-auth-password=${AUTH_PASSWORD}"
+        )
+    fi
+
     # Jellyfin refresh after subtitle downloads
     if [ "${MEDIA_SERVICE:-}" = "jellyfin" ]; then
         jf_key=$(cat "$INSTALL_DIR/secrets/jellyfin_api_key.txt" 2>/dev/null || echo "")
@@ -414,4 +429,34 @@ configure_bazarr() {
     fi
 
     return 0
+}
+
+# Set Bazarr form login. Always sends a fresh password (Bazarr MD5s it).
+# Do not call this from the regular wire loop — only from auth edit.
+bazarr_set_auth() {
+    local bazarr_key=""
+    if [ -z "${AUTH_USERNAME:-}" ] || [ -z "${AUTH_PASSWORD:-}" ]; then
+        log_step_fail "Bazarr: new credentials missing"
+        return 1
+    fi
+    if ! bazarr_key=$(read_bazarr_api_key); then
+        return 1
+    fi
+    if ! wait_for_bazarr "$bazarr_key"; then
+        return 1
+    fi
+
+    local http_code
+    http_code=$(_bazarr_post_form "$bazarr_key" \
+        -F "settings-auth-type=form" \
+        -F "settings-auth-username=${AUTH_USERNAME}" \
+        -F "settings-auth-password=${AUTH_PASSWORD}")
+    if [ "$http_code" = "204" ] || [ "$http_code" = "200" ]; then
+        log_step "Bazarr: set login (${AUTH_USERNAME})"
+        return 0
+    fi
+    local body=""
+    body=$(cat /tmp/bazarr-settings-body.txt 2>/dev/null | head -c 200 || true)
+    log_step_fail "Bazarr: failed to set login (HTTP ${http_code}${body:+: $body})"
+    return 1
 }

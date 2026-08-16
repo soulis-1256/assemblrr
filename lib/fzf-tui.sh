@@ -472,7 +472,7 @@ configure_indexers() {
             log_info "Prowlarr is not responding — cannot edit indexers."
         else
             log_info "Prowlarr is not responding — skipping optional indexer setup."
-            log_info "You can add indexers later with: ${APP_CLI_NAME:-assemblrr} config edit indexers"
+            log_info "You can add indexers later with: ${APP_CLI_NAME:-assemblrr} config edit"
         fi
     fi
 }
@@ -523,7 +523,7 @@ configure_subtitle_providers() {
             log_info "Bazarr is not running — cannot edit providers."
         else
             log_info "Bazarr is not running — skipping optional provider setup."
-            log_info "You can set providers later with: ${APP_CLI_NAME:-assemblrr} config edit providers"
+            log_info "You can set providers later with: ${APP_CLI_NAME:-assemblrr} config edit"
         fi
         return 0
     fi

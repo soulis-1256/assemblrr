@@ -96,7 +96,7 @@ declare -A COMMANDS=(
     ["upgrade"]="upgrade install files from git (or --from DIR); runs migrations"
     ["logs"]="shows container logs (optionally specify service name)"
     ["health"]="checks health status of all services"
-    ["config"]="configuration: show, or edit one setup section"
+    ["config"]="configuration: show, edit (picker), or apply (re-wire)"
     ["purge"]="delete one title from *arr, disk, and qBittorrent"
 )
 
@@ -138,8 +138,7 @@ show_help() {
     echo "  ${APP_CLI_NAME} status --docker    # Raw docker compose ps"
     echo "  ${APP_CLI_NAME} config              # List config subcommands"
     echo "  ${APP_CLI_NAME} config show         # Show current configuration"
-    echo "  ${APP_CLI_NAME} config edit         # Pick a setup section to change"
-    echo "  ${APP_CLI_NAME} config edit indexers  # Reopen Prowlarr indexer fzf"
+    echo "  ${APP_CLI_NAME} config edit         # Pick a setting to change"
     echo "  ${APP_CLI_NAME} purge --movie-id N  # Full delete (*arr + disk + qB)"
     echo "  ${APP_CLI_NAME} purge --path PATH   # Full delete by library path"
     echo "  ${APP_CLI_NAME} purge --tmdb ID     # Full delete by TMDB id"
@@ -789,16 +788,22 @@ show_config_help() {
     echo
     echo "Subcommands:"
     printf "  %-12s %s\n" "show" "Show current configuration"
-    printf "  %-12s %s\n" "edit" "Change one first-setup section (picker if omitted)"
+    printf "  %-12s %s\n" "edit" "Pick a setting to change"
+    printf "  %-12s %s\n" "apply" "Re-wire running services (no compose replace)"
     echo
     echo "Examples:"
     echo "  ${APP_CLI_NAME} config                 # List config options"
     echo "  ${APP_CLI_NAME} config show            # Show configuration"
-    echo "  ${APP_CLI_NAME} config edit            # Pick a section (indexers, profile, …)"
-    echo "  ${APP_CLI_NAME} config edit indexers   # Reopen the Prowlarr indexer fzf"
-    echo "  ${APP_CLI_NAME} config edit all        # Re-run the full setup wizard"
-    echo
-    echo "Run '${APP_CLI_NAME} config edit --help' for every section."
+    echo "  ${APP_CLI_NAME} config apply           # Re-run service wiring only"
+    echo "  ${APP_CLI_NAME} config edit            # Pick a setting to change"
+}
+
+config_apply() {
+    if [ ! -f "$INSTALL_DIR/config.sh" ]; then
+        log_error "config.sh not found in $INSTALL_DIR. Run '${APP_CLI_NAME} upgrade' first."
+    fi
+    log_info "Re-wiring services (no compose replace)..."
+    ASSEMBLRR_NONINTERACTIVE=1 bash "$INSTALL_DIR/config.sh"
 }
 
 _load_config_edit() {
@@ -823,6 +828,9 @@ config_cmd() {
             ;;
         show)
             show_config
+            ;;
+        apply|wire)
+            config_apply
             ;;
         edit)
             _load_config_edit

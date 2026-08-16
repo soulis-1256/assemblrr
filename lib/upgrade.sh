@@ -400,7 +400,7 @@ upgrade_app() {
         if ASSEMBLRR_NONINTERACTIVE=1 bash "$INSTALL_DIR/config.sh"; then
             log_success "Service wiring completed"
         else
-            log_warning "Service wiring reported failures. Fix issues, then re-run: ${APP_CLI_NAME:-assemblrr} upgrade"
+            log_warning "Service wiring reported failures. Fix issues, then re-run: ${APP_CLI_NAME:-assemblrr} config apply"
         fi
     else
         log_warning "config.sh missing after upgrade — cannot wire services"

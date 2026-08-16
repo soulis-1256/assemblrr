@@ -36,6 +36,7 @@ run_scripts() {
 run_unit() {
     echo "Running unit tests..."
     for f in \
+        "$SCRIPT_DIR/unit/test_arr_quality.sh" \
         "$SCRIPT_DIR/unit/test_compose.sh" \
         "$SCRIPT_DIR/unit/test_config_edit.sh" \
         "$SCRIPT_DIR/unit/test_core.sh" \

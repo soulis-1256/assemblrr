@@ -83,9 +83,8 @@ After install, the CLI is on your `PATH` as `assemblrr`. Run `assemblrr <command
 | `logs [service]` | Follow logs (all services, or one) |
 | `config` | List config subcommands |
 | `config show` | Show current configuration |
-| `config edit` | Change one install setting (picker if omitted) |
-| `config edit indexers` | Add/remove Prowlarr indexers (fzf) |
-| `config edit all` | Re-run the full setup wizard |
+| `config apply` | Re-wire running services (no compose replace). Alias: `config wire` |
+| `config edit` | Pick a setting to change (indexers, login, VPN, …) |
 | `backup /target/dir` | Snapshot configuration |
 | `restore /backup.tar.gz` | Restore from a backup archive |
 | `update-containers` | Pull latest images and restart (offers a backup first) |

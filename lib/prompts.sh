@@ -70,11 +70,11 @@ configure_seerr_profile() {
     fi
 
     ui_intro \
-        "What default quality profile would you like to set for Seerr (Movies)?" \
-        "Change Seerr's default movie quality profile."
-    echo "  1) Ultra-HD (4K - Optimized for HEVC/x265)"
-    echo "  2) 1080p"
-    echo "  3) Any (Radarr Default)"
+        "What default quality profile should movies use (Radarr and Seerr)?" \
+        "Change the default movie quality on Radarr and Seerr."
+    echo "  1) Ultra-HD (4K - assemblrr UHD Bluray + WEB)"
+    echo "  2) 1080p (assemblrr HD Bluray + WEB)"
+    echo "  3) Any"
 
     while true; do
         read -p "Choose your Seerr default profile [1]: " seerr_profile_choice
@@ -187,7 +187,7 @@ configure_opensubtitles() {
     log_info "The website login accepts email or username; Bazarr/API require your profile username."
     log_info "Find it under your OpenSubtitles profile (not the signup email)."
     ui_note \
-        "Other subtitle providers can be configured later with: ${APP_CLI_NAME:-assemblrr} config edit providers" \
+        "Other subtitle providers can be configured later with: ${APP_CLI_NAME:-assemblrr} config edit" \
         ""
     read -p "Do you have OpenSubtitles.com credentials? (y/N) [Default = n]: " opensubtitles_enabled
     opensubtitles_enabled=${opensubtitles_enabled:-n}
@@ -375,11 +375,11 @@ prompt_vpn_credentials() {
 
 configure_auth() {
     ui_intro \
-        "Set credentials for your service web UIs." \
-        "Change the shared service login (Radarr, Sonarr, Prowlarr, qBittorrent)."
+        "Set one username and password for every service web UI." \
+        "Change the shared login on every service UI."
     ui_note \
-        "These will be used to log into Radarr, Prowlarr, and other services." \
-        "Seerr / Jellyfin / Bazarr may still use the previous password until you sign in there or re-run wiring."
+        "Same login on Radarr, Sonarr, Prowlarr, qBittorrent, Jellyfin, and Bazarr. Seerr signs in with the Jellyfin (or Emby) user." \
+        "Updates Radarr, Sonarr, Prowlarr, qBittorrent, Jellyfin, and Bazarr. Seerr signs in with the Jellyfin (or Emby) user."
     echo
 
     auth_username=""

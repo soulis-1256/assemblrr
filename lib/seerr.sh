@@ -470,3 +470,16 @@ EOF
         return 1
     fi
 }
+
+# Seerr has no separate password — it authenticates against Jellyfin/Emby.
+seerr_verify_login() {
+    local seerr_cookie_jar="/tmp/seerr_cookie_jar_verify_$$"
+    if seerr_get_cookie "$seerr_cookie_jar" "false" || seerr_get_cookie "$seerr_cookie_jar" "true"; then
+        rm -f "$seerr_cookie_jar"
+        log_step "Seerr: session works with the new Jellyfin/Emby password"
+        return 0
+    fi
+    rm -f "$seerr_cookie_jar"
+    log_step_fail "Seerr: could not open a session (it uses the Jellyfin/Emby login)"
+    return 1
+}

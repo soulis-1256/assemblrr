@@ -12,19 +12,19 @@ _config_edit_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 [ -f "$_config_edit_dir/ui.sh" ] && source "$_config_edit_dir/ui.sh"
 
-# id|aliases|description   (pipe so empty aliases stay empty; bash IFS tab collapses)
+# id|description
 _config_edit_catalog() {
     cat <<'EOF'
-indexers||Prowlarr indexers (fzf)
-providers|subtitles,subtitle-providers|Bazarr subtitle providers (fzf)
-language|subtitle-language|Preferred subtitle language (fzf)
-profile|quality,seerr-profile|Seerr default quality profile (movies)
-opensubtitles|os|OpenSubtitles.com credentials
-auth|login,credentials|Service login (Radarr / Sonarr / Prowlarr / qB)
-timezone|tz|Container timezone
-vpn||VPN on/off, provider, and credentials (restarts stack)
-media|media-service|Jellyfin / Emby / Plex (restarts stack)
-all|setup,wizard|Re-run the full setup wizard
+indexers|Prowlarr indexers
+providers|Bazarr subtitle providers
+language|Preferred subtitle language
+profile|Default movie quality (Radarr + Seerr)
+opensubtitles|OpenSubtitles.com credentials
+auth|Shared login for every service UI
+timezone|Container timezone
+vpn|VPN on/off, provider, and credentials (restarts stack)
+media|Jellyfin / Emby / Plex (restarts stack)
+all|Re-run the full setup wizard
 EOF
 }
 
@@ -34,51 +34,30 @@ config_edit_section_ids() {
 
 config_edit_usage() {
     local cli="${APP_CLI_NAME:-assemblrr}"
-    echo "Usage: ${cli} config edit [section]"
+    echo "Usage: ${cli} config edit"
     echo
-    echo "Change one install setting without re-running the whole wizard."
-    echo "No argument opens a picker (fzf when available)."
+    echo "Opens a picker. Choose what to change there."
     echo
-    echo "Sections:"
-    local id aliases desc
-    while IFS='|' read -r id aliases desc; do
+    echo "In the picker:"
+    local id desc
+    while IFS='|' read -r id desc; do
         [ -z "$id" ] && continue
-        if [ -n "$aliases" ]; then
-            printf "  %-14s %s\n" "$id" "$desc"
-            printf "  %-14s (aliases: %s)\n" "" "$aliases"
-        else
-            printf "  %-14s %s\n" "$id" "$desc"
-        fi
+        printf "  %-14s %s\n" "$id" "$desc"
     done < <(_config_edit_catalog)
-    echo
-    echo "Examples:"
-    echo "  ${cli} config edit              # pick a section"
-    echo "  ${cli} config edit indexers     # reopen Prowlarr indexer fzf"
-    echo "  ${cli} config edit profile      # change Seerr movie default"
-    echo "  ${cli} config edit all          # full setup wizard"
 }
 
-# Resolve user input (id or alias) to a canonical section id. Empty → "".
+# Resolve picker output to a catalog id. Empty → "".
 config_edit_resolve() {
     local want="${1:-}"
     want=$(echo "$want" | tr '[:upper:]' '[:lower:]')
     [ -z "$want" ] && return 1
-    local id aliases
-    while IFS='|' read -r id aliases _; do
+    local id
+    while IFS='|' read -r id _; do
         [ -z "$id" ] && continue
         if [ "$want" = "$id" ]; then
             echo "$id"
             return 0
         fi
-        local a
-        local -a _aliases=()
-        IFS=',' read -ra _aliases <<< "$aliases"
-        for a in "${_aliases[@]}"; do
-            if [ "$want" = "$a" ]; then
-                echo "$id"
-                return 0
-            fi
-        done
     done < <(_config_edit_catalog)
     return 1
 }
@@ -210,7 +189,7 @@ _config_edit_restart_stack() {
 
 _config_edit_pick() {
     local data selected
-    data=$(_config_edit_catalog | awk -F'|' '{printf "%s\t%s\n", $1, $3}')
+    data=$(_config_edit_catalog | awk -F'|' '{printf "%s\t%s\n", $1, $2}')
     if type _fzf_can_render >/dev/null 2>&1 && _fzf_can_render && _fzf_has_tty; then
         selected=$(echo "$data" | fzf \
             --prompt="Edit which setting> " \
@@ -227,7 +206,7 @@ _config_edit_pick() {
     echo
     log_info "What do you want to change?"
     local i=1 id desc
-    while IFS='|' read -r id _ desc; do
+    while IFS='|' read -r id desc; do
         printf "  %2d) %-14s %s\n" "$i" "$id" "$desc"
         i=$((i + 1))
     done < <(_config_edit_catalog)
@@ -344,24 +323,65 @@ _config_edit_opensubtitles() {
 
 _config_edit_auth() {
     _config_edit_load
+    local old_user old_pass
+    old_user=$(cat "$INSTALL_DIR/secrets/auth_username.txt" 2>/dev/null || echo "${AUTH_USERNAME:-}")
+    old_pass=$(cat "$INSTALL_DIR/secrets/auth_password.txt" 2>/dev/null || echo "${AUTH_PASSWORD:-}")
+
     configure_auth
     local secrets_dir="$INSTALL_DIR/secrets"
     mkdir -p "$secrets_dir"
-    echo -n "${auth_username:-admin}" > "$secrets_dir/auth_username.txt"
-    echo -n "${auth_password:-}" > "$secrets_dir/auth_password.txt"
-    chmod 600 "$secrets_dir/auth_username.txt" "$secrets_dir/auth_password.txt"
     AUTH_USERNAME="${auth_username:-admin}"
     AUTH_PASSWORD="${auth_password:-}"
-    log_success "Auth credentials written to $secrets_dir"
-    qbit_set_credentials || true
+
+    local fail=0
+    qbit_change_credentials "$old_user" "$old_pass" "$AUTH_USERNAME" "$AUTH_PASSWORD" || fail=1
     if [ -n "${RADARR_API_KEY:-}" ]; then
-        set_arr_auth "Radarr" "7878" "$RADARR_API_KEY" "v3" || true
+        set_arr_auth "Radarr" "7878" "$RADARR_API_KEY" "v3" || fail=1
+    else
+        log_step_fail "Radarr: no API key — skipped"
+        fail=1
     fi
     if [ -n "${SONARR_API_KEY:-}" ]; then
-        set_arr_auth "Sonarr" "8989" "$SONARR_API_KEY" "v3" || true
+        set_arr_auth "Sonarr" "8989" "$SONARR_API_KEY" "v3" || fail=1
+    else
+        log_step_fail "Sonarr: no API key — skipped"
+        fail=1
     fi
     if [ -n "${PROWLARR_API_KEY:-}" ]; then
-        set_arr_auth "Prowlarr" "9696" "$PROWLARR_API_KEY" "v1" || true
+        set_arr_auth "Prowlarr" "9696" "$PROWLARR_API_KEY" "v1" || fail=1
+    else
+        log_step_fail "Prowlarr: no API key — skipped"
+        fail=1
+    fi
+
+    case "${MEDIA_SERVICE:-jellyfin}" in
+        jellyfin)
+            jellyfin_change_credentials "$old_user" "$old_pass" "$AUTH_USERNAME" "$AUTH_PASSWORD" || fail=1
+            ;;
+        emby)
+            jellyfin_change_credentials "$old_user" "$old_pass" "$AUTH_USERNAME" "$AUTH_PASSWORD" 8096 "Emby" || fail=1
+            ;;
+        plex)
+            log_warning "Plex account password is not this login — change it in Plex."
+            ;;
+    esac
+
+    bazarr_set_auth || fail=1
+
+    if [ "${MEDIA_SERVICE:-jellyfin}" = "jellyfin" ] || [ "${MEDIA_SERVICE:-}" = "emby" ]; then
+        if type seerr_verify_login >/dev/null 2>&1; then
+            seerr_verify_login || true
+        fi
+    fi
+
+    echo -n "$AUTH_USERNAME" > "$secrets_dir/auth_username.txt"
+    echo -n "$AUTH_PASSWORD" > "$secrets_dir/auth_password.txt"
+    chmod 600 "$secrets_dir/auth_username.txt" "$secrets_dir/auth_password.txt"
+    log_success "Auth credentials written to $secrets_dir"
+
+    if [ "$fail" -ne 0 ]; then
+        log_warning "Some UIs did not take the new password. Fix those services, then: ${APP_CLI_NAME:-assemblrr} config apply"
+        return 1
     fi
 }
 
@@ -408,7 +428,11 @@ _config_edit_vpn() {
             : > "$secrets_dir/openvpn_user.txt"
             : > "$secrets_dir/openvpn_password.txt"
         fi
-        chmod 600 "$secrets_dir"/*.txt 2>/dev/null || true
+        chmod 600 \
+            "$secrets_dir/openvpn_user.txt" \
+            "$secrets_dir/openvpn_password.txt" \
+            "$secrets_dir/wireguard_private_key.txt" \
+            2>/dev/null || true
         log_success "VPN secrets written to $secrets_dir"
     fi
     if [ "${VPN_ENABLED:-n}" = "y" ]; then
@@ -440,7 +464,7 @@ _config_edit_media() {
         configure_jellyfin || true
         configure_jellyfin_notifications || true
     elif [ "$previous" != "$MEDIA_SERVICE" ]; then
-        log_info "Switched media server to ${MEDIA_SERVICE}. Finish any first-run UI setup, then re-run: ${APP_CLI_NAME:-assemblrr} config edit all"
+        log_info "Switched media server to ${MEDIA_SERVICE}. Finish any first-run UI setup, then run: ${APP_CLI_NAME:-assemblrr} config apply"
     fi
 }
 
@@ -474,25 +498,28 @@ config_edit_run() {
     local section=""
     ui_set_mode edit
 
-    if [ -z "$raw" ]; then
-        _config_edit_load_picker
-        raw=$(_config_edit_pick)
-        raw=$(echo "${raw:-}" | head -1 | tr -d '[:space:]')
-        if [ -z "$raw" ]; then
-            echo "Cancelled."
-            return 0
-        fi
-    fi
-
     case "$raw" in
         --help|-h|help)
             config_edit_usage
             return 0
             ;;
+        "")
+            ;;
+        *)
+            log_error "Just run '${APP_CLI_NAME:-assemblrr} config edit' and pick from the menu"
+            ;;
     esac
 
+    _config_edit_load_picker
+    raw=$(_config_edit_pick)
+    raw=$(echo "${raw:-}" | head -1 | tr -d '[:space:]')
+    if [ -z "$raw" ]; then
+        echo "Cancelled."
+        return 0
+    fi
+
     if ! section=$(config_edit_resolve "$raw"); then
-        log_error "Unknown config section: $raw\nRun '${APP_CLI_NAME:-assemblrr} config edit --help' for sections"
+        log_error "Unknown config section: $raw"
     fi
 
     case "$section" in

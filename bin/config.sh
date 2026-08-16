@@ -220,7 +220,7 @@ if [ "$_wire_critical_fail" -gt 0 ]; then
     fi
     echo -e "  ${YELLOW}Log: $CONFIGURE_LOG${NC}" | tee -a "$CONFIGURE_LOG"
     echo
-    _cfg_log_info "Fix issues, then re-run setup or: ${APP_CLI_NAME:-assemblrr} upgrade"
+    _cfg_log_info "Fix issues, then re-run: ${APP_CLI_NAME:-assemblrr} config apply"
     echo
     exit 1
 fi

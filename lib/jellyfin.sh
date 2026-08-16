@@ -382,6 +382,116 @@ configure_jellyfin_libraries() {
     [ "$critical_errors" -eq 0 ]
 }
 
+# Change an existing Jellyfin/Emby user's password (and name if it changed).
+# Usage: jellyfin_change_credentials <old_user> <old_pass> <new_user> <new_pass> [port] [label]
+jellyfin_change_credentials() {
+    local old_user="$1"
+    local old_pass="$2"
+    local new_user="$3"
+    local new_pass="$4"
+    local jellyfin_port="${5:-8096}"
+    local label="${6:-Jellyfin}"
+    local auth_header='X-Emby-Authorization: MediaBrowser Client="assemblrr", Version="1.0", Device="config-edit", DeviceId="assemblrr-auth"'
+
+    if [ -z "$new_user" ] || [ -z "$new_pass" ]; then
+        log_step_fail "${label}: new credentials missing"
+        return 1
+    fi
+
+    local public_info wizard_complete
+    public_info=$(curl -sf --connect-timeout 5 \
+        "http://${API_HOST}:${jellyfin_port}/System/Info/Public" 2>/dev/null || echo "")
+    wizard_complete=$(echo "$public_info" | jq -r '.StartupWizardCompleted // ""' 2>/dev/null || echo "")
+    if [ "$wizard_complete" != "True" ] && [ "$wizard_complete" != "true" ]; then
+        if [ "$label" = "Jellyfin" ] && type configure_jellyfin >/dev/null 2>&1; then
+            configure_jellyfin
+            return $?
+        fi
+        log_step_fail "${label}: startup wizard is still open — finish first boot, then retry"
+        return 1
+    fi
+
+    local auth_payload auth_response
+    auth_payload=$(jq -nc --arg u "$old_user" --arg p "$old_pass" '{Username:$u,Pw:$p}')
+    auth_response=$(curl -sf --connect-timeout 10 -X POST \
+        -H "Content-Type: application/json" \
+        -H "$auth_header" \
+        -d "$auth_payload" \
+        "http://${API_HOST}:${jellyfin_port}/Users/AuthenticateByName" 2>/dev/null || echo "")
+
+    if [ -z "$auth_response" ]; then
+        auth_payload=$(jq -nc --arg u "$new_user" --arg p "$new_pass" '{Username:$u,Pw:$p}')
+        auth_response=$(curl -sf --connect-timeout 10 -X POST \
+            -H "Content-Type: application/json" \
+            -H "$auth_header" \
+            -d "$auth_payload" \
+            "http://${API_HOST}:${jellyfin_port}/Users/AuthenticateByName" 2>/dev/null || echo "")
+        if [ -n "$auth_response" ]; then
+            local already_name
+            already_name=$(echo "$auth_response" | jq -r '.User.Name // ""' 2>/dev/null || echo "")
+            if [ "$already_name" = "$new_user" ]; then
+                log_step "${label}: already using the new password"
+                return 0
+            fi
+            # New password already works — only the display name still needs updating.
+            old_pass="$new_pass"
+        else
+            log_step_fail "${label}: could not log in with the old password"
+            return 1
+        fi
+    fi
+
+    local access_token user_id
+    access_token=$(echo "$auth_response" | jq -r '.AccessToken // ""' 2>/dev/null || echo "")
+    user_id=$(echo "$auth_response" | jq -r '.User.Id // ""' 2>/dev/null || echo "")
+    if [ -z "$access_token" ] || [ -z "$user_id" ]; then
+        log_step_fail "${label}: login response missing token"
+        return 1
+    fi
+
+    if [ "$old_pass" != "$new_pass" ]; then
+        local pw_payload pw_code
+        pw_payload=$(jq -nc --arg cur "$old_pass" --arg new "$new_pass" '{CurrentPw:$cur,NewPw:$new}')
+        pw_code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 8 -X POST \
+            -H "Content-Type: application/json" \
+            -H "X-Emby-Token: ${access_token}" \
+            -d "$pw_payload" \
+            "http://${API_HOST}:${jellyfin_port}/Users/${user_id}/Password" 2>/dev/null || echo "000")
+        if [ "$pw_code" -lt 200 ] || [ "$pw_code" -ge 300 ]; then
+            log_step_fail "${label}: failed to set password (HTTP $pw_code)"
+            return 1
+        fi
+    fi
+
+    if [ "$old_user" != "$new_user" ]; then
+        local enc_name name_code
+        enc_name=$(jq -rn --arg n "$new_user" '$n | @uri' 2>/dev/null || echo "$new_user")
+        name_code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 8 -X POST \
+            -H "X-Emby-Token: ${access_token}" \
+            "http://${API_HOST}:${jellyfin_port}/Users/${user_id}/Name?name=${enc_name}" \
+            2>/dev/null || echo "000")
+        if [ "$name_code" -lt 200 ] || [ "$name_code" -ge 300 ]; then
+            local user_obj patched
+            user_obj=$(curl -s --connect-timeout 8 \
+                -H "X-Emby-Token: ${access_token}" \
+                "http://${API_HOST}:${jellyfin_port}/Users/${user_id}" 2>/dev/null || echo "")
+            patched=$(echo "$user_obj" | jq --arg n "$new_user" '.Name = $n' 2>/dev/null || echo "")
+            name_code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 8 -X POST \
+                -H "Content-Type: application/json" \
+                -H "X-Emby-Token: ${access_token}" \
+                -d "$patched" \
+                "http://${API_HOST}:${jellyfin_port}/Users/${user_id}" 2>/dev/null || echo "000")
+        fi
+        if [ "$name_code" -lt 200 ] || [ "$name_code" -ge 300 ]; then
+            log_step_fail "${label}: password updated, username change failed (HTTP $name_code)"
+            return 1
+        fi
+    fi
+
+    log_step "${label}: set login (${new_user})"
+    return 0
+}
+
 # --- Jellyfin notification connections (Radarr/Sonarr → Jellyfin) ---
 
 configure_jellyfin_notifications() {

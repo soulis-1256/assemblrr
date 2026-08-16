@@ -157,6 +157,67 @@ qbit_set_credentials() {
     return 1
 }
 
+qbit_try_login() {
+    local user="$1"
+    local pass="$2"
+    local cookie_jar="$3"
+    local qbit_port=8081
+
+    [ -n "$user" ] && [ -n "$pass" ] || return 1
+    : >"$cookie_jar"
+    curl -s --connect-timeout 5 -c "$cookie_jar" \
+        -H "Referer: http://${API_HOST}:${qbit_port}" \
+        -d "username=${user}&password=${pass}" \
+        "http://${API_HOST}:${qbit_port}/api/v2/auth/login" 2>/dev/null >/dev/null || true
+    [ -n "$(qbit_cookie_sid "$cookie_jar")" ]
+}
+
+# Login with the old password, then set the new WebUI user/pass.
+# Tries new (already changed) then the first-boot temp password if old fails.
+qbit_change_credentials() {
+    local old_user="$1"
+    local old_pass="$2"
+    local new_user="$3"
+    local new_pass="$4"
+    local qbit_port=8081
+    local cookie_jar="/tmp/qb_cookie_jar_chpass_$$_${qbit_port}"
+    local verify_jar="/tmp/qb_cookie_jar_chpass_v_$$_${qbit_port}"
+
+    if [ -z "$new_user" ] || [ -z "$new_pass" ]; then
+        log_step_fail "qBittorrent: new credentials missing"
+        return 1
+    fi
+
+    if ! qbit_try_login "$old_user" "$old_pass" "$cookie_jar"; then
+        if qbit_try_login "$new_user" "$new_pass" "$cookie_jar"; then
+            qbit_apply_prefs "$cookie_jar"
+            rm -f "$cookie_jar"
+            log_step "qBittorrent: already using the new password"
+            return 0
+        fi
+        local qbit_temp_pass
+        qbit_temp_pass=$(docker logs qbittorrent 2>&1 | awk -F': ' '/temporary password is provided for this session:/ { print $NF; exit }' || true)
+        if [ -z "$qbit_temp_pass" ] || ! qbit_try_login "admin" "$qbit_temp_pass" "$cookie_jar"; then
+            rm -f "$cookie_jar"
+            log_step_fail "qBittorrent: could not log in with the old password"
+            return 1
+        fi
+    fi
+
+    qbit_apply_prefs "$cookie_jar" \
+        ",\"web_ui_username\":\"${new_user}\",\"web_ui_password\":\"${new_pass}\""
+    rm -f "$cookie_jar"
+
+    if qbit_try_login "$new_user" "$new_pass" "$verify_jar"; then
+        rm -f "$verify_jar"
+        log_step "qBittorrent: set login (${new_user})"
+        return 0
+    fi
+    rm -f "$verify_jar"
+    log_step_fail "qBittorrent: password change did not stick"
+    return 1
+}
+
 # Create or update a qBittorrent category with a save path
 qbit_create_category() {
     local service_name="$1"
@@ -456,28 +517,264 @@ relax_quality_sizes() {
     return 1
 }
 
-# Record the preferred quality profile id/name for this install (setup choice).
+# Item ids whose qualityProfileId still needs updating.
+# stdin: JSON array of {id, qualityProfileId}. $1 = target id. $2 = all | any-only | from:<id>
+arr_quality_ids_needing_update() {
+    local pid="$1"
+    local mode="${2:-all}"
+    case "$mode" in
+        any-only)
+            jq -c --argjson pid "$pid" '[.[] | select((.qualityProfileId // 0) == 1 and .id != null) | .id]'
+            ;;
+        from:*)
+            local from="${mode#from:}"
+            jq -c --argjson old "$from" '[.[] | select((.qualityProfileId // 0) == $old and .id != null) | .id]'
+            ;;
+        *)
+            jq -c --argjson pid "$pid" '[.[] | select((.qualityProfileId // 0) != $pid and .id != null) | .id]'
+            ;;
+    esac
+}
+
+# stdin: source quality-profile object. $1 = dest id. $2 = dest name.
+arr_quality_profile_clone_json() {
+    local dest_id="$1"
+    local dest_name="$2"
+    jq --argjson id "$dest_id" --arg name "$dest_name" '.id = $id | .name = $name'
+}
+
+# stdin: one root-folder object. $1 = target quality profile id.
+arr_rootfolder_with_default_profile() {
+    local pid="$1"
+    jq --argjson pid "$pid" 'del(.unmappedFolders) | .defaultQualityProfileId = $pid'
+}
+
+_arr_put_http() {
+    local port="$1"
+    local endpoint="$2"
+    local apikey="$3"
+    local data="$4"
+    curl -s -o /tmp/arr-put-body -w "%{http_code}" --connect-timeout 8 -X PUT \
+        -H "Content-Type: application/json" \
+        -d "$data" \
+        "http://${API_HOST}:${port}${endpoint}?apikey=${apikey}" 2>/dev/null || echo "000"
+}
+
+arr_set_root_folder_quality_profile() {
+    local service_name="$1"
+    local port="$2"
+    local apikey="$3"
+    local profile_id="$4"
+    local folders folder payload code ok=0
+
+    folders=$(api_get "$port" "/api/v3/rootfolder" "$apikey")
+    if [ -z "$folders" ] || [ "$folders" = "[]" ]; then
+        return 1
+    fi
+
+    while IFS= read -r folder; do
+        [ -z "$folder" ] && continue
+        local fid
+        fid=$(echo "$folder" | jq -r '.id // empty')
+        [ -n "$fid" ] || continue
+        payload=$(echo "$folder" | arr_rootfolder_with_default_profile "$profile_id")
+        [ -n "$payload" ] || continue
+        code=$(_arr_put_http "$port" "/api/v3/rootfolder/${fid}" "$apikey" "$payload")
+        if [ "$code" -ge 200 ] && [ "$code" -lt 300 ]; then
+            ok=$((ok + 1))
+        fi
+    done < <(echo "$folders" | jq -c '.[]' 2>/dev/null || true)
+
+    [ "$ok" -gt 0 ]
+}
+
+# $5 = movie | series. $6 = all | any-only (default all).
+arr_set_items_quality_profile() {
+    local service_name="$1"
+    local port="$2"
+    local apikey="$3"
+    local profile_id="$4"
+    local kind="$5"
+    local mode="${6:-all}"
+    local list_path editor_path id_key
+    local items ids payload code
+
+    if [ "$kind" = "series" ]; then
+        list_path="/api/v3/series"
+        editor_path="/api/v3/series/editor"
+        id_key="seriesIds"
+    else
+        list_path="/api/v3/movie"
+        editor_path="/api/v3/movie/editor"
+        id_key="movieIds"
+    fi
+
+    items=$(api_get "$port" "$list_path" "$apikey")
+    if [ -z "$items" ] || [ "$items" = "[]" ]; then
+        return 0
+    fi
+    ids=$(echo "$items" | arr_quality_ids_needing_update "$profile_id" "$mode")
+    if [ -z "$ids" ] || [ "$ids" = "[]" ]; then
+        return 0
+    fi
+
+    payload=$(jq -nc --argjson ids "$ids" --argjson pid "$profile_id" --arg key "$id_key" \
+        '{($key): $ids, qualityProfileId: $pid}')
+    code=$(_arr_put_http "$port" "$editor_path" "$apikey" "$payload")
+    if [ "$code" -ge 200 ] && [ "$code" -lt 300 ]; then
+        local n
+        n=$(echo "$ids" | jq 'length' 2>/dev/null || echo 0)
+        log_step "${service_name}: moved ${n} title(s) → quality profile ${profile_id}"
+        return 0
+    fi
+    return 1
+}
+
+arr_set_importlist_quality_profile() {
+    local service_name="$1"
+    local port="$2"
+    local apikey="$3"
+    local profile_id="$4"
+    local lists list payload code ok=0 total=0
+
+    lists=$(api_get "$port" "/api/v3/importlist" "$apikey")
+    if [ -z "$lists" ] || [ "$lists" = "[]" ]; then
+        return 0
+    fi
+
+    while IFS= read -r list; do
+        [ -z "$list" ] && continue
+        local lid cur
+        lid=$(echo "$list" | jq -r '.id // empty')
+        cur=$(echo "$list" | jq -r '.qualityProfileId // empty')
+        [ -n "$lid" ] || continue
+        total=$((total + 1))
+        if [ "$cur" = "$profile_id" ]; then
+            ok=$((ok + 1))
+            continue
+        fi
+        payload=$(echo "$list" | jq --argjson pid "$profile_id" '.qualityProfileId = $pid')
+        code=$(_arr_put_http "$port" "/api/v3/importlist/${lid}" "$apikey" "$payload")
+        if [ "$code" -ge 200 ] && [ "$code" -lt 300 ]; then
+            ok=$((ok + 1))
+        fi
+    done < <(echo "$lists" | jq -c '.[]' 2>/dev/null || true)
+
+    [ "$total" -eq 0 ] || [ "$ok" -gt 0 ]
+}
+
+# *arr Add New defaults to quality profile id 1 (stock "Any"). There is no
+# working "default profile" API on Sonarr (root-folder PUT is a no-op).
+# Copy the assemblrr profile onto id 1 and drop the duplicate so the picker
+# opens on the assemblrr profile.
+arr_promote_quality_profile() {
+    local service_name="$1"
+    local port="$2"
+    local apikey="$3"
+    local src_id="$4"
+    local src_name="$5"
+
+    [ -n "$src_id" ] && [ -n "$src_name" ] || return 1
+    if [ "$src_id" = "1" ]; then
+        return 0
+    fi
+
+    local src dest tmp_name tmp_payload code
+    src=$(api_get "$port" "/api/v3/qualityprofile/${src_id}" "$apikey")
+    if [ -z "$src" ] || ! echo "$src" | jq -e '.id' >/dev/null 2>&1; then
+        return 1
+    fi
+
+    tmp_name="${src_name}.__assemblrr_tmp"
+    tmp_payload=$(echo "$src" | jq --arg n "$tmp_name" '.name = $n')
+    code=$(_arr_put_http "$port" "/api/v3/qualityprofile/${src_id}" "$apikey" "$tmp_payload")
+    if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
+        return 1
+    fi
+
+    dest=$(echo "$src" | arr_quality_profile_clone_json 1 "$src_name")
+    code=$(_arr_put_http "$port" "/api/v3/qualityprofile/1" "$apikey" "$dest")
+    if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
+        _arr_put_http "$port" "/api/v3/qualityprofile/${src_id}" "$apikey" "$src" >/dev/null || true
+        return 1
+    fi
+
+    local kind="movie"
+    [ "$service_name" = "Sonarr" ] && kind="series"
+    arr_set_items_quality_profile "$service_name" "$port" "$apikey" "1" "$kind" "from:${src_id}" || true
+    arr_set_importlist_quality_profile "$service_name" "$port" "$apikey" "1" || true
+
+    local del
+    del=$(api_delete "$port" "/api/v3/qualityprofile/${src_id}" "$apikey" || echo "000")
+    if [ "$del" -ge 200 ] && [ "$del" -lt 300 ]; then
+        log_step "${service_name}: Add New default is ${src_name}"
+        return 0
+    fi
+    log_step "${service_name}: Add New default is ${src_name} (left extra profile id ${src_id})"
+    return 0
+}
+
+# Apply the install's chosen quality profile to *arr (id 1 / library / import lists).
+# Seerr uses the same lookup so the chain stays in lockstep.
 set_default_quality_profile() {
     local service_name="$1"
     local port="$2"
     local apikey="$3"
     local profile_func="$4"
 
-    local profile profile_id
+    local profile profile_id profile_name
     profile=$($profile_func "$apikey")
     profile_id="${profile%%:*}"
-    local profile_name="${profile##*:}"
+    profile_name="${profile##*:}"
 
-    if [ -z "$profile_id" ] || [ "$profile_id" = "1" ] && [ "$profile_name" = "Any" ]; then
-        log_step "${service_name}: preferred quality profile → Any"
-        return 0
+    if [ -z "$profile_id" ]; then
+        log_step_fail "${service_name}: no quality profile to apply"
+        return 1
+    fi
+
+    local want_named=0
+    if [ "$service_name" = "Radarr" ]; then
+        if [ "${SEERR_IS_4K:-false}" = "true" ] || [ "${SEERR_DEFAULT_PROFILE:-1}" != "1" ]; then
+            want_named=1
+        fi
+    else
+        want_named=1
+    fi
+    if [ "$want_named" = "1" ] && [ "$profile_id" = "1" ] && [ "$profile_name" = "Any" ]; then
+        log_step_fail "${service_name}: assemblrr quality profile not found (Recyclarr sync missing?)"
+        return 1
+    fi
+
+    if arr_promote_quality_profile "$service_name" "$port" "$apikey" "$profile_id" "$profile_name"; then
+        profile_id="1"
     fi
 
     if [ -n "${INSTALL_DIR:-}" ]; then
         mkdir -p "$INSTALL_DIR/config"
         echo "${profile_id}:${profile_name}" > "$INSTALL_DIR/config/.${service_name,,}-default-quality-profile" 2>/dev/null || true
     fi
-    log_step "${service_name}: preferred quality profile → ${profile_name} (id ${profile_id})"
+
+    # Best-effort: some Radarr builds honor this. Sonarr has no such field.
+    arr_set_root_folder_quality_profile "$service_name" "$port" "$apikey" "$profile_id" || true
+
+    local fail=0
+    if [ "$service_name" = "Radarr" ]; then
+        if ! arr_set_items_quality_profile "$service_name" "$port" "$apikey" "$profile_id" "movie" "all"; then
+            log_step_fail "${service_name}: could not update movie quality profiles"
+            fail=1
+        fi
+    else
+        if ! arr_set_items_quality_profile "$service_name" "$port" "$apikey" "$profile_id" "series" "any-only"; then
+            log_step_fail "${service_name}: could not update series still on Any"
+            fail=1
+        fi
+    fi
+    arr_set_importlist_quality_profile "$service_name" "$port" "$apikey" "$profile_id" || true
+
+    if [ "$fail" -ne 0 ]; then
+        return 1
+    fi
+    log_step "${service_name}: default quality profile → ${profile_name} (id ${profile_id})"
 }
 
 # --- Quality profile lookup ---
@@ -762,7 +1059,7 @@ wait_for_arr_indexer_sync() {
 }
 
 # POST indexers named in SELECTED_INDEXERS into Prowlarr (skip existing).
-# Used by first-run wiring and `assemblrr config edit indexers`.
+# Used by first-run wiring and `assemblrr config edit`.
 apply_selected_indexers() {
     local apikey="$1"
     local indexer_schemas
@@ -938,7 +1235,7 @@ configure_prowlarr() {
         fi
     fi
 
-    # 2. Selected indexers (optional; can add later via `config edit indexers`)
+    # 2. Selected indexers (optional; can add later via `config edit`)
     apply_selected_indexers "$apikey"
 
     # 3) After fullSync, set min seeders on *arr indexers (best-effort)

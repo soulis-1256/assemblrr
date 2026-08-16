@@ -79,26 +79,57 @@ def configure_logging() -> None:
     )
 
 
+def _header(headers: Dict[str, str], name: str) -> str:
+    want = name.lower()
+    for key, value in headers.items():
+        if key.lower() == want:
+            return value
+    return ""
+
+
+def rewrite_location(value: str, client_host: str) -> str:
+    if not client_host or not value:
+        return value
+    _, host, port, _ = upstream_parts()
+    netlocs = [f"{host}:{port}" if port not in (80, 443) else host, "seerr:5055", "seerr"]
+    out = value
+    for netloc in netlocs:
+        out = out.replace(f"http://{netloc}", f"http://{client_host}")
+        out = out.replace(f"https://{netloc}", f"http://{client_host}")
+    return out
+
+
 def filter_request_headers(headers: List[Tuple[str, str]], client_addr: str) -> Dict[str, str]:
     out: Dict[str, str] = {}
+    incoming_host = ""
     for key, value in headers:
         lk = key.lower()
-        if lk in HOP_BY_HOP or lk == "host":
+        if lk in HOP_BY_HOP:
+            continue
+        if lk == "host":
+            incoming_host = value
             continue
         out[key] = value
-    # Prefer client-visible host for apps that build absolute URLs from X-Forwarded-*.
-    if "X-Forwarded-For" not in out and "x-forwarded-for" not in {k.lower() for k in out}:
+    # Browser Host so Seerr CSRF / redirects match what the user typed.
+    if incoming_host and not _header(out, "X-Forwarded-Host"):
+        out["X-Forwarded-Host"] = incoming_host
+    if not _header(out, "X-Forwarded-For"):
         out["X-Forwarded-For"] = client_addr
-    if "X-Forwarded-Proto" not in out and "x-forwarded-proto" not in {k.lower() for k in out}:
+    if not _header(out, "X-Forwarded-Proto"):
         out["X-Forwarded-Proto"] = "http"
     return out
 
 
-def filter_response_headers(headers: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
+def filter_response_headers(
+    headers: List[Tuple[str, str]],
+    client_host: str = "",
+) -> List[Tuple[str, str]]:
     result: List[Tuple[str, str]] = []
     for key, value in headers:
         if key.lower() in HOP_BY_HOP:
             continue
+        if key.lower() == "location":
+            value = rewrite_location(value, client_host)
         result.append((key, value))
     return result
 
@@ -115,9 +146,14 @@ def open_upstream(method: str, path: str, headers: Dict[str, str], body: Optiona
     scheme, host, port, is_https = upstream_parts()
     conn_cls = HTTPSConnection if is_https else HTTPConnection
     conn = conn_cls(host, port, timeout=CONNECT_TIMEOUT)
-    # Host must match upstream service name so Seerr/Node accepts the request.
     hdrs = dict(headers)
-    hdrs["Host"] = f"{host}:{port}" if port not in (80, 443) else host
+    # Pass the browser Host through (Seerr's own reverse-proxy docs). Fall back
+    # to the upstream name only when the client did not send one.
+    client_host = _header(hdrs, "X-Forwarded-Host")
+    if client_host:
+        hdrs["Host"] = client_host
+    else:
+        hdrs["Host"] = f"{host}:{port}" if port not in (80, 443) else host
     if body is not None and "Content-Length" not in {k.title() for k in hdrs} and "content-length" not in {
         k.lower() for k in hdrs
     }:
@@ -164,7 +200,7 @@ def proxy_once(
         conn, resp = open_upstream(method, path, headers, body)
         resp_body = resp.read()
         status = resp.status
-        resp_headers = filter_response_headers(resp.getheaders())
+        resp_headers = filter_response_headers(resp.getheaders(), _header(headers, "X-Forwarded-Host"))
         return status, resp_headers, resp_body
     finally:
         if conn is not None:
@@ -683,7 +719,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
         try:
             conn, resp = open_upstream(method, path, headers, body)
             self.send_response(resp.status)
-            for key, value in filter_response_headers(resp.getheaders()):
+            for key, value in filter_response_headers(
+                resp.getheaders(), _header(headers, "X-Forwarded-Host")
+            ):
                 if key.lower() == "content-length":
                     continue
                 self.send_header(key, value)
@@ -736,6 +774,7 @@ class _MockSeerr(BaseHTTPRequestHandler):
     file_delete_status: int = 204
     request_delete_status: int = 204
     require_api_key: Optional[str] = "test-key"
+    last_request_headers: Dict[str, str] = {}
 
     def log_message(self, fmt: str, *args) -> None:  # quiet
         return
@@ -756,7 +795,14 @@ class _MockSeerr(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0]
+        _MockSeerr.last_request_headers = {k: v for k, v in self.headers.items()}
         _MockSeerr.calls.append(f"GET {path}")
+        if path == "/redir":
+            self.send_response(302)
+            self.send_header("Location", "http://seerr:5055/login")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if path == "/api/v1/settings/public":
             self._send(200, b'{"initialized":true}')
             return
@@ -989,6 +1035,30 @@ def self_test() -> int:
     _MockSeerr.calls = []
     st, _, _ = http_call("GET", f"http://127.0.0.1:{gw_port}/api/v1/settings/public")
     check(st == 200, "passthrough public settings")
+
+    # Browser Host is forwarded; Location pointing at seerr:5055 is rewritten.
+    _MockSeerr.last_request_headers = {}
+    conn = HTTPConnection("127.0.0.1", gw_port, timeout=5)
+    conn.request("GET", "/api/v1/settings/public", headers={"Host": "localhost:5055"})
+    resp = conn.getresponse()
+    resp.read()
+    conn.close()
+    got_host = _MockSeerr.last_request_headers.get("Host") or _MockSeerr.last_request_headers.get("host")
+    got_xfh = (
+        _MockSeerr.last_request_headers.get("X-Forwarded-Host")
+        or _MockSeerr.last_request_headers.get("x-forwarded-host")
+    )
+    check(got_host == "localhost:5055", f"upstream Host is the browser host (got {got_host})")
+    check(got_xfh == "localhost:5055", f"X-Forwarded-Host is the browser host (got {got_xfh})")
+
+    conn = HTTPConnection("127.0.0.1", gw_port, timeout=5)
+    conn.request("GET", "/redir", headers={"Host": "localhost:5055"})
+    resp = conn.getresponse()
+    loc = resp.getheader("Location") or ""
+    resp.read()
+    conn.close()
+    check(resp.status == 302, f"redir passthrough → 302 (got {resp.status})")
+    check(loc == "http://localhost:5055/login", f"Location rewritten off seerr:5055 (got {loc})")
 
     # Purge disabled → only request DELETE
     PURGE_ON_DELETE_REQUEST = False
