@@ -97,6 +97,7 @@ declare -A COMMANDS=(
     ["logs"]="shows container logs (optionally specify service name)"
     ["health"]="checks health status of all services"
     ["config"]="configuration: show, or edit one setup section"
+    ["purge"]="delete one title from *arr, disk, and qBittorrent"
 )
 
 # log_error_inline — same as log_error but without exit (used by check_health)

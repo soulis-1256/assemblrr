@@ -94,6 +94,7 @@ After install, the CLI is on your `PATH` as `assemblrr`. Run `assemblrr <command
 | `upgrade --skip-stack` | Apply files and CLI without restarting containers |
 | `upgrade --check` | Dry-run: show which managed files and migrations would run |
 | `check-vpn` | Poll VPN health |
+| `purge` | Delete one title (*arr + library folder + matching qB torrent). TV can be season-scoped |
 | `uninstall` | Remove everything (asks before deleting data) |
 
 
