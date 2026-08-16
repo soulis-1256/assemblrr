@@ -1096,28 +1096,27 @@ prowlarr_sync_gluetun_proxy() {
     local proxies existing_id
 
     if [ -z "$apikey" ]; then
-        log_step_fail "Prowlarr: missing API key — cannot sync Gluetun HTTP proxy"
+        log_step_fail "Prowlarr: no API key — cannot send searches through the VPN"
         return 1
     fi
 
     proxies=$(api_get "9696" "/api/v1/indexerProxy" "$apikey")
     if [ -z "$proxies" ]; then
-        log_step_fail "Prowlarr: failed to list indexer proxies"
+        log_step_fail "Prowlarr: could not list search proxies"
         return 1
     fi
     if ! qbit_vpn_enabled; then
         existing_id=$(_prowlarr_gluetun_proxy_id "$proxies" "name")
         if [ -z "$existing_id" ]; then
-            log_step "Prowlarr: no Gluetun HTTP proxy (VPN off)"
             return 0
         fi
         local code
         code=$(api_delete "9696" "/api/v1/indexerProxy/${existing_id}" "$apikey")
         if [ "$code" = "200" ] || [ "$code" = "204" ]; then
-            log_step "Prowlarr: removed Gluetun HTTP proxy (VPN off)"
+            log_step "Prowlarr: searches no longer go through the VPN"
             return 0
         fi
-        log_step_fail "Prowlarr: failed to remove Gluetun HTTP proxy (HTTP ${code:-?})"
+        log_step_fail "Prowlarr: could not stop sending searches through the VPN (HTTP ${code:-?})"
         return 1
     fi
 
@@ -1127,7 +1126,7 @@ prowlarr_sync_gluetun_proxy() {
     schema=$(api_get "9696" "/api/v1/indexerProxy/schema" "$apikey")
     payload=$(_prowlarr_gluetun_proxy_payload "$schema")
     if [ -z "$payload" ]; then
-        log_step_fail "Prowlarr: Http indexer-proxy schema not found"
+        log_step_fail "Prowlarr: could not set up VPN search routing"
         return 1
     fi
 
@@ -1138,10 +1137,10 @@ prowlarr_sync_gluetun_proxy() {
             -d "$payload" \
             "http://${API_HOST}:9696/api/v1/indexerProxy/${existing_id}?apikey=${apikey}&forceSave=true" 2>/dev/null)
         if jq_json_has_key "$result" "id"; then
-            log_step "Prowlarr: indexer traffic via Gluetun HTTP proxy"
+            log_step "Prowlarr: searches go through the VPN"
             return 0
         fi
-        log_step_fail "Prowlarr: failed to update Gluetun HTTP proxy"
+        log_step_fail "Prowlarr: could not send searches through the VPN"
         return 1
     fi
 
@@ -1150,10 +1149,10 @@ prowlarr_sync_gluetun_proxy() {
         -d "$payload" \
         "http://${API_HOST}:9696/api/v1/indexerProxy?apikey=${apikey}&forceSave=true" 2>/dev/null)
     if jq_json_has_key "$result" "id"; then
-        log_step "Prowlarr: indexer traffic via Gluetun HTTP proxy"
+        log_step "Prowlarr: searches go through the VPN"
         return 0
     fi
-    log_step_fail "Prowlarr: failed to add Gluetun HTTP proxy"
+    log_step_fail "Prowlarr: could not send searches through the VPN"
     return 1
 }
 
@@ -1216,11 +1215,8 @@ apply_selected_indexers() {
                 -d "$disabled_payload" \
                 "http://${API_HOST}:9696/api/v1/indexer?apikey=${apikey}&forceSave=true" 2>/dev/null)
             if jq_json_has_key "$idx_result" "id"; then
-                if [ -n "$err_msg" ]; then
-                    log_step "Prowlarr: added ${indexer_name} indexer (off — ${err_msg})"
-                else
-                    log_step "Prowlarr: added ${indexer_name} indexer (off — Prowlarr could not test it)"
-                fi
+                log_step "Prowlarr: added ${indexer_name} indexer, but could not enable it"
+                [ -n "$err_msg" ] && log_step "Prowlarr: ${err_msg}"
             else
                 log_step_fail "Prowlarr: failed to add ${indexer_name} indexer"
             fi
