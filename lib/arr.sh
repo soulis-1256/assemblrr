@@ -1217,9 +1217,9 @@ apply_selected_indexers() {
                 "http://${API_HOST}:9696/api/v1/indexer?apikey=${apikey}&forceSave=true" 2>/dev/null)
             if jq_json_has_key "$idx_result" "id"; then
                 if [ -n "$err_msg" ]; then
-                    log_step "Prowlarr: added ${indexer_name} indexer (disabled — ${err_msg})"
+                    log_step "Prowlarr: added ${indexer_name} indexer (off — ${err_msg})"
                 else
-                    log_step "Prowlarr: added ${indexer_name} indexer (disabled — enabled save failed)"
+                    log_step "Prowlarr: added ${indexer_name} indexer (off — Prowlarr could not test it)"
                 fi
             else
                 log_step_fail "Prowlarr: failed to add ${indexer_name} indexer"
