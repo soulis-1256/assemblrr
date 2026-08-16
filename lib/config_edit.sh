@@ -329,7 +329,6 @@ _config_edit_auth() {
 
     configure_auth
     local secrets_dir="$INSTALL_DIR/secrets"
-    mkdir -p "$secrets_dir"
     AUTH_USERNAME="${auth_username:-admin}"
     AUTH_PASSWORD="${auth_password:-}"
 
@@ -374,15 +373,16 @@ _config_edit_auth() {
         fi
     fi
 
+    if [ "$fail" -ne 0 ]; then
+        log_warning "Some UIs did not take the new password. Secrets were left unchanged. Run ${APP_CLI_NAME:-assemblrr} config edit and pick login again (same password)."
+        return 1
+    fi
+
+    mkdir -p "$secrets_dir"
     echo -n "$AUTH_USERNAME" > "$secrets_dir/auth_username.txt"
     echo -n "$AUTH_PASSWORD" > "$secrets_dir/auth_password.txt"
     chmod 600 "$secrets_dir/auth_username.txt" "$secrets_dir/auth_password.txt"
     log_success "Auth credentials written to $secrets_dir"
-
-    if [ "$fail" -ne 0 ]; then
-        log_warning "Some UIs did not take the new password. Fix those services, then: ${APP_CLI_NAME:-assemblrr} config apply"
-        return 1
-    fi
 }
 
 _config_edit_timezone() {

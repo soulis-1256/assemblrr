@@ -73,6 +73,17 @@ assert_not_contains "$vpn_fn" 'chmod 600 "$secrets_dir"/*.txt' "vpn edit does no
 assert_contains "$vpn_fn" "openvpn_user.txt" "vpn chmod names openvpn_user"
 assert_contains "$vpn_fn" "wireguard_private_key.txt" "vpn chmod names wireguard key"
 
+test_suite "auth edit writes secrets only after every UI succeeds"
+auth_fn=$(sed -n '/^_config_edit_auth()/,/^}/p' "$REPO_ROOT/lib/config_edit.sh")
+fail_at=$(echo "$auth_fn" | grep -n 'fail" -ne 0' | head -1 | cut -d: -f1)
+write_at=$(echo "$auth_fn" | grep -n 'echo -n "$AUTH_PASSWORD"' | head -1 | cut -d: -f1)
+assert_true "fail check exists" "[ -n \"$fail_at\" ]"
+assert_true "password write exists" "[ -n \"$write_at\" ]"
+assert_true "secrets written after fail check" "[ \"$fail_at\" -lt \"$write_at\" ]"
+assert_contains "$auth_fn" "Secrets were left unchanged" "failure keeps old secrets"
+assert_contains "$auth_fn" "config edit" "failure says retry config edit"
+assert_not_contains "$auth_fn" "config apply" "failure does not point at apply"
+
 test_suite "cli has config apply"
 assert_true "config apply is a subcommand" "grep -q 'apply|wire)' \"$REPO_ROOT/bin/cli.sh\""
 assert_true "config apply runs config.sh" "grep -q 'ASSEMBLRR_NONINTERACTIVE=1 bash' \"$REPO_ROOT/bin/cli.sh\""
