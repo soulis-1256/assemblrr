@@ -715,7 +715,7 @@ install_cli
 set_permissions
 
 log_success "Install files ready — starting services..."
-log_info "Starting ${APP_DISPLAY_NAME} services (this may take a while)..."
+log_info "Starting ${APP_DISPLAY_NAME} services..."
 # Ensure mounts still exist/owned immediately before the full stack comes up
 prepare_install_dirs "$install_directory" "$puid" "$pgid"
 build_compose_args "$install_directory" "${setup_vpn,,}"

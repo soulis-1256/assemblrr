@@ -289,7 +289,6 @@ backup_app() {
     "${DC[@]}" stop > /dev/null 2>&1 || log_error "Failed to stop services"
 
     echo -e "\nBacking up ${APP_DISPLAY_NAME} to $destination..."
-    echo "This may take a while depending on the size of your installation."
 
     # Copy current CLI script and lib modules, create backup (skip copy if running from install dir)
     local running_cli; running_cli="$(realpath "${BASH_SOURCE[0]}" 2>/dev/null || echo "${_cli_self}/cli.sh")"
@@ -304,11 +303,12 @@ backup_app() {
     fi
     
     # Run tar inside an alpine container bound to the INSTALL_DIR and the destination (excluding temp/cache and sockets)
-    run_docker run --rm \
+    if ! wait_while "Creating backup archive" run_docker run --rm \
         -v "$INSTALL_DIR:/source" \
         -v "$(dirname "$backup_file"):/backup" \
-        alpine tar --exclude='./transcoding-temp' --exclude='./config/jellyfin/cache' --exclude='ipc-socket' -czf "/backup/$(basename "$backup_file")" -C /source . ||
+        alpine tar --exclude='./transcoding-temp' --exclude='./config/jellyfin/cache' --exclude='ipc-socket' -czf "/backup/$(basename "$backup_file")" -C /source .; then
         log_error "Failed to create backup archive"
+    fi
 
     echo -e "\nStarting ${APP_DISPLAY_NAME} services..."
     "${DC[@]}" start > /dev/null 2>&1 || log_warning "Failed to restart services"
@@ -842,22 +842,22 @@ restore_app() {
     local backup_dir="${INSTALL_DIR}_backup_${timestamp}"
     
     echo "Creating safety snapshot of current state at ${backup_dir}..."
-    # Use alpine container to copy the snapshot safely
-    run_docker run --rm \
+    wait_while "Creating safety snapshot" run_docker run --rm \
         -v "$(dirname "$INSTALL_DIR"):/target_parent" \
-        alpine cp -r "/target_parent/$(basename "$INSTALL_DIR")" "/target_parent/$(basename "$backup_dir")" || log_warning "Failed to create safety snapshot"
-    
-    # Remove files using alpine so we don't hit permission denied issues
-    run_docker run --rm \
+        alpine cp -r "/target_parent/$(basename "$INSTALL_DIR")" "/target_parent/$(basename "$backup_dir")" \
+        || log_warning "Failed to create safety snapshot"
+
+    wait_while "Clearing install directory" run_docker run --rm \
         -v "$INSTALL_DIR:/target" \
         alpine sh -c 'find /target -mindepth 1 -maxdepth 1 ! -name "media" ! -name "downloads" -exec rm -rf {} +'
-    
-    # Extract using alpine
+
     local abs_backup_file; abs_backup_file=$(realpath "$backup_file")
-    run_docker run --rm \
+    if ! wait_while "Restoring from backup" run_docker run --rm \
         -v "$INSTALL_DIR:/target" \
         -v "$(dirname "$abs_backup_file"):/backup" \
-        alpine tar -xzf "/backup/$(basename "$abs_backup_file")" -C /target || log_error "Failed to extract backup"
+        alpine tar -xzf "/backup/$(basename "$abs_backup_file")" -C /target; then
+        log_error "Failed to extract backup"
+    fi
 
     echo "Starting ${APP_DISPLAY_NAME} services..."
     "${DC[@]}" up -d --remove-orphans || log_warning "Failed to start services"
@@ -921,7 +921,7 @@ update_cli() {
     local tmp_dir
     tmp_dir=$(mktemp -d)
 
-    if ! git clone --depth=1 "${APP_REPO_URL}" "$tmp_dir/assemblrr" 2>/dev/null; then
+    if ! wait_while "Updating CLI from git" git clone --depth=1 "${APP_REPO_URL}" "$tmp_dir/assemblrr"; then
         log_error "Failed to clone ${APP_REPO_URL}. Check your internet connection and repository access."
     fi
 

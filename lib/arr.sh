@@ -724,11 +724,14 @@ wait_for_arr_indexer_sync() {
         local rc
         rc=$(api_get "7878" "/api/v3/indexer" "$radarr_key" | jq 'length' 2>/dev/null || echo 0)
         if [ "${rc:-0}" -gt 0 ]; then
+            [ "$waited" -gt 0 ] && echo >&2
             return 0
         fi
+        wait_inline "Waiting for Radarr indexers from Prowlarr" "$waited"
         sleep 2
         waited=$((waited + 2))
     done
+    echo >&2
     return 1
 }
 

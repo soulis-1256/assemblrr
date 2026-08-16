@@ -37,6 +37,37 @@ wait_inline() {
     printf '\r%s (%ss)   ' "$label" "$secs" >&2
 }
 
+# Run a command while updating wait_inline every second.
+# Captures stdout+stderr in WAIT_WHILE_OUTPUT. Returns the command's exit status.
+wait_while() {
+    local label="$1"
+    shift
+    local out ticker rc=0 had_errexit=0
+    [ $# -gt 0 ] || return 1
+    out=$(mktemp)
+    [[ $- == *e* ]] && had_errexit=1
+    (
+        secs=0
+        trap 'exit 0' TERM INT
+        while true; do
+            wait_inline "$label" "$secs"
+            sleep 1
+            secs=$((secs + 1))
+        done
+    ) &
+    ticker=$!
+    set +e
+    "$@" >"$out" 2>&1
+    rc=$?
+    [ "$had_errexit" = 1 ] && set -e
+    kill "$ticker" 2>/dev/null || true
+    wait "$ticker" 2>/dev/null || true
+    echo >&2
+    WAIT_WHILE_OUTPUT=$(cat "$out" 2>/dev/null || true)
+    rm -f "$out"
+    return "$rc"
+}
+
 # --- Safe source ---
 # Safely source a config file — validates that it contains only KEY=VALUE
 # assignments (no command substitution, pipes, etc.) before sourcing

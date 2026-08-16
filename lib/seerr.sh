@@ -235,11 +235,11 @@ configure_recyclarr() {
     pack_count=$(find "$recyclarr_config_dir/includes" -maxdepth 1 -name '*.yml' | wc -l | tr -d ' ')
     log_step "Recyclarr: generated config (${pack_count} include packs; Seerr default: ${default_label})"
 
-    _cfg_log_info "Recyclarr: syncing TRaSH Guides to Radarr and Sonarr... this might take a moment"
     local sync_out
-    if sync_out=$(docker exec recyclarr recyclarr sync 2>&1); then
+    if wait_while "Syncing Recyclarr (TRaSH Guides)" docker exec recyclarr recyclarr sync; then
         log_step "Recyclarr: synced Custom Formats and Quality Profiles successfully"
     else
+        sync_out="${WAIT_WHILE_OUTPUT:-}"
         log_step_fail "Recyclarr: failed to sync to Radarr/Sonarr"
         echo "$sync_out" | grep -E '•|Error|error|Invalid|YAML' | head -5 | while IFS= read -r line; do
             _cfg_log_info "  $line"

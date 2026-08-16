@@ -16,6 +16,12 @@ trap 'rm -rf "$tmp"' EXIT
 test_suite "wait_inline"
 assert_contains "$(wait_inline "Waiting for Radarr API" 12 2>&1)" \
     "Waiting for Radarr API (12s)" "shows elapsed seconds"
+WAIT_WHILE_OUTPUT=""
+wait_while "unit-test" bash -c 'printf hi' >/dev/null 2>&1
+assert_eq "hi" "$WAIT_WHILE_OUTPUT" "captures command output"
+rc=0
+wait_while "unit-fail" bash -c 'exit 3' >/dev/null 2>&1 || rc=$?
+assert_eq "3" "$rc" "propagates exit status"
 
 # --- expand_path ---
 test_suite "expand_path"

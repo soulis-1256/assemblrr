@@ -63,11 +63,10 @@ resolve_upgrade_source() {
     local repo="${APP_REPO_URL:-https://github.com/soulis-1256/assemblrr}"
     tmp=$(mktemp -d)
     UPGRADE_SOURCE_TEMP="$tmp"
-    log_info "Fetching ${repo} @ ${ref}..."
-    if ! git clone --depth=1 --branch "$ref" "$repo" "$tmp/assemblrr" 2>/dev/null; then
+    if ! wait_while "Fetching assemblrr @ ${ref}" git clone --depth=1 --branch "$ref" "$repo" "$tmp/assemblrr"; then
         # branch might be a commit or default branch name failed; try without --branch then checkout
         rm -rf "$tmp/assemblrr"
-        if ! git clone --depth=1 "$repo" "$tmp/assemblrr" 2>/dev/null; then
+        if ! wait_while "Fetching assemblrr (default branch)" git clone --depth=1 "$repo" "$tmp/assemblrr"; then
             [ -n "$UPGRADE_SOURCE_TEMP" ] && rm -rf "$UPGRADE_SOURCE_TEMP"
             log_error "Failed to clone ${repo}. Check network and APP_REPO_URL."
         fi
