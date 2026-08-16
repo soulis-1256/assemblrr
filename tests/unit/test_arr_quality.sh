@@ -37,11 +37,12 @@ assert_eq "/data/media/movies" "$(echo "$out" | jq -r '.path')" "keeps path"
 
 test_suite "set_default_quality_profile applies, not just records"
 src="$REPO_ROOT/lib/arr.sh"
+apply=$(sed -n '/^set_default_quality_profile()/,/^}/p' "$src")
 assert_true "sets root-folder default" "grep -q defaultQualityProfileId \"$src\""
-assert_true "bulk-updates movies" "grep -q '/api/v3/movie/editor' \"$src\""
-assert_true "bulk-updates series" "grep -q '/api/v3/series/editor' \"$src\""
 assert_true "updates import lists" "grep -q '/api/v3/importlist/' \"$src\""
 assert_true "promotes assemblrr profile to id 1" "grep -q 'arr_promote_quality_profile' \"$src\""
 assert_true "writes qualityprofile/1" "grep -q '/api/v3/qualityprofile/1' \"$src\""
+assert_not_contains "$apply" '"all"' "does not remap the whole library"
+assert_not_contains "$apply" "any-only" "does not remap titles still on Any"
 
 test_summary

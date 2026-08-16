@@ -714,8 +714,8 @@ arr_promote_quality_profile() {
     return 0
 }
 
-# Apply the install's chosen quality profile to *arr (id 1 / library / import lists).
-# Seerr uses the same lookup so the chain stays in lockstep.
+# Apply the install's chosen quality profile as the *arr Add New default.
+# Existing titles are left alone. Seerr uses the same lookup.
 set_default_quality_profile() {
     local service_name="$1"
     local port="$2"
@@ -756,24 +756,8 @@ set_default_quality_profile() {
 
     # Best-effort: some Radarr builds honor this. Sonarr has no such field.
     arr_set_root_folder_quality_profile "$service_name" "$port" "$apikey" "$profile_id" || true
-
-    local fail=0
-    if [ "$service_name" = "Radarr" ]; then
-        if ! arr_set_items_quality_profile "$service_name" "$port" "$apikey" "$profile_id" "movie" "all"; then
-            log_step_fail "${service_name}: could not update movie quality profiles"
-            fail=1
-        fi
-    else
-        if ! arr_set_items_quality_profile "$service_name" "$port" "$apikey" "$profile_id" "series" "any-only"; then
-            log_step_fail "${service_name}: could not update series still on Any"
-            fail=1
-        fi
-    fi
     arr_set_importlist_quality_profile "$service_name" "$port" "$apikey" "$profile_id" || true
 
-    if [ "$fail" -ne 0 ]; then
-        return 1
-    fi
     log_step "${service_name}: default quality profile → ${profile_name} (id ${profile_id})"
 }
 
