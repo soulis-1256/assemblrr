@@ -20,7 +20,7 @@ source "$SCRIPT_DIR/../helpers.sh"
 TMDB_ID=10378
 TITLE="Big Buck Bunny"
 TITLE_YEAR="Big Buck Bunny (2008)"
-TORRENT_DIR_NAME="Big Buck Bunny (2008) [e2e]"
+TORRENT_DIR_NAME="Big.Buck.Bunny.2008.1080p.WEB-DL.e2e"
 
 COOKIE_JAR="${TMPDIR:-/tmp}/assemblrr_media_purge_e2e_qb.cookies"
 FAILED=0

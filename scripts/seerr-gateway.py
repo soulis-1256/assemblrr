@@ -5,11 +5,13 @@ seerr-gateway — reverse proxy for Seerr with delete-request full purge.
 Stock Seerr DELETE /api/v1/request/:id only removes the request row. assemblrr
 intercepts that call (when enabled):
 
-  * Movies (and TV requests that cover every remaining season): DELETE
+  * Movies (and TV requests that cover every remaining season): drain the
+    *arr download queue (removeFromClient) first, then DELETE
     /api/v1/media/:id/file → Radarr/Sonarr deleteFiles + purge hooks.
-  * TV requests for a subset of seasons: delete only those seasons' episode
-    files via Sonarr and unmonitor them. Other seasons stay. The title-level
-    Seerr file-delete is skipped so Sonarr does not wipe the series folder.
+  * TV requests for a subset of seasons: drain only those seasons' queue
+    items, then delete those seasons' episode files via Sonarr and unmonitor
+    them. Other seasons stay. The title-level Seerr file-delete is skipped
+    so Sonarr does not wipe the series folder.
 
 Then the original request delete is forwarded.
 
@@ -55,6 +57,9 @@ REQUEST_DELETE_RE = re.compile(r"^/api/v1/request/(\d+)/?$")
 SONARR_URL = os.environ.get("SONARR_URL", "http://sonarr:8989").rstrip("/")
 SONARR_API_KEY = os.environ.get("SONARR_API_KEY", "").strip()
 SONARR_CONFIG = os.environ.get("SONARR_CONFIG", "/config/sonarr/config.xml")
+RADARR_URL = os.environ.get("RADARR_URL", "http://radarr:7878").rstrip("/")
+RADARR_API_KEY = os.environ.get("RADARR_API_KEY", "").strip()
+RADARR_CONFIG = os.environ.get("RADARR_CONFIG", "/config/radarr/config.xml")
 
 HOP_BY_HOP = {
     "connection",
@@ -265,28 +270,37 @@ def seasons_from_request(payload: dict) -> List[int]:
     return uniq
 
 
-def discover_sonarr_api_key() -> str:
-    if SONARR_API_KEY:
-        return SONARR_API_KEY
-    path = SONARR_CONFIG
-    if not path or not os.path.isfile(path):
+def discover_arr_api_key(explicit: str, config_path: str) -> str:
+    if explicit:
+        return explicit
+    if not config_path or not os.path.isfile(config_path):
         return ""
     try:
-        text = open(path, encoding="utf-8").read()
+        text = open(config_path, encoding="utf-8").read()
     except OSError:
         return ""
     m = re.search(r"<ApiKey>([^<]+)</ApiKey>", text)
     return m.group(1).strip() if m else ""
 
 
-def _sonarr_request(
+def discover_sonarr_api_key() -> str:
+    return discover_arr_api_key(SONARR_API_KEY, SONARR_CONFIG)
+
+
+def discover_radarr_api_key() -> str:
+    return discover_arr_api_key(RADARR_API_KEY, RADARR_CONFIG)
+
+
+def _arr_request(
+    base_url: str,
     method: str,
     path: str,
     api_key: str,
     body: Optional[dict] = None,
     timeout: float = 20,
+    label: str = "arr",
 ) -> Tuple[int, object]:
-    url = f"{SONARR_URL}{path}"
+    url = f"{base_url}{path}"
     data = None if body is None else json.dumps(body).encode("utf-8")
     req = urllib.request.Request(url, data=data, method=method)
     req.add_header("X-Api-Key", api_key)
@@ -312,7 +326,177 @@ def _sonarr_request(
                 parsed = raw
         return e.code, parsed
     except (urllib.error.URLError, TimeoutError, socket.timeout, OSError) as e:
-        raise RuntimeError(f"sonarr {method} {path}: {e}") from e
+        raise RuntimeError(f"{label} {method} {path}: {e}") from e
+
+
+def _sonarr_request(
+    method: str,
+    path: str,
+    api_key: str,
+    body: Optional[dict] = None,
+    timeout: float = 20,
+) -> Tuple[int, object]:
+    return _arr_request(SONARR_URL, method, path, api_key, body, timeout, "sonarr")
+
+
+def _radarr_request(
+    method: str,
+    path: str,
+    api_key: str,
+    body: Optional[dict] = None,
+    timeout: float = 20,
+) -> Tuple[int, object]:
+    return _arr_request(RADARR_URL, method, path, api_key, body, timeout, "radarr")
+
+
+def request_media(payload: dict) -> dict:
+    media = payload.get("media") or payload.get("mediaInfo") or {}
+    return media if isinstance(media, dict) else {}
+
+
+def arr_external_id(payload: dict, is4k: bool) -> Optional[int]:
+    media = request_media(payload)
+    raw = media.get("externalServiceId4k") if is4k else media.get("externalServiceId")
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def radarr_lookup_movie_id(payload: dict, api_key: str) -> Optional[int]:
+    ext = arr_external_id(payload, bool(payload.get("is4k", False)))
+    if ext is not None:
+        return ext
+    tmdb = request_media(payload).get("tmdbId")
+    if tmdb is None:
+        return None
+    try:
+        tmdb_i = int(tmdb)
+    except (TypeError, ValueError):
+        return None
+    status, movies = _radarr_request("GET", "/api/v3/movie", api_key)
+    if status != 200 or not isinstance(movies, list):
+        return None
+    for row in movies:
+        if isinstance(row, dict) and row.get("tmdbId") == tmdb_i:
+            try:
+                return int(row["id"])
+            except (TypeError, ValueError, KeyError):
+                return None
+    return None
+
+
+def queue_records(kind: str, arr_id: int, api_key: str) -> List[dict]:
+    if kind == "movie":
+        status, data = _radarr_request(
+            "GET", f"/api/v3/queue?pageSize=250&movieId={arr_id}", api_key
+        )
+    else:
+        status, data = _sonarr_request(
+            "GET", f"/api/v3/queue?pageSize=250&seriesId={arr_id}", api_key
+        )
+    if status != 200:
+        raise RuntimeError(f"{kind} queue GET HTTP {status}")
+    if isinstance(data, list):
+        rows = data
+    elif isinstance(data, dict):
+        rows = data.get("records") or []
+    else:
+        rows = []
+    return [r for r in rows if isinstance(r, dict)]
+
+
+def queue_record_season(row: dict) -> Optional[int]:
+    if row.get("seasonNumber") is not None:
+        try:
+            return int(row["seasonNumber"])
+        except (TypeError, ValueError):
+            pass
+    ep = row.get("episode")
+    if isinstance(ep, dict) and ep.get("seasonNumber") is not None:
+        try:
+            return int(ep["seasonNumber"])
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def drain_arr_queue(
+    kind: str,
+    arr_id: int,
+    api_key: str,
+    seasons: Optional[List[int]] = None,
+) -> Tuple[int, int]:
+    """
+    Remove *arr queue items and the matching download-client torrents.
+    Returns (considered, deleted). Best-effort: HTTP failures on a single
+    item are logged and skipped.
+    """
+    rows = queue_records(kind, arr_id, api_key)
+    wanted = set(seasons) if seasons else None
+    deleted = 0
+    considered = 0
+    req = _radarr_request if kind == "movie" else _sonarr_request
+    for row in rows:
+        if wanted is not None:
+            sn = queue_record_season(row)
+            if sn is None or sn not in wanted:
+                continue
+        qid = row.get("id")
+        if qid is None:
+            continue
+        considered += 1
+        status, _ = req(
+            "DELETE",
+            f"/api/v3/queue/{qid}?removeFromClient=true&blocklist=false&skipRedownload=true",
+            api_key,
+        )
+        if status in (200, 204):
+            deleted += 1
+        else:
+            log.warning("%s queue delete id=%s HTTP %s", kind, qid, status)
+    return considered, deleted
+
+
+def _drain_queue_note(
+    kind: str,
+    arr_id: int,
+    api_key: str,
+    seasons: Optional[List[int]],
+    request_id: str,
+) -> str:
+    try:
+        considered, deleted = drain_arr_queue(kind, arr_id, api_key, seasons)
+    except Exception as exc:
+        log.warning("request %s: %s queue drain failed: %s", request_id, kind, exc)
+        return f"queue_{kind}_failed"
+    log.info(
+        "request %s: %s queue drain id=%s considered=%s deleted=%s",
+        request_id,
+        kind,
+        arr_id,
+        considered,
+        deleted,
+    )
+    return f"queue_{kind}:{considered}:{deleted}"
+
+
+def _drain_movie_queue_note(payload: dict, request_id: str) -> str:
+    api_key = discover_radarr_api_key()
+    if not api_key:
+        log.info("request %s: no Radarr API key; skip queue drain", request_id)
+        return "queue_movie_skipped"
+    try:
+        movie_id = radarr_lookup_movie_id(payload, api_key)
+    except Exception as exc:
+        log.warning("request %s: radarr movie lookup failed: %s", request_id, exc)
+        return "queue_movie_failed"
+    if movie_id is None:
+        log.info("request %s: movie not in Radarr; skip queue drain", request_id)
+        return "queue_movie_missing"
+    return _drain_queue_note("movie", movie_id, api_key, None, request_id)
 
 
 def sonarr_lookup_series_id(payload: dict, api_key: str) -> Optional[int]:
@@ -500,11 +684,12 @@ def purge_then_delete_request(
     """
     Cascade:
       GET request
+        drain *arr queue (removeFromClient) while the title still exists
         movie / TV covering every remaining season → DELETE media/:id/file
         TV subset of seasons → Sonarr season file delete only
       DELETE request
     Auth failure on GET, or any TV-scope / Sonarr uncertainty, returns without
-    deleting the request (no title-level wipe).
+    deleting the request (no title-level wipe). Queue drain is best-effort.
     Returns (status, headers, body, purge_note).
     """
     get_status, _, get_body = proxy_once("GET", f"/api/v1/request/{request_id}", headers, None)
@@ -540,9 +725,12 @@ def purge_then_delete_request(
                 else:
                     remaining = sonarr_remaining_seasons(series_id, api_key)
                     if remaining and not seasons_cover_remaining(requested, remaining):
+                        qnote = _drain_queue_note(
+                            "series", series_id, api_key, requested, request_id
+                        )
                         deleted = sonarr_delete_seasons(series_id, requested, api_key)
                         purge_note = (
-                            f"seasons_deleted:{media_id}:{series_id}:"
+                            f"{qnote};seasons_deleted:{media_id}:{series_id}:"
                             f"{','.join(str(s) for s in requested)}:{deleted}"
                         )
                         log.info(
@@ -559,12 +747,18 @@ def purge_then_delete_request(
                             requested,
                             remaining,
                         )
+                        qnote = _drain_queue_note(
+                            "series", series_id, api_key, None, request_id
+                        )
                         purge_note, _ = _delete_media_file(media_id, is4k, headers)
+                        purge_note = f"{qnote};{purge_note}"
             except Exception as exc:
                 log.error("request %s: season purge failed: %s", request_id, exc)
                 return _season_purge_fail(str(exc), "season_purge_failed")
         else:
+            qnote = _drain_movie_queue_note(payload, request_id)
             purge_note, _ = _delete_media_file(media_id, is4k, headers)
+            purge_note = f"{qnote};{purge_note}" if qnote else purge_note
     else:
         log.info("request %s: no linked media id; deleting request only", request_id)
 
@@ -839,6 +1033,7 @@ class _MockSonarr(BaseHTTPRequestHandler):
     calls: List[str] = []
     files: List[dict] = []
     series: dict = {}
+    queue: List[dict] = []
     episodefile_status: int = 200
     delete_episodefile_status: int = 200
 
@@ -875,6 +1070,9 @@ class _MockSonarr(BaseHTTPRequestHandler):
             ]
             self._send(200, json.dumps(eps).encode())
             return
+        if path == "/api/v3/queue":
+            self._send(200, json.dumps({"records": list(_MockSonarr.queue)}).encode())
+            return
         self._send(404, b"{}")
 
     def do_DELETE(self) -> None:  # noqa: N802
@@ -887,6 +1085,12 @@ class _MockSonarr(BaseHTTPRequestHandler):
                 return
             fid = int(m.group(1))
             _MockSonarr.files = [f for f in _MockSonarr.files if f.get("id") != fid]
+            self._send(200, b"")
+            return
+        m = re.match(r"^/api/v3/queue/(\d+)$", path)
+        if m:
+            qid = int(m.group(1))
+            _MockSonarr.queue = [q for q in _MockSonarr.queue if q.get("id") != qid]
             self._send(200, b"")
             return
         self._send(404, b"{}")
@@ -917,6 +1121,72 @@ def _reset_mock_sonarr() -> None:
             {"seasonNumber": 2, "monitored": True},
         ],
     }
+    _MockSonarr.queue = [
+        {
+            "id": 201,
+            "seriesId": 10,
+            "downloadId": "aaa",
+            "episode": {"seasonNumber": 1},
+        },
+        {
+            "id": 202,
+            "seriesId": 10,
+            "downloadId": "bbb",
+            "episode": {"seasonNumber": 2},
+        },
+    ]
+
+
+class _MockRadarr(BaseHTTPRequestHandler):
+    """Radarr stand-in: movie 1 with one queue item unless deleted."""
+
+    protocol_version = "HTTP/1.1"
+    calls: List[str] = []
+    movies: List[dict] = []
+    queue: List[dict] = []
+
+    def log_message(self, fmt: str, *args) -> None:
+        return
+
+    def _send(self, status: int, body: bytes = b"") -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if self.command != "HEAD" and body:
+            self.wfile.write(body)
+
+    def do_GET(self) -> None:  # noqa: N802
+        path = self.path.split("?", 1)[0]
+        _MockRadarr.calls.append(f"GET {self.path}")
+        if path == "/api/v3/movie":
+            self._send(200, json.dumps(list(_MockRadarr.movies)).encode())
+            return
+        if path == "/api/v3/queue":
+            self._send(200, json.dumps({"records": list(_MockRadarr.queue)}).encode())
+            return
+        self._send(404, b"{}")
+
+    def do_DELETE(self) -> None:  # noqa: N802
+        path = self.path.split("?", 1)[0]
+        _MockRadarr.calls.append(f"DELETE {path}")
+        m = re.match(r"^/api/v3/queue/(\d+)$", path)
+        if m:
+            qid = int(m.group(1))
+            _MockRadarr.queue = [q for q in _MockRadarr.queue if q.get("id") != qid]
+            self._send(200, b"")
+            return
+        self._send(404, b"{}")
+
+
+def _reset_mock_radarr() -> None:
+    _MockRadarr.calls = []
+    _MockRadarr.movies = [
+        {"id": 1, "tmdbId": 10378, "title": "Big Buck Bunny"},
+    ]
+    _MockRadarr.queue = [
+        {"id": 99, "movieId": 1, "downloadId": "abc123"},
+    ]
 
 
 def _free_port() -> int:
@@ -940,13 +1210,19 @@ def self_test() -> int:
 
     mock_port = _free_port()
     sonarr_port = _free_port()
+    radarr_port = _free_port()
     gw_port = _free_port()
 
     _MockSeerr.calls = []
     _MockSeerr.request_payload = {
         "id": 42,
         "is4k": False,
-        "media": {"id": 7, "tmdbId": 10378, "mediaType": "movie"},
+        "media": {
+            "id": 7,
+            "tmdbId": 10378,
+            "mediaType": "movie",
+            "externalServiceId": 1,
+        },
     }
     _MockSeerr.file_delete_status = 204
     _MockSeerr.request_delete_status = 204
@@ -961,16 +1237,25 @@ def self_test() -> int:
     sonarr_httpd.daemon_threads = True
     threading.Thread(target=sonarr_httpd.serve_forever, daemon=True).start()
 
+    _reset_mock_radarr()
+    radarr_httpd = ThreadingHTTPServer(("127.0.0.1", radarr_port), _MockRadarr)
+    radarr_httpd.daemon_threads = True
+    threading.Thread(target=radarr_httpd.serve_forever, daemon=True).start()
+
     os.environ["SEERR_UPSTREAM"] = f"http://127.0.0.1:{mock_port}"
     os.environ["SEERR_DELETE_REQUEST_PURGE"] = "1"
     # Re-bind module globals used by handlers
-    global UPSTREAM, PURGE_ON_DELETE_REQUEST, LISTEN_HOST, LISTEN_PORT, SONARR_URL, SONARR_API_KEY, SONARR_CONFIG
+    global UPSTREAM, PURGE_ON_DELETE_REQUEST, LISTEN_HOST, LISTEN_PORT
+    global SONARR_URL, SONARR_API_KEY, SONARR_CONFIG
+    global RADARR_URL, RADARR_API_KEY, RADARR_CONFIG
     UPSTREAM = os.environ["SEERR_UPSTREAM"].rstrip("/")
     PURGE_ON_DELETE_REQUEST = True
     LISTEN_HOST = "127.0.0.1"
     LISTEN_PORT = gw_port
     SONARR_URL = f"http://127.0.0.1:{sonarr_port}"
     SONARR_API_KEY = "sonarr-test-key"
+    RADARR_URL = f"http://127.0.0.1:{radarr_port}"
+    RADARR_API_KEY = "radarr-test-key"
 
     gw = ThreadingHTTPServer((LISTEN_HOST, LISTEN_PORT), GatewayHandler)
     gw.daemon_threads = True
@@ -1011,6 +1296,19 @@ def self_test() -> int:
         "DELETE media file before request delete",
     )
     check(any(c.startswith("DELETE /api/v1/request/42") for c in calls), "DELETE request last")
+    radarr_calls = list(_MockRadarr.calls)
+    check(
+        any(c.startswith("GET /api/v3/queue") for c in radarr_calls),
+        "movie queue listed before title delete",
+    )
+    check(
+        any(c.startswith("DELETE /api/v3/queue/99") for c in radarr_calls),
+        "movie queue item removed from download client",
+    )
+    check(
+        "queue_movie:1:1" in (hdrs.get("X-Assemblrr-Purge-Detail") or ""),
+        f"purge detail notes queue drain ({hdrs.get('X-Assemblrr-Purge-Detail')})",
+    )
     # Order: GET, media file, request delete
     try:
         i_get = next(i for i, c in enumerate(calls) if c.startswith("GET /api/v1/request/42"))
@@ -1136,6 +1434,14 @@ def self_test() -> int:
     check(
         not any(c == "DELETE /api/v3/episodefile/2" for c in _MockSonarr.calls),
         "TV S01 does not delete Sonarr S02 episode file",
+    )
+    check(
+        any(c == "DELETE /api/v3/queue/201" for c in _MockSonarr.calls),
+        "TV S01 removes S01 queue item from download client",
+    )
+    check(
+        not any(c == "DELETE /api/v3/queue/202" for c in _MockSonarr.calls),
+        "TV S01 leaves S02 queue item",
     )
     check(
         "seasons_deleted" in (hdrs.get("X-Assemblrr-Purge-Detail") or ""),
@@ -1273,6 +1579,11 @@ def self_test() -> int:
         not any(c.startswith("DELETE /api/v3/episodefile/") for c in _MockSonarr.calls),
         "TV all-seasons does not piecemeal-delete episode files",
     )
+    check(
+        any(c == "DELETE /api/v3/queue/201" for c in _MockSonarr.calls)
+        and any(c == "DELETE /api/v3/queue/202" for c in _MockSonarr.calls),
+        "TV all-seasons drains every series queue item",
+    )
 
     tv_s01 = {
         "id": 8,
@@ -1366,6 +1677,7 @@ def self_test() -> int:
     gw.shutdown()
     mock_httpd.shutdown()
     sonarr_httpd.shutdown()
+    radarr_httpd.shutdown()
 
     print("")
     if failures:

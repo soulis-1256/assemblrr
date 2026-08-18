@@ -215,11 +215,14 @@ services:
       - SEERR_DELETE_REQUEST_PURGE=${SEERR_DELETE_REQUEST_PURGE:-1}
       - SONARR_URL=http://sonarr:8989
       - SONARR_CONFIG=/config/sonarr/config.xml
+      - RADARR_URL=http://radarr:7878
+      - RADARR_CONFIG=/config/radarr/config.xml
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - ${INSTALL_DIRECTORY}/scripts/seerr-gateway.py:/scripts/seerr-gateway.py:ro
       # Bind the dir, not config.xml — Docker creates a directory if the file is missing.
       - ${INSTALL_DIRECTORY}/config/sonarr:/config/sonarr:ro
+      - ${INSTALL_DIRECTORY}/config/radarr:/config/radarr:ro
     ports:
       - 5055:5055
     depends_on:

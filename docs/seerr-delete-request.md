@@ -22,7 +22,11 @@ On **`DELETE /api/v1/request/:id`** only (when purge is enabled):
 
 1. `GET /api/v1/request/:id` — capture linked `media.id`, `is4k`, type, and
    requested season numbers (same auth headers as the client).
-2. Purge files:
+2. **Drain the *arr download queue first** (while the title still exists):
+   `DELETE /api/v3/queue/{id}?removeFromClient=true`. That is how an in-progress
+   grab is cancelled — Radarr/Sonarr already know the torrent hash. Queue drain
+   is best-effort (missing API key or empty queue is not a hard failure).
+3. Purge files:
    - **Movie**, or a TV request that covers every remaining on-disk/monitored
      season (specials count as remaining) → `DELETE /api/v1/media/:mediaId/file?is4k=…`
      (Seerr → *arr `deleteFiles` → assemblrr purge hooks / qB).
@@ -30,7 +34,7 @@ On **`DELETE /api/v1/request/:id`** only (when purge is enabled):
      seasons only, then unmonitor them. Seerr title-level file-delete is
      **not** called, so `/data/media/tv/Show` is not wiped. `media-purge-watch`
      then season-scopes qB cleanup when that season folder empties.
-3. `DELETE /api/v1/request/:id` — drop the request row (response returned to
+4. `DELETE /api/v1/request/:id` — drop the request row (response returned to
    the client).
 
 If media was never linked, step 2 is skipped; the request is still deleted.
@@ -63,15 +67,19 @@ qB row first, which used to leave the download directory behind).
 
 `media-purge.sh` prefers under-delete over collateral damage:
 
-1. *arr history download hashes that still exist in qB **and** match the library folder key (`Title (YYYY)`)
-2. Exact folder-key match on torrent name / content path (no bare short-title prefix)
-3. Refuse ambiguous multi-matches
+1. *arr **queue + history** download hashes that still exist in qB. The hash is
+   identity — a live grab named `The Avengers 2012 REPACK…` is removed even
+   though it does not look like `The Avengers (2012)`.
+2. Title + year match on torrent name / content path. `(2012)` and `2012` are
+   the same year; indexer prefixes (`www.UIndex.org - …`) are allowed; the
+   token after the title must be that year so `Avengers Age of Ultron 2015`
+   and `It Comes at Night 2017` stay put.
+3. Refuse ambiguous multi-matches on the name step. Short keys (`Oz`) skipped.
 4. **Season purge:** torrent must name one of the requested seasons (`S01` /
    `Season 1`) and must **not** also name another season. Packs like
    `Show.S01.S02.COMPLETE` and ranges like `Show.S01-03` are left alone
-   when deleting S01 only. A torrent with no season token is left alone.
-   Folder-key matching uses the same title-boundary rules as title-level
-   (short keys such as `Oz` are skipped).
+   when deleting S01 only. A torrent with no season token is left alone
+   on the name step (queue/history hashes for that season are still removed).
 
 See `media-purge.sh --match-self-test`.
 
@@ -82,13 +90,15 @@ Env:
 | `SEERR_DELETE_REQUEST_PURGE` | `1` | `1` = intercept delete-request; `0`/`false`/`off` = pure passthrough (stock Seerr) |
 | `MEDIA_PURGE_WATCH` | `1` | `1` = inotify watcher on library video deletes; `0` = disable watcher only |
 | `SEERR_UPSTREAM` | `http://seerr:5055` | Upstream Seerr (container) |
-| `SONARR_URL` | `http://sonarr:8989` | Used by the gateway for TV season deletes |
+| `SONARR_URL` | `http://sonarr:8989` | Used by the gateway for TV season deletes + queue drain |
 | `SONARR_CONFIG` | `/config/sonarr/config.xml` | API key source when `SONARR_API_KEY` is unset |
+| `RADARR_URL` | `http://radarr:7878` | Used by the gateway to drain in-progress movie grabs |
+| `RADARR_CONFIG` | `/config/radarr/config.xml` | API key source when `RADARR_API_KEY` is unset |
 
 Debug response headers on intercepted deletes:
 
 - `X-Assemblrr-Request-Delete-Purge: 1`
-- `X-Assemblrr-Purge-Detail: …` (e.g. `media_file_deleted:7:204`,
+- `X-Assemblrr-Purge-Detail: …` (e.g. `queue_movie:1:1;media_file_deleted:7:204`,
   `seasons_deleted:6:10:1:3`, `no_media`)
 
 Health (gateway only, not Seerr):

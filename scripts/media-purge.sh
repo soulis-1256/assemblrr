@@ -11,10 +11,13 @@
 # also name another season.
 #
 # Safety ladder for qB cleanup (prefer under-delete over collateral damage):
-#   1) *arr history download hashes that still exist in qB and match the folder key
-#   2) Exact library-folder key match on torrent name/content_path (Title (YYYY))
-#   3) Never bare short titles when a year-bearing folder exists
-#   4) Refuse ambiguous multi-matches on the folder-key step
+#   1) *arr queue + history download hashes that still exist in qB (hash is identity)
+#   2) Title + year match on torrent name / content path (The Avengers (2012) ==
+#      The Avengers 2012 REPACK…; indexer prefixes allowed; next token after the
+#      title must be that year). No-year keys still require a season/year/end
+#      boundary so Lost does not hit Lost in Space.
+#   3) Never bare short titles (len < 3). Refuse ambiguous multi-matches on
+#      the name step. Season purge still refuses packs / other seasons.
 # After a successful non-qb-only purge, best-effort Jellyfin /Library/Refresh.
 set -euo pipefail
 
@@ -207,95 +210,107 @@ qbit_delete_hashes() {
     PURGE_TOUCHED=1
 }
 
-# Folder-key matcher: exact / boundary-safe match only.
-# stdin: qB torrents JSON; arg1: JSON string array of folder keys (prefer Title (YYYY)).
-qb_match_jq() {
-    jq -r --argjson tokens "$1" '
+# Title + year matcher shared by name fallback and leftover-dir cleanup.
+# A movie key "The Avengers (2012)" hits "The Avengers 2012 REPACK…" and
+# "www.UIndex.org - The Avengers 2012 …" because the title tokens appear
+# consecutively and the next token is that year. It does not hit Age of Ultron
+# (next token is not 2012) or "It Comes at Night" for It (2017).
+QB_TITLE_YEAR_JQ=$(cat <<'JQ'
         def norm:
           ascii_downcase
           | gsub("\\\\"; "/")
-          | gsub("[._]+"; " ")
+          | gsub("['’]"; "")
+          | gsub("[^a-z0-9]+"; " ")
           | gsub(" +"; " ")
           | gsub("^ +| +$"; "");
-        def has_year: test("\\([0-9]{4}\\)");
-        def basename_norm:
-          gsub("/+$"; "") | split("/") | map(select(length > 0)) | .[-1] // "" | norm;
-        # After token: end, year, tag, separator — or a season token (Loki.S02.COMPLETE).
-        # "Lost in Space" still fails: remainder is " in space", not a season.
-        def boundary_ok($t; $tok):
-          ($tok | length) as $m
-          | ($t | length) as $n
-          | if $n < $m then false
-            elif $n == $m then true
-            else ($t[$m:] | test("^($| \\([0-9]{4}\\)| \\[| - | /|\\.[0-9]{4}| s[0-9]| season |[-.]s[0-9])"))
-            end;
-        def folder_hit($text; $tok):
-          ($text | norm) as $t
-          | ($tok | norm) as $k
-          | if ($k | length) < 3 then false
+        def tokens($text):
+          [($text | norm) | split(" ")[] | select(length > 0)];
+        def basename_of($text):
+          ($text | gsub("\\\\"; "/") | gsub("/+$"; "") | split("/")
+            | map(select(length > 0)) | .[-1] // "");
+        def is_year: test("^[0-9]{4}$");
+        def is_season_tok:
+          test("^s[0-9]{1,2}(e[0-9]{1,3})?$") or . == "season" or . == "specials";
+        def parse_folder($folder):
+          ($folder // "") as $raw
+          | ([$raw | ascii_downcase | scan("\\(([0-9]{4})\\)")
+              | if type == "array" then .[0] else . end]
+              | .[-1] // "") as $paren_year
+          | (tokens($raw | gsub("\\([0-9]{4}\\)"; " "))) as $words
+          | if $paren_year != "" then
+              {title: $words, year: $paren_year}
+            elif (($words | length) > 0) and ($words[-1] | is_year) then
+              {title: $words[0:-1], year: $words[-1]}
             else
-              ($t | basename_norm) as $base
-              | (
-                  ($base == $k)
-                  or ($t == $k)
-                  or ($t | endswith("/" + $k))
-                  or ($t | contains("/" + $k + "/"))
-                  or (($base | startswith($k)) and boundary_ok($base; $k))
-                  or (($t | startswith($k)) and boundary_ok($t; $k))
-                )
+              {title: $words, year: ""}
             end;
-        ($tokens | map(norm) | map(select(length >= 3)) | unique) as $all
+        def drop_articles($words):
+          if ($words | length) > 1 and ($words[0] == "the" or $words[0] == "a" or $words[0] == "an")
+          then $words[1:]
+          else $words
+          end;
+        def find_title_then($toks; $title; $need_year):
+          ($title | length) as $n
+          | if $n == 0 then false
+            else
+              any(range(0; ($toks | length) - $n + 1);
+                . as $i
+                | $toks[$i:$i+$n] == $title
+                and (
+                  ($toks[$i+$n] // "") as $next
+                  | if $need_year != "" then
+                      $next == $need_year
+                    else
+                      $next == "" or ($next | is_season_tok) or ($next | is_year)
+                    end
+                )
+              )
+            end;
+        def title_year_hit($text; $folder):
+          if ($folder | length) == 0 or (($folder | norm | length) < 3) then false
+          else
+            parse_folder($folder) as $fk
+            | tokens($text) as $toks
+            | tokens(basename_of($text)) as $base
+            | ($fk.title | length) > 0
+            and (
+              ($text | norm) == ($folder | norm)
+              or (basename_of($text) | norm) == ($folder | norm)
+              or any([$fk.title, drop_articles($fk.title)][];
+                   . as $cand
+                   | ($cand | length) > 0
+                   and (find_title_then($toks; $cand; $fk.year)
+                        or find_title_then($base; $cand; $fk.year))
+                 )
+            )
+          end;
+        def has_year: test("\\([0-9]{4}\\)") or test("(^| )[0-9]{4}$");
+JQ
+)
+
+# stdin: qB torrents JSON; arg1: JSON string array of folder keys (prefer Title (YYYY)).
+qb_match_jq() {
+    jq -r --argjson tokens "$1" "${QB_TITLE_YEAR_JQ}"'
+        ($tokens | map(select(length >= 3)) | unique) as $all
         | ([$all[] | select(has_year)]) as $yeared
         | (if ($yeared | length) > 0 then $yeared else $all end) as $use
         | .[]
         | . as $row
         | select(
             any($use[];
-              folder_hit($row.name // ""; .)
-              or folder_hit($row.content_path // ""; .)
+              title_year_hit($row.name // ""; .)
+              or title_year_hit($row.content_path // ""; .)
             )
           )
         | .hash
     '
 }
 
-# Season-scoped matcher: require at least one requested season token in the
-# name/path, refuse if the torrent also names a season we are not deleting
-# (including S01-03 / Season 1-3 ranges), and require the same folder-key
-# rules as title-level (short keys skipped). Torrents with no parseable
-# season are skipped (under-delete).
+# Season-scoped matcher: title+year (or no-year title boundary) plus season
+# tokens. Refuse packs that also name a season we are not deleting
+# (S01.S02 / S01-03 / Season 1-3). No season token → skip (under-delete).
 qb_match_season_jq() {
-    jq -r --arg folder "$1" --argjson seasons "$2" '
-        def norm:
-          ascii_downcase
-          | gsub("\\\\"; "/")
-          | gsub("[._]+"; " ")
-          | gsub(" +"; " ")
-          | gsub("^ +| +$"; "");
-        def basename_norm:
-          gsub("/+$"; "") | split("/") | map(select(length > 0)) | .[-1] // "" | norm;
-        def boundary_ok($t; $tok):
-          ($tok | length) as $m
-          | ($t | length) as $n
-          | if $n < $m then false
-            elif $n == $m then true
-            else ($t[$m:] | test("^($| \\([0-9]{4}\\)| \\[| - | /|\\.[0-9]{4}| s[0-9]| season |[-.]s[0-9])"))
-            end;
-        def folder_hit($text; $tok):
-          ($text | norm) as $t
-          | ($tok | norm) as $k
-          | if ($k | length) < 3 then false
-            else
-              ($t | basename_norm) as $base
-              | (
-                  ($base == $k)
-                  or ($t == $k)
-                  or ($t | endswith("/" + $k))
-                  or ($t | contains("/" + $k + "/"))
-                  or (($base | startswith($k)) and boundary_ok($base; $k))
-                  or (($t | startswith($k)) and boundary_ok($t; $k))
-                )
-            end;
+    jq -r --arg folder "$1" --argjson seasons "$2" "${QB_TITLE_YEAR_JQ}"'
         def expand_range($a; $b):
           if $a <= $b then [range($a; $b + 1)] else [range($b; $a + 1)] end;
         def seasons_in($text):
@@ -320,65 +335,25 @@ qb_match_season_jq() {
             and (any($found[]; in_wanted(.)))
             and (all($found[]; in_wanted(.)))
             and (
-              folder_hit($row.name // ""; $folder)
-              or folder_hit($row.content_path // ""; $folder)
+              title_year_hit($row.name // ""; $folder)
+              or title_year_hit($row.content_path // ""; $folder)
             )
           )
         | .hash
     '
 }
 
-# Keep history hashes that (a) still exist in qB and (b) match folder key when known.
-# stdin: qB info JSON. args: folder_key, then candidate hashes.
+# Keep *arr queue/history hashes that still exist in qB. The hash is identity —
+# do not also require a folder-key name match (release names rarely look like
+# "Title (YYYY)"). stdin: qB info JSON. args: candidate hashes.
 qbit_filter_hashes_jq() {
-    local folder_key="$1"
-    shift
     local hashes_json
     # Lowercase/trim only — do not strip non-hex (breaks tests and rare non-standard ids).
     hashes_json=$(printf '%s\n' "$@" | jq -R . | jq -s -c 'map(ascii_downcase | gsub("^ +| +$"; "")) | map(select(length > 0)) | unique')
-    jq -r --argjson want "$hashes_json" --arg folder "$folder_key" '
-        def norm:
-          ascii_downcase
-          | gsub("\\\\"; "/")
-          | gsub("[._]+"; " ")
-          | gsub(" +"; " ")
-          | gsub("^ +| +$"; "");
-        def basename_norm:
-          gsub("/+$"; "") | split("/") | map(select(length > 0)) | .[-1] // "" | norm;
-        def boundary_ok($t; $tok):
-          ($tok | length) as $m
-          | ($t | length) as $n
-          | if $n < $m then false
-            elif $n == $m then true
-            else ($t[$m:] | test("^($| \\([0-9]{4}\\)| \\[| - | /|\\.[0-9]{4}| s[0-9]| season |[-.]s[0-9])"))
-            end;
-        def folder_hit($text; $tok):
-          ($tok | length) == 0 or (
-            ($text | norm) as $t
-            | ($tok | norm) as $k
-            | ($t | basename_norm) as $base
-            | (
-                ($base == $k)
-                or ($t | endswith("/" + $k))
-                or ($t | contains("/" + $k + "/"))
-                or (($base | startswith($k)) and boundary_ok($base; $k))
-              )
-          );
-        # index==0 is falsy in jq — must compare to null explicitly
-        [ .[] | select((.hash | ascii_downcase) as $h | (($want | index($h)) != null)) ] as $live
-        | if ($folder | length) == 0 then
-            $live[] | .hash
-          else
-            ($live
-              | map(select(
-                  folder_hit(.name // ""; $folder)
-                  or folder_hit(.content_path // ""; $folder)
-                ))
-            ) as $matched
-            | if ($matched | length) > 0 then $matched[] | .hash
-              else empty
-              end
-          end
+    jq -r --argjson want "$hashes_json" '
+        .[]
+        | select((.hash | ascii_downcase) as $h | (($want | index($h)) != null))
+        | .hash
     '
 }
 
@@ -422,7 +397,8 @@ remove_orphan_torrent_dirs() {
 
     tokens_json=$(jq -nc --arg k "$folder_key" '[$k]')
     shopt -s nullglob
-    for d in "$root/tv"/* "$root/movies"/*; do
+    for d in "$root/tv"/* "$root/movies"/* \
+             "$root/incomplete/tv"/* "$root/incomplete/movies"/*; do
         [ -d "$d" ] || continue
         base=$(basename_of "$d")
         case "$base" in
@@ -521,6 +497,43 @@ arr_history_hashes() {
             .records[]? | .downloadId // .data.torrentInfoHash // empty
         ' 2>/dev/null | tr 'A-F' 'a-f' | sort -u
     fi
+}
+
+# Active *arr queue download hashes (in-progress grabs). Hash is identity.
+arr_queue_hashes() {
+    local base="$1" key="$2" kind="$3" id="$4"
+    local endpoint raw
+    if [ "$kind" = "movie" ]; then
+        endpoint="/api/v3/queue?pageSize=250&movieId=${id}"
+    else
+        endpoint="/api/v3/queue?pageSize=250&seriesId=${id}"
+    fi
+    raw=$(arr_get "$base" "$key" "$endpoint")
+    echo "$raw" | jq -r '
+        if type == "array" then .[]
+        elif type == "object" then .records[]?
+        else empty end
+        | .downloadId // .data.torrentInfoHash // empty
+    ' 2>/dev/null | tr 'A-F' 'a-f' | sort -u
+}
+
+arr_queue_hashes_seasons() {
+    local base="$1" key="$2" id="$3" seasons_json="$4"
+    local raw
+    raw=$(arr_get "$base" "$key" "/api/v3/queue?pageSize=250&seriesId=${id}")
+    echo "$raw" | jq -r --argjson seasons "$seasons_json" '
+        if type == "array" then .[]
+        elif type == "object" then .records[]?
+        else empty end
+        | . as $r
+        | (
+            $r.episode.seasonNumber
+            // $r.seasonNumber
+            // empty
+          ) as $sn
+        | select(($sn != null) and (($seasons | index($sn)) != null))
+        | $r.downloadId // $r.data.torrentInfoHash // empty
+    ' 2>/dev/null | tr 'A-F' 'a-f' | sort -u
 }
 
 # Same as series history, but only grab/import rows whose episode season is in $5 (lines of ints).
@@ -695,49 +708,39 @@ purge_qb() {
     if [ -n "$seasons_json" ] && [ "$seasons_json" != "[]" ]; then
         while IFS= read -r h; do
             [ -n "$h" ] && hlist+=("$h")
+        done < <(arr_queue_hashes_seasons "$base_url" "$key" "$id" "$seasons_json")
+        while IFS= read -r h; do
+            [ -n "$h" ] && hlist+=("$h")
         done < <(arr_history_hashes_seasons "$base_url" "$key" "$id" "$seasons_json")
     else
         while IFS= read -r h; do
             [ -n "$h" ] && hlist+=("$h")
+        done < <(arr_queue_hashes "$base_url" "$key" "$kind" "$id")
+        while IFS= read -r h; do
+            [ -n "$h" ] && hlist+=("$h")
         done < <(arr_history_hashes "$base_url" "$key" "$kind" "$id")
+    fi
+    if [ "${#hlist[@]}" -gt 0 ]; then
+        # Unique, keep order
+        hlist=($(printf '%s\n' "${hlist[@]}" | awk 'NF && !seen[$0]++'))
     fi
 
     if [ "${#hlist[@]}" -gt 0 ]; then
-        log "${kind} history candidates: ${hlist[*]}"
+        log "${kind} queue/history candidates: ${hlist[*]}"
         info=$(qbit_torrents_info)
         while IFS= read -r h; do
             [ -n "$h" ] && filtered+=("$h")
-        done < <(echo "$info" | qbit_filter_hashes_jq "$folder" "${hlist[@]}" 2>/dev/null || true)
+        done < <(echo "$info" | qbit_filter_hashes_jq "${hlist[@]}" 2>/dev/null || true)
 
         if [ "${#filtered[@]}" -gt 0 ]; then
-            # Season-scoped: drop hashes whose torrent names another season.
-            if [ -n "$seasons_json" ] && [ "$seasons_json" != "[]" ]; then
-                local kept=()
-                local season_hits
-                season_hits=$(echo "$info" | qb_match_season_jq "$folder" "$seasons_json" 2>/dev/null || true)
-                for h in "${filtered[@]}"; do
-                    if echo "$season_hits" | grep -qx "$h"; then
-                        kept+=("$h")
-                    else
-                        log "qB: drop history hash $h (other season or no season token)"
-                    fi
-                done
-                if [ "${#kept[@]}" -gt 0 ]; then
-                    log "qB: history hashes validated (${#kept[@]}): ${kept[*]}"
-                    qbit_delete_hashes "${kept[@]}"
-                    remove_orphan_torrent_dirs "$folder" "$seasons_json"
-                    return 0
-                fi
-            else
-                log "qB: history hashes validated (${#filtered[@]}): ${filtered[*]}"
-                qbit_delete_hashes "${filtered[@]}"
-                remove_orphan_torrent_dirs "$folder" "$seasons_json"
-                return 0
-            fi
+            log "qB: queue/history hashes in qB (${#filtered[@]}): ${filtered[*]}"
+            qbit_delete_hashes "${filtered[@]}"
+            remove_orphan_torrent_dirs "$folder" "$seasons_json"
+        else
+            log "qB: queue/history hashes not in qB; trying title+year match"
         fi
-        log "qB: history hashes not in qB or failed folder check; trying folder key"
     else
-        log "no history hashes for ${kind} ${id}"
+        log "no queue/history hashes for ${kind} ${id}"
     fi
 
     if [ -n "$folder" ]; then
@@ -747,7 +750,7 @@ purge_qb() {
             qbit_delete_by_folder_key "$folder"
         fi
     else
-        log "qB: skip token fallback (no safe folder key)"
+        log "qB: skip name fallback (no safe folder key)"
     fi
 }
 
@@ -813,10 +816,10 @@ if [ "${1:-}" = "--match-self-test" ]; then
         fi
     }
     check_filter() {
-        local want="$1" name="$2" folder="$3" torrents="$4"
-        shift 4
+        local want="$1" name="$2" torrents="$3"
+        shift 3
         local got
-        got=$(echo "$torrents" | qbit_filter_hashes_jq "$folder" "$@" | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+        got=$(echo "$torrents" | qbit_filter_hashes_jq "$@" | tr '\n' ' ' | sed 's/[[:space:]]*$//')
         if [ "$got" = "$want" ]; then
             echo "  PASS: $name"
         else
@@ -841,14 +844,33 @@ if [ "${1:-}" = "--match-self-test" ]; then
     check "hash_m1" "bare title does not hit same-prefix sequel" \
         '["Beta Movie"]' \
         '[{"hash":"hash_m1","name":"Beta Movie","content_path":"/data/torrents/movies/Beta Movie"},{"hash":"hash_m2","name":"Beta Movie Reloaded","content_path":"/data/torrents/movies/Beta Movie Reloaded"}]'
-    check_filter "hash_a" "history filter keeps folder-matched hash only" \
-        "Alpha Film (2016)" \
-        '[{"hash":"hash_a","name":"Alpha Film (2016)","content_path":"/data/torrents/movies/Alpha Film (2016)"},{"hash":"hash_b","name":"Alpha Film Sequel Extended (2022)","content_path":"/data/torrents/movies/Alpha Film Sequel Extended (2022)"}]' \
+    check_filter "hash_a" "history filter keeps live hash even when name is a release" \
+        '[{"hash":"hash_a","name":"The Avengers 2012 REPACK BluRay","content_path":"/data/torrents/incomplete/movies/The Avengers 2012 REPACK BluRay"},{"hash":"hash_b","name":"Other Title","content_path":"/data/torrents/movies/Other"}]' \
+        hash_a
+    check_filter "hash_a" "history filter keeps every live candidate hash" \
+        '[{"hash":"hash_a","name":"Alpha Film Sequel Extended (2022)","content_path":"/data/torrents/movies/Alpha Film Sequel Extended (2022)"}]' \
         hash_a hash_b
-    check_filter "" "history filter drops all when none match folder" \
-        "Alpha Film (2016)" \
-        '[{"hash":"hash_b","name":"Alpha Film Sequel Extended (2022)","content_path":"/data/torrents/movies/Alpha Film Sequel Extended (2022)"}]' \
-        hash_b
+    check_filter "" "history filter drops hashes not in qB" \
+        '[{"hash":"hash_b","name":"Other","content_path":"/x"}]' \
+        hash_a
+    check "hash_av" "title+year hits release name without parens" \
+        '["The Avengers (2012)"]' \
+        '[{"hash":"hash_av","name":"The Avengers 2012 REPACK BluRay 1080p DDP 5 1 x264-hallowed","content_path":"/data/torrents/incomplete/movies/www.UIndex.org    -    The Avengers 2012 REPACK BluRay 1080p DDP 5 1 x264-hallowed"}]'
+    check "hash_av" "title+year hits indexer-prefixed incomplete path" \
+        '["The Avengers (2012)"]' \
+        '[{"hash":"hash_av","name":"www.UIndex.org - The Avengers 2012 REPACK","content_path":"/data/torrents/incomplete/movies/www.UIndex.org - The Avengers 2012 REPACK"}]'
+    check "" "title+year does not hit Age of Ultron" \
+        '["The Avengers (2012)"]' \
+        '[{"hash":"hash_u","name":"Avengers Age of Ultron 2015 1080p","content_path":"/data/torrents/movies/Avengers Age of Ultron 2015 1080p"}]'
+    check "" "short It (2017) does not hit It Comes at Night" \
+        '["It (2017)"]' \
+        '[{"hash":"hash_n","name":"It Comes at Night 2017 1080p","content_path":"/data/torrents/movies/It Comes at Night 2017"}]'
+    check "hash_it" "It (2017) hits It 2017 release" \
+        '["It (2017)"]' \
+        '[{"hash":"hash_it","name":"It 2017 1080p BluRay","content_path":"/data/torrents/movies/It 2017 1080p BluRay"}]'
+    check "hash_bb" "article-stripped title still needs the year next" \
+        '["The Avengers (2012)"]' \
+        '[{"hash":"hash_bb","name":"Avengers 2012 1080p","content_path":"/data/torrents/movies/Avengers 2012 1080p"}]'
     check_season() {
         local want="$1" name="$2" folder="$3" seasons="$4" torrents="$5"
         local got
@@ -937,7 +959,9 @@ if [ "${1:-}" = "--match-self-test" ]; then
     _old_root="${MEDIA_ROOT:-}"
     MEDIA_ROOT=$(mktemp -d)
     mkdir -p "$MEDIA_ROOT/torrents/tv/Loki.S02.COMPLETE.1080p.DSNP.WEB-DL" \
-             "$MEDIA_ROOT/torrents/tv/Lost in Space.S01.COMPLETE"
+             "$MEDIA_ROOT/torrents/tv/Lost in Space.S01.COMPLETE" \
+             "$MEDIA_ROOT/torrents/incomplete/movies/www.UIndex.org - The Avengers 2012 REPACK BluRay" \
+             "$MEDIA_ROOT/torrents/movies/Avengers Age of Ultron 2015 1080p"
     DRY_RUN=0
     remove_orphan_torrent_dirs "Loki"
     if [ ! -d "$MEDIA_ROOT/torrents/tv/Loki.S02.COMPLETE.1080p.DSNP.WEB-DL" ]; then
@@ -950,6 +974,19 @@ if [ "${1:-}" = "--match-self-test" ]; then
         echo "  PASS: Lost in Space leftover left alone"
     else
         echo "  FAIL: Lost in Space leftover was removed"
+        failures=$((failures + 1))
+    fi
+    remove_orphan_torrent_dirs "The Avengers (2012)"
+    if [ ! -d "$MEDIA_ROOT/torrents/incomplete/movies/www.UIndex.org - The Avengers 2012 REPACK BluRay" ]; then
+        echo "  PASS: Avengers incomplete leftover removed"
+    else
+        echo "  FAIL: Avengers incomplete leftover still present"
+        failures=$((failures + 1))
+    fi
+    if [ -d "$MEDIA_ROOT/torrents/movies/Avengers Age of Ultron 2015 1080p" ]; then
+        echo "  PASS: Age of Ultron leftover left alone"
+    else
+        echo "  FAIL: Age of Ultron leftover was removed"
         failures=$((failures + 1))
     fi
     rm -rf "$MEDIA_ROOT"
