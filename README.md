@@ -61,6 +61,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/soulis-1256/assemblrr/main/p
 bash (curl -fsSL https://raw.githubusercontent.com/soulis-1256/assemblrr/main/platform/linux/bootstrap.sh | psub) --ref dev
 ```
 
+Already installed? Use `assemblrr upgrade` or `assemblrr uninstall` — do not run the bootstrap again.
+
 ### Windows (PowerShell)
 
 Ensure Docker Desktop is running before execution.

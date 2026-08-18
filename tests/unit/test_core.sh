@@ -126,7 +126,60 @@ left=$(HOME="$ptr_home" list_assemblrr_leftovers)
 assert_contains "$left" $'install\t'"$empty_inst" "lists home leftover install"
 assert_contains "$left" $'media\t'"$ptr_home/assemblrr-media" "lists home leftover media"
 skipped=$(HOME="$ptr_home" list_assemblrr_leftovers "$empty_inst" "$ptr_home/assemblrr-media")
-assert_eq "" "$skipped" "skips known paths"
+assert_not_contains "$skipped" "$empty_inst" "skips passed install"
+assert_not_contains "$skipped" "$ptr_home/assemblrr-media" "skips passed media"
+
+test_suite "pointer remembers previous installs"
+mem_home="$tmp/mem-home"
+old_inst="$tmp/old-stack/assemblrr"
+old_media="$tmp/old-stack/vids"
+mkdir -p "$mem_home" "$old_inst" "$old_media/torrents/movies"
+printf '%s\n' '#!/bin/bash' >"$old_inst/cli.sh"
+HOME="$mem_home" write_install_pointer "$old_inst" "$old_media"
+new_inst="$mem_home/assemblrr"
+new_media="$mem_home/assemblrr-media"
+mkdir -p "$new_inst" "$new_media/torrents/movies"
+HOME="$mem_home" write_install_pointer "$new_inst" "$new_media"
+ptr=$(cat "$mem_home/.assemblrr-config")
+assert_contains "$ptr" "KNOWN_INSTALLS=" "records known installs"
+assert_contains "$ptr" "$old_inst" "keeps previous install path"
+assert_contains "$ptr" "$old_media" "keeps previous media path"
+left=$(HOME="$mem_home" list_assemblrr_leftovers "$new_inst" "$new_media")
+assert_contains "$left" $'install\t'"$old_inst" "finds remembered install"
+assert_contains "$left" $'media\t'"$old_media" "finds remembered media"
+
+test_suite "leftovers find nested trees and config media"
+nest_home="$tmp/nest-home"
+mkdir -p "$nest_home/data/assemblrr"
+mkdir -p "$tmp/elsewhere-media/torrents/movies"
+printf 'MEDIA_DIRECTORY="%s"\n' "$tmp/elsewhere-media" >"$nest_home/data/assemblrr/.assemblrr-config"
+left=$(HOME="$nest_home" list_assemblrr_leftovers)
+assert_contains "$left" $'install\t'"$nest_home/data/assemblrr" "one level under home"
+assert_contains "$left" $'media\t'"$tmp/elsewhere-media" "media from leftover install config"
+
+test_suite "is_complete_assemblrr_install"
+done="$tmp/complete/assemblrr"
+mkdir -p "$done/compose"
+: >"$done/.assemblrr-config"
+: >"$done/cli.sh"
+assert_success "config+cli is complete" is_complete_assemblrr_install "$done"
+empty="$tmp/empty/assemblrr"
+mkdir -p "$empty"
+assert_failure "empty dir is not complete" is_complete_assemblrr_install "$empty"
+assert_failure "missing path is not complete" is_complete_assemblrr_install "$tmp/no-such"
+partial="$tmp/partial/assemblrr"
+mkdir -p "$partial"
+: >"$partial/cli.sh"
+assert_failure "cli without runtime config is not complete" is_complete_assemblrr_install "$partial"
+
+test_suite "setup refuses a complete install"
+assert_true "setup calls the gate" "grep -q refuse_setup_if_already_installed \"$REPO_ROOT/bin/setup.sh\""
+assert_true "setup offers leftover cleanup" "grep -q offer_leftover_cleanup \"$REPO_ROOT/bin/setup.sh\""
+gate=$(sed -n '/^refuse_setup_if_already_installed()/,/^}/p' "$REPO_ROOT/lib/prompts.sh")
+assert_contains "$gate" "already installed" "says already installed"
+assert_contains "$gate" "uninstall" "points at uninstall"
+assert_contains "$gate" "upgrade" "points at upgrade"
+assert_contains "$gate" "exit 1" "stops setup"
 
 test_suite "print_detected_locations"
 loc=$(INSTALL_DIR=/mnt/e/assemblrr MEDIA_DIRECTORY=/mnt/e/assemblrr-media \
@@ -134,6 +187,7 @@ loc=$(INSTALL_DIR=/mnt/e/assemblrr MEDIA_DIRECTORY=/mnt/e/assemblrr-media \
 assert_contains "$loc" "Detected installation:" "optional heading"
 assert_contains "$loc" "Config:  /mnt/e/assemblrr" "prints config path"
 assert_contains "$loc" "Media:   /mnt/e/assemblrr-media" "prints media path"
+assert_not_contains "$loc" "Extra:" "does not use Extra label"
 
 test_suite "storage_root_label"
 assert_eq "Windows E:" "$(storage_root_label /mnt/e)" "WSL E:"

@@ -621,6 +621,8 @@ LOG_FILE="/tmp/${APP_NAME}-setup-$(date '+%Y%m%d-%H%M%S').log"
 log_info "Setup log: $LOG_FILE"
 log_info "Checking prerequisites..."
 check_dependencies
+refuse_setup_if_already_installed
+offer_leftover_cleanup
 
 # 1) VPN questions, then immediately test the tunnel (fail fast).
 #    VPN path bootstraps install tree + CLI early so uninstall works if you abort.

@@ -135,18 +135,67 @@ find_install_directory() {
     return 1
 }
 
+# Read KEY="value" from a dotenv file without sourcing (does not clobber the shell).
+_pointer_get() {
+    local file="$1"
+    local key="$2"
+    local line
+    [ -f "$file" ] || return 0
+    line=$(grep -E "^${key}=" "$file" 2>/dev/null | tail -1) || true
+    line="${line#${key}=}"
+    line="${line%$'\r'}"
+    line="${line#\"}"
+    line="${line%\"}"
+    line="${line#\'}"
+    line="${line%\'}"
+    printf '%s\n' "$line"
+}
+
+# $1 = pipe-separated list, $2 = path to add. Prints the new list (no dups).
+_known_path_list_add() {
+    local list="${1:-}"
+    local add="${2:-}"
+    local p
+    add="${add%/}"
+    [ -n "$add" ] || { printf '%s\n' "$list"; return 0; }
+    if [ -n "$list" ]; then
+        while IFS= read -r -d '|' p || [ -n "$p" ]; do
+            [ "$p" = "$add" ] && { printf '%s\n' "$list"; return 0; }
+        done <<< "${list}|"
+        printf '%s|%s\n' "$list" "$add"
+    else
+        printf '%s\n' "$add"
+    fi
+}
+
 # Home pointer so the CLI can find a non-default (or mid-setup) install.
 # Includes MEDIA_DIRECTORY so uninstall --media can see an external drive
 # even if the install tree was never finished.
+# KNOWN_INSTALLS / KNOWN_MEDIA remember every path we have written so a later
+# install cannot hide an earlier tree on another drive.
 write_install_pointer() {
-    local install_dir="$1"
+    local install_dir="${1%/}"
     local media_dir="${2:-}"
     local pointer="$HOME/.assemblrr-config"
+    local known_i known_m prev_i prev_m
+    media_dir="${media_dir%/}"
+
+    known_i=$(_pointer_get "$pointer" "KNOWN_INSTALLS")
+    known_m=$(_pointer_get "$pointer" "KNOWN_MEDIA")
+    prev_i=$(_pointer_get "$pointer" "INSTALL_DIRECTORY")
+    prev_m=$(_pointer_get "$pointer" "MEDIA_DIRECTORY")
+    known_i=$(_known_path_list_add "$known_i" "$prev_i")
+    known_i=$(_known_path_list_add "$known_i" "$install_dir")
+    known_m=$(_known_path_list_add "$known_m" "$prev_m")
+    known_m=$(_known_path_list_add "$known_m" "$media_dir")
+
     {
         printf 'INSTALL_DIRECTORY="%s"\n' "$install_dir"
         if [ -n "$media_dir" ]; then
             printf 'MEDIA_DIRECTORY="%s"\n' "$media_dir"
         fi
+        [ -n "$known_i" ] && printf 'KNOWN_INSTALLS="%s"\n' "$known_i"
+        [ -n "$known_m" ] && printf 'KNOWN_MEDIA="%s"\n' "$known_m"
     } > "$pointer"
     chmod 600 "$pointer"
 }
@@ -184,6 +233,14 @@ is_assemblrr_media_tree() {
     [ -d "$d/torrents/movies" ] || [ -d "$d/media/movies" ] || [ -d "$d/blackhole" ]
 }
 
+# A finished (or mid-setup after the tree was copied) install — not an empty folder.
+is_complete_assemblrr_install() {
+    local d="$1"
+    [ -n "$d" ] && [ -d "$d" ] || return 1
+    { [ -f "$d/.assemblrr-config" ] || [ -f "$d/.${APP_NAME:-assemblrr}-config" ]; } || return 1
+    [ -f "$d/cli.sh" ] || [ -f "$d/compose/base.yaml" ]
+}
+
 # Shared location block for `status` and `uninstall`.
 # Uses INSTALL_DIR, MEDIA_DIRECTORY, APP_CLI_NAME (optional heading as $1).
 print_detected_locations() {
@@ -199,33 +256,106 @@ print_detected_locations() {
     while IFS=$'\t' read -r kind path; do
         [ -n "$path" ] || continue
         case "$kind" in
-            install) printf '  Extra:   leftover install %s\n' "$path" ;;
-            media)   printf '  Extra:   leftover media %s\n' "$path" ;;
+            install) printf '  Leftover install: %s\n' "$path" ;;
+            media)   printf '  Leftover media:   %s\n' "$path" ;;
         esac
     done < <(list_assemblrr_leftovers "${INSTALL_DIR:-}" "${MEDIA_DIRECTORY:-}")
 }
 
+# MEDIA_DIRECTORY recorded inside an install tree (empty if none).
+_assemblrr_tree_media_dir() {
+    local d="$1"
+    local cfg media
+    cfg=""
+    [ -f "$d/.assemblrr-config" ] && cfg="$d/.assemblrr-config"
+    [ -z "$cfg" ] && [ -f "$d/.${APP_NAME:-assemblrr}-config" ] && cfg="$d/.${APP_NAME:-assemblrr}-config"
+    [ -n "$cfg" ] || return 0
+    media=$(_pointer_get "$cfg" "MEDIA_DIRECTORY")
+    printf '%s\n' "${media%/}"
+}
+
 # TSV: kind<TAB>path   kind is install|media
 # Optional $1/$2 are already-known paths to skip.
+# Finds: remembered pointer paths (any name), $root/assemblrr on home /opt /
+# storage roots, and one directory down (browse-to-parent).
 list_assemblrr_leftovers() {
     local skip_install="${1:-}"
     local skip_media="${2:-}"
-    local root d
-    local -A seen=()
+    local name="${APP_NAME:-assemblrr}"
+    local pointer=""
+    local root child d media
+    local -A seen_i=()
+    local -A seen_m=()
 
+    skip_install="${skip_install%/}"
+    skip_media="${skip_media%/}"
+
+    _leftover_emit_install() {
+        local p="${1%/}"
+        local trust="${2:-0}"
+        [ -n "$p" ] && [ -d "$p" ] || return 0
+        [ "$p" != "$skip_install" ] || return 0
+        [ -z "${seen_i[$p]:-}" ] || return 0
+        if [ "$trust" != "1" ] && ! is_assemblrr_install_tree "$p"; then
+            return 0
+        fi
+        seen_i[$p]=1
+        printf 'install\t%s\n' "$p"
+        media=$(_assemblrr_tree_media_dir "$p")
+        if [ -n "$media" ] && [ -d "$media" ] && [ "$media" != "$skip_media" ] && \
+           [ -z "${seen_m[$media]:-}" ]; then
+            seen_m[$media]=1
+            printf 'media\t%s\n' "$media"
+        fi
+    }
+
+    _leftover_emit_media() {
+        local p="${1%/}"
+        local trust="${2:-0}"
+        [ -n "$p" ] && [ -d "$p" ] || return 0
+        [ "$p" != "$skip_media" ] || return 0
+        [ -z "${seen_m[$p]:-}" ] || return 0
+        if [ "$trust" != "1" ] && ! is_assemblrr_media_tree "$p"; then
+            return 0
+        fi
+        seen_m[$p]=1
+        printf 'media\t%s\n' "$p"
+    }
+
+    if [ -f "$HOME/.assemblrr-config" ]; then
+        pointer="$HOME/.assemblrr-config"
+    elif [ -f "$HOME/.${name}-config" ]; then
+        pointer="$HOME/.${name}-config"
+    fi
+    if [ -n "$pointer" ]; then
+        local part
+        while IFS= read -r -d '|' part || [ -n "$part" ]; do
+            [ -n "$part" ] && _leftover_emit_install "$part" 1
+        done <<< "$(_pointer_get "$pointer" "KNOWN_INSTALLS")|"
+        while IFS= read -r -d '|' part || [ -n "$part" ]; do
+            [ -n "$part" ] && _leftover_emit_media "$part" 1
+        done <<< "$(_pointer_get "$pointer" "KNOWN_MEDIA")|"
+    fi
+
+    _leftover_scan_root() {
+        local r="${1%/}"
+        [ -n "$r" ] && [ -d "$r" ] || return 0
+        _leftover_emit_install "${r}/${name}" 0
+        _leftover_emit_media "${r}/${name}-media" 0
+        local c
+        for c in "$r"/*; do
+            [ -d "$c" ] || continue
+            _leftover_emit_install "${c}/${name}" 0
+            _leftover_emit_media "${c}/${name}-media" 0
+        done
+    }
+
+    _leftover_scan_root "${HOME:-}"
+    _leftover_scan_root /opt
     while IFS= read -r root; do
         [ -n "$root" ] || continue
-        [ -n "${seen[$root]:-}" ] && continue
-        seen[$root]=1
-        d="${root}/${APP_NAME:-assemblrr}"
-        if [ -d "$d" ] && [ "$d" != "$skip_install" ] && is_assemblrr_install_tree "$d"; then
-            printf 'install\t%s\n' "$d"
-        fi
-        d="${root}/${APP_NAME:-assemblrr}-media"
-        if [ -d "$d" ] && [ "$d" != "$skip_media" ] && is_assemblrr_media_tree "$d"; then
-            printf 'media\t%s\n' "$d"
-        fi
-    done < <({ printf '%s\n' "${HOME:-}"; list_storage_roots; })
+        _leftover_scan_root "$root"
+    done < <(list_storage_roots)
 }
 
 # --- Path utilities ---

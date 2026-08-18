@@ -98,6 +98,14 @@ assert_true "config apply is a subcommand" "grep -q 'apply|wire)' \"$REPO_ROOT/b
 assert_true "config apply runs config.sh" "grep -q 'ASSEMBLRR_NONINTERACTIVE=1 bash' \"$REPO_ROOT/bin/cli.sh\""
 assert_contains "$(grep 'config apply' "$REPO_ROOT/README.md" || true)" "config apply" "README lists config apply"
 
+test_suite "uninstall --force is quiet"
+un=$(sed -n '/^uninstall_app()/,/^}/p' "$REPO_ROOT/bin/cli.sh")
+assert_contains "$un" 'if [ "$force" = false ]; then' "inventory only when not --force"
+assert_not_contains "$un" "Stopping all services" "no step-by-step stop line"
+assert_not_contains "$un" "Removing config at" "no Removing-config play-by-play"
+assert_not_contains "$un" "Docker images were left" "no leftover-images lecture"
+assert_contains "$un" "uninstalled." "one done line"
+
 test_suite "config show survives missing VPN_TYPE/TZ"
 cli="$REPO_ROOT/bin/cli.sh"
 assert_contains "$(grep -n 'VPN_TYPE=' "$cli" | head -5)" 'VPN_TYPE="${VPN_TYPE:-openvpn}"' "CLI defaults VPN_TYPE"

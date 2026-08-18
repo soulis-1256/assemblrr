@@ -390,6 +390,8 @@ uninstall_app() {
     local delete_media=false
     local removed_config=false
     local removed_media=false
+    local -a extra_removed=()
+    local -a extra_kept=()
     for arg in "$@"; do
         case "$arg" in
             -f|--force) force=true ;;
@@ -398,12 +400,12 @@ uninstall_app() {
     done
 
     poke_wsl_automounts 2>/dev/null || true
-    echo
-    print_detected_locations "Detected installation:"
-    echo
 
-    # --force already opts out of all confirmation; skip the scary preamble.
+    # --force already opts out of confirmation; skip the inventory and preamble.
     if [ "$force" = false ]; then
+        echo
+        print_detected_locations "Detected installation:"
+        echo
         echo "WARNING: This will COMPLETELY remove ${APP_DISPLAY_NAME}!"
         echo "This includes running containers, the Docker network, the CLI, and the config path above."
         if [ "$delete_media" = true ]; then
@@ -421,46 +423,32 @@ uninstall_app() {
         fi
     fi
 
-    echo "Stopping all services and removing volumes..."
     "${DC[@]}" down -v 2>/dev/null || log_warning "Failed to stop some services"
 
-    echo "Removing Docker network..."
     if run_docker network inspect "$APP_NETWORK_NAME" &>/dev/null; then
         run_docker network rm "$APP_NETWORK_NAME" 2>/dev/null || log_warning "Failed to remove Docker network $APP_NETWORK_NAME"
     fi
 
-    echo "Removing config at $INSTALL_DIR ..."
     if [ "$force" = true ]; then
         safe_rm_rf "$INSTALL_DIR"
         removed_config=true
-        log_warning "Removed $INSTALL_DIR"
     else
         read -p "Also delete config at $INSTALL_DIR? Type the full path to confirm: " -r
         if [[ "$REPLY" = "$INSTALL_DIR" ]]; then
             safe_rm_rf "$INSTALL_DIR"
             removed_config=true
-            log_warning "Removed $INSTALL_DIR"
-        else
-            log_info "Kept $INSTALL_DIR"
         fi
     fi
 
     if [ "$delete_media" = true ]; then
-        echo "Removing media at $MEDIA_DIRECTORY ..."
         safe_rm_rf "$MEDIA_DIRECTORY"
         removed_media=true
-        log_warning "Removed $MEDIA_DIRECTORY"
     elif [ "$force" = false ]; then
         read -p "Also delete media at $MEDIA_DIRECTORY? Type the full path to confirm: " -r
         if [[ "$REPLY" = "$MEDIA_DIRECTORY" ]]; then
             safe_rm_rf "$MEDIA_DIRECTORY"
             removed_media=true
-            log_warning "Removed $MEDIA_DIRECTORY"
-        else
-            log_info "Kept $MEDIA_DIRECTORY"
         fi
-    else
-        log_info "Kept media at $MEDIA_DIRECTORY (pass --media to delete)"
     fi
 
     # Path picker / hung setup can leave assemblrr trees on other mounts
@@ -470,23 +458,20 @@ uninstall_app() {
         [ -n "$leftover_path" ] || continue
         case "$leftover_kind" in
             install)
-                echo "Removing leftover install at $leftover_path ..."
                 safe_rm_rf "$leftover_path"
-                log_warning "Removed leftover $leftover_path"
+                extra_removed+=("$leftover_path")
                 ;;
             media)
                 if [ "$delete_media" = true ]; then
-                    echo "Removing leftover media at $leftover_path ..."
                     safe_rm_rf "$leftover_path"
-                    log_warning "Removed leftover $leftover_path"
+                    extra_removed+=("$leftover_path")
                 else
-                    log_info "Kept leftover media at $leftover_path (pass --media to delete)"
+                    extra_kept+=("$leftover_path")
                 fi
                 ;;
         esac
     done < <(list_assemblrr_leftovers "$INSTALL_DIR" "$MEDIA_DIRECTORY")
 
-    echo "Removing CLI at $HOME/.local/bin/$APP_CLI_NAME ..."
     if [ -n "${APP_CLI_NAME:-}" ]; then
         rm -f "$HOME/.local/bin/$APP_CLI_NAME" "/usr/local/bin/$APP_CLI_NAME" 2>/dev/null || true
     fi
@@ -503,18 +488,28 @@ uninstall_app() {
     # Install discovery pointer (may live outside the install dir)
     rm -f "$HOME/.assemblrr-config" "$HOME/.${APP_NAME:-assemblrr}-config" 2>/dev/null || true
 
-    log_success "${APP_DISPLAY_NAME} has been uninstalled!"
+    log_success "${APP_DISPLAY_NAME} uninstalled."
     if [ "$removed_config" = true ]; then
-        echo "  Removed config: $INSTALL_DIR"
+        echo "  Config: $INSTALL_DIR"
     else
-        echo "  Kept config:    $INSTALL_DIR"
+        echo "  Config kept: $INSTALL_DIR"
     fi
     if [ "$removed_media" = true ]; then
-        echo "  Removed media:  $MEDIA_DIRECTORY"
+        echo "  Media:  $MEDIA_DIRECTORY"
     else
-        echo "  Kept media:     $MEDIA_DIRECTORY"
+        echo "  Media kept: $MEDIA_DIRECTORY"
     fi
-    log_info "Docker images were left on disk — see docs/uninstall.md to remove them."
+    local p
+    if [ "${#extra_removed[@]}" -gt 0 ]; then
+        for p in "${extra_removed[@]}"; do
+            echo "  Leftover: $p"
+        done
+    fi
+    if [ "${#extra_kept[@]}" -gt 0 ]; then
+        for p in "${extra_kept[@]}"; do
+            echo "  Leftover kept: $p"
+        done
+    fi
 }
 
 # Load PUID/PGID from install .env when present (for prepare_install_dirs)

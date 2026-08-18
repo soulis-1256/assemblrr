@@ -489,6 +489,71 @@ _probe_selected_storage() {
     return 0
 }
 
+# Setup is first-time only. A complete tree means use the CLI, not bootstrap again.
+refuse_setup_if_already_installed() {
+    poke_wsl_automounts 2>/dev/null || true
+    local existing=""
+    existing=$(find_install_directory 2>/dev/null || true)
+    if [ -z "$existing" ] || ! is_complete_assemblrr_install "$existing"; then
+        return 0
+    fi
+
+    INSTALL_DIR="$existing"
+    load_install_pointer 2>/dev/null || true
+    if [ -f "$existing/.assemblrr-config" ]; then
+        safe_source "$existing/.assemblrr-config"
+    elif [ -f "$existing/.${APP_NAME:-assemblrr}-config" ]; then
+        safe_source "$existing/.${APP_NAME:-assemblrr}-config"
+    fi
+    MEDIA_DIRECTORY="${MEDIA_DIRECTORY:-}"
+
+    local cli="${APP_CLI_NAME:-assemblrr}"
+    echo
+    log_warning "${APP_DISPLAY_NAME} is already installed."
+    print_detected_locations
+    echo
+    log_info "Setup is first-time only. Use the CLI:"
+    log_info "  $cli upgrade        # update the stack"
+    log_info "  $cli config edit    # change settings"
+    log_info "  $cli uninstall      # remove it, then run setup again"
+    echo
+    exit 1
+}
+
+# Incomplete trees from an aborted setup. Offer to delete them before we start.
+offer_leftover_cleanup() {
+    poke_wsl_automounts 2>/dev/null || true
+    local leftover kind path ans
+    leftover=$(list_assemblrr_leftovers || true)
+    [ -n "$leftover" ] || return 0
+
+    echo
+    log_warning "Found leftover assemblrr files from an earlier attempt:"
+    while IFS=$'\t' read -r kind path; do
+        [ -n "$path" ] || continue
+        log_warning "  $path"
+    done <<< "$leftover"
+
+    read -p "Remove leftover install files (keeps media)? (Y/n) [Default = y]: " ans
+    ans=${ans:-y}
+    if [ "${ans,,}" = "y" ]; then
+        while IFS=$'\t' read -r kind path; do
+            [ "$kind" = "install" ] && [ -n "$path" ] && safe_rm_rf "$path"
+        done <<< "$leftover"
+    fi
+
+    leftover=$(list_assemblrr_leftovers || true)
+    if echo "$leftover" | grep -q $'^media\t'; then
+        read -p "Also remove leftover media directories? (y/N) [Default = n]: " ans
+        ans=${ans:-n}
+        if [ "${ans,,}" = "y" ]; then
+            while IFS=$'\t' read -r kind path; do
+                [ "$kind" = "media" ] && [ -n "$path" ] && safe_rm_rf "$path"
+            done <<< "$leftover"
+        fi
+    fi
+}
+
 get_installation_paths() {
     ui_intro \
         "Where should assemblrr store config and media? External drives (WSL E:, USB, …) show up in the list." \
