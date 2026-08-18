@@ -247,6 +247,7 @@ check_dependencies() {
 source "$APP_ROOT/lib/managed_files.sh"
 source "$APP_ROOT/lib/fzf-tui.sh"
 source "$APP_ROOT/lib/services.sh"
+source "$APP_ROOT/lib/quality.sh"
 source "$APP_ROOT/lib/prompts.sh"
 
 _copy_stall_error() {
@@ -555,8 +556,8 @@ MEDIA_SERVICE="$media_service"
 VPN_ENABLED="${setup_vpn,,}"
 VPN_TYPE="${vpn_type:-openvpn}"
 TZ="$tz"
-SEERR_DEFAULT_PROFILE="${seerr_default_profile:-1}"
-SEERR_IS_4K="${seerr_is_4k:-false}"
+QUALITY_TIER="$(quality_tier)"
+SEERR_IS_4K="$(quality_seerr_is_4k)"
 SUBTITLE_LANGUAGE="${subtitle_language:-}"
 SETUP_MODE="${SETUP_MODE:-manual}"
 EOF
@@ -632,7 +633,7 @@ get_installation_paths
 # No-VPN (or path change after provisional VPN defaults): ensure tree + CLI exist
 bootstrap_operator quiet
 configure_media_service
-configure_seerr_profile
+configure_quality_profile
 configure_subtitle_language
 configure_opensubtitles
 configure_timezone
@@ -653,7 +654,7 @@ else
     echo "  VPN:               DISABLED"
 fi
 echo "  Media service:     $media_service (port $media_service_port)"
-echo "  Seerr Profile:     $seerr_default_profile (4K=$seerr_is_4k)"
+echo "  Quality profile:   $QUALITY_TIER (4K=$seerr_is_4k)"
 echo "  Subtitle language: ${subtitle_language:-en (Bazarr default)}"
 if [ "${opensubtitles_enabled:-n}" = "y" ]; then
     echo "  OpenSubtitles.com: yes (username=${opensubtitles_username})"
@@ -704,11 +705,10 @@ install_cli
 set_permissions
 
 log_success "Install files ready — starting services..."
-log_info "Starting ${APP_DISPLAY_NAME} services..."
 # Ensure mounts still exist/owned immediately before the full stack comes up
 prepare_install_dirs "$install_directory" "$puid" "$pgid"
 build_compose_args "$install_directory" "${setup_vpn,,}"
-if ! run_docker compose "${COMPOSE_ARGS[@]}" --profile "$media_service" up -d --remove-orphans; then
+if ! compose_up_stack "$media_service"; then
     echo
     log_warning "Failed to start ${APP_DISPLAY_NAME} services"
     echo

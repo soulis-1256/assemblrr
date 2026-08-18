@@ -17,6 +17,7 @@ lib/compose.sh|lib/compose.sh
 lib/vpn.sh|lib/vpn.sh
 lib/api.sh|lib/api.sh
 lib/arr.sh|lib/arr.sh
+lib/quality.sh|lib/quality.sh
 lib/jellyfin.sh|lib/jellyfin.sh
 lib/seerr.sh|lib/seerr.sh
 lib/bazarr.sh|lib/bazarr.sh

@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://schemas.recyclarr.dev/v8/config-schema.json
 # Root: instance URLs/keys + include list. Profile packs are under includes/.
-# All packs listed here are synced; Seerr's default is chosen at setup.
+# All packs listed here are synced; the default (movies + TV) is chosen at setup.
 # See README "Quality Profiles & TRaSH Guides".
 
 radarr:

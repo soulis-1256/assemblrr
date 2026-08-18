@@ -2,10 +2,14 @@
 # assemblrr Seerr & Recyclarr configuration — sourced by config.sh
 # Provides: configure_seerr, configure_recyclarr
 # Requires: lib/core.sh (logging), lib/api.sh (api_get/post helpers),
-#           lib/arr.sh (lookup_radarr_profile, lookup_sonarr_profile),
+#           lib/quality.sh (tier + names), lib/arr.sh (lookups),
 #           config.sh (_cfg_log_info, log_step, log_step_fail, etc.)
 
 set -euo pipefail
+
+_seerr_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+[ -f "$_seerr_dir/quality.sh" ] && source "$_seerr_dir/quality.sh"
 
 # --- Shared helper: connect or update a service (Radarr/Sonarr) in Seerr ---
 # Usage: seerr_connect_service <service_type> <port> <api_key> <profile_func> <active_dir> <is_4k> <cookie_jar> [existing_id]
@@ -191,10 +195,9 @@ configure_recyclarr() {
     # Only substitute known vars so $schema in YAML comments is left alone
     export RADARR_API_KEY SONARR_API_KEY
 
-    local default_label="assemblrr HD Bluray + WEB"
-    if [ "${SEERR_IS_4K}" = "true" ]; then
-        default_label="assemblrr UHD Bluray + WEB"
-    fi
+    local default_label
+    default_label=$(quality_profile_names radarr)
+    default_label="${default_label%%|*}"
 
     if [ ! -f "$template_root/recyclarr.yml" ]; then
         log_step_fail "Recyclarr: template root not found (${template_root}/recyclarr.yml)"
@@ -285,11 +288,13 @@ configure_seerr() {
             echo "Connecting Seerr services" >&2
 
             local connect_errors=0
+            local is_4k
+            is_4k=$(quality_seerr_is_4k)
             if [ -n "$RADARR_API_KEY" ]; then
                 local radarr_id
                 radarr_id=$(seerr_service_id "radarr" "$seerr_cookie_jar" || true)
                 if ! seerr_connect_service "radarr" 7878 "$RADARR_API_KEY" "lookup_radarr_profile" \
-                    "/data/media/movies" "${SEERR_IS_4K:-false}" "$seerr_cookie_jar" "$radarr_id"; then
+                    "/data/media/movies" "$is_4k" "$seerr_cookie_jar" "$radarr_id"; then
                     log_step_fail "Seerr: failed to configure Radarr (re-run to retry)"
                     connect_errors=$((connect_errors + 1))
                 fi
@@ -299,7 +304,7 @@ configure_seerr() {
                 local sonarr_id
                 sonarr_id=$(seerr_service_id "sonarr" "$seerr_cookie_jar" || true)
                 if ! seerr_connect_service "sonarr" 8989 "$SONARR_API_KEY" "lookup_sonarr_profile" \
-                    "/data/media/tv" "false" "$seerr_cookie_jar" "$sonarr_id"; then
+                    "/data/media/tv" "$is_4k" "$seerr_cookie_jar" "$sonarr_id"; then
                     log_step_fail "Seerr: failed to configure Sonarr (re-run to retry)"
                     connect_errors=$((connect_errors + 1))
                 fi
@@ -432,16 +437,18 @@ configure_seerr() {
 
     # Connect Radarr and Sonarr using shared helper
     local connect_errors=0
+    local is_4k
+    is_4k=$(quality_seerr_is_4k)
     if [ -n "$RADARR_API_KEY" ]; then
         if ! seerr_connect_service "radarr" 7878 "$RADARR_API_KEY" "lookup_radarr_profile" \
-            "/data/media/movies" "${SEERR_IS_4K:-false}" "$seerr_cookie_jar"; then
+            "/data/media/movies" "$is_4k" "$seerr_cookie_jar"; then
             connect_errors=$((connect_errors + 1))
         fi
     fi
 
     if [ -n "$SONARR_API_KEY" ]; then
         if ! seerr_connect_service "sonarr" 8989 "$SONARR_API_KEY" "lookup_sonarr_profile" \
-            "/data/media/tv" "false" "$seerr_cookie_jar"; then
+            "/data/media/tv" "$is_4k" "$seerr_cookie_jar"; then
             connect_errors=$((connect_errors + 1))
         fi
     fi

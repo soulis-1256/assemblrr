@@ -44,6 +44,9 @@ fi
 source "$_lib_dir/core.sh"
 source "$_lib_dir/branding.sh"
 source "$_lib_dir/compose.sh"
+if [ -f "$_lib_dir/quality.sh" ]; then
+    source "$_lib_dir/quality.sh"
+fi
 source "$_lib_dir/vpn.sh"
 if [ -f "$_lib_dir/services.sh" ]; then
     source "$_lib_dir/services.sh"
@@ -770,6 +773,9 @@ show_config() {
     echo "  VPN enabled:        ${VPN_ENABLED:-n}"
     echo "  VPN type:           ${VPN_TYPE:-openvpn}"
     echo "  Timezone:           ${TZ:-UTC}"
+    if type quality_tier >/dev/null 2>&1; then
+        echo "  Quality:            $(quality_tier)"
+    fi
     if [ "${VPN_ENABLED:-n}" = "y" ]; then
         echo "  VPN secrets:        $INSTALL_DIR/secrets/"
     fi

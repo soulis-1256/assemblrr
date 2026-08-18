@@ -5,9 +5,14 @@
 #           apply_selected_indexers, sync_selected_indexers,
 #           prowlarr_sync_gluetun_proxy
 # Requires: lib/core.sh (logging), lib/api.sh (api_get/post/put/delete helpers),
+#           lib/quality.sh (tier + name lookup),
 #           config.sh (_cfg_log_info, log_step, log_step_fail, AUTH_USERNAME, etc.)
 
 set -euo pipefail
+
+_arr_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+[ -f "$_arr_dir/quality.sh" ] && source "$_arr_dir/quality.sh"
 
 # --- Shared auth config for *arr services ---
 
@@ -737,15 +742,7 @@ set_default_quality_profile() {
         return 1
     fi
 
-    local want_named=0
-    if [ "$service_name" = "Radarr" ]; then
-        if [ "${SEERR_IS_4K:-false}" = "true" ] || [ "${SEERR_DEFAULT_PROFILE:-1}" != "1" ]; then
-            want_named=1
-        fi
-    else
-        want_named=1
-    fi
-    if [ "$want_named" = "1" ] && [ "$profile_id" = "1" ] && [ "$profile_name" = "Any" ]; then
+    if quality_wants_named_profile && [ "$profile_id" = "1" ] && [ "$profile_name" = "Any" ]; then
         log_step_fail "${service_name}: assemblrr quality profile not found (Recyclarr sync missing?)"
         return 1
     fi
@@ -768,97 +765,29 @@ set_default_quality_profile() {
 
 # --- Quality profile lookup ---
 
-lookup_radarr_profile() {
+# $1 = api key, $2 = port, $3 = radarr | sonarr
+lookup_arr_quality_profile() {
     local apikey="$1"
-    local profiles_json
-    profiles_json=$(api_get "7878" "/api/v3/qualityprofile" "$apikey")
+    local port="$2"
+    local kind="$3"
+    local profiles_json spec
 
+    profiles_json=$(api_get "$port" "/api/v3/qualityprofile" "$apikey")
     if [ -z "$profiles_json" ]; then
         echo "1:Any"
         return
     fi
 
-    # Prefer assemblrr-named Recyclarr profiles; fall back to stock *arr names.
-    local target_name=""
-    local stock_fallback=""
+    spec=$(quality_profile_names "$kind")
+    echo "$profiles_json" | arr_match_quality_profile "${spec%%|*}" "${spec##*|}"
+}
 
-    if [ "${SEERR_IS_4K:-false}" = "true" ]; then
-        target_name="assemblrr UHD Bluray + WEB"
-        stock_fallback="Ultra-HD"
-    elif [ "${SEERR_DEFAULT_PROFILE:-1}" != "1" ]; then
-        target_name="assemblrr HD Bluray + WEB"
-        stock_fallback="HD-1080p"
-    else
-        echo "1:Any"
-        return
-    fi
-
-    local matched
-    matched=$(echo "$profiles_json" | jq -r --arg name "$target_name" '
-        .[] | select(.name == $name) | "\(.id):\(.name)"
-    ' 2>/dev/null | head -1 || echo "")
-
-    if [ -n "$matched" ]; then
-        echo "$matched"
-        return
-    fi
-
-    if [ -n "$stock_fallback" ]; then
-        matched=$(echo "$profiles_json" | jq -r --arg name "$stock_fallback" '
-            .[] | select(.name == $name) | "\(.id):\(.name)"
-        ' 2>/dev/null | head -1 || echo "")
-        if [ -n "$matched" ]; then
-            echo "$matched"
-            return
-        fi
-    fi
-
-    echo "1:Any"
+lookup_radarr_profile() {
+    lookup_arr_quality_profile "$1" 7878 radarr
 }
 
 lookup_sonarr_profile() {
-    local apikey="$1"
-    local profiles_json
-    profiles_json=$(api_get "8989" "/api/v3/qualityprofile" "$apikey")
-
-    if [ -z "$profiles_json" ]; then
-        echo "1:Any"
-        return
-    fi
-
-    # Default TV profile is assemblrr WEB-1080p (movies 4K choice does not change this).
-    local target_name="assemblrr WEB-1080p"
-    local stock_fallback="HD-1080p"
-
-    local matched
-    matched=$(echo "$profiles_json" | jq -r --arg name "$target_name" '
-        .[] | select(.name == $name) | "\(.id):\(.name)"
-    ' 2>/dev/null | head -1 || echo "")
-
-    if [ -n "$matched" ]; then
-        echo "$matched"
-        return
-    fi
-
-    matched=$(echo "$profiles_json" | jq -r '
-        .[] | select(.name | test("^assemblrr.*WEB.*1080"; "i")) | "\(.id):\(.name)"
-    ' 2>/dev/null | head -1 || echo "")
-    if [ -n "$matched" ]; then
-        echo "$matched"
-        return
-    fi
-
-    if [ -n "$stock_fallback" ]; then
-        matched=$(echo "$profiles_json" | jq -r --arg name "$stock_fallback" '
-            .[] | select(.name == $name) | "\(.id):\(.name)"
-        ' 2>/dev/null | head -1 || echo "")
-        if [ -n "$matched" ]; then
-            echo "$matched"
-            return
-        fi
-    fi
-
-    echo "1:Any"
+    lookup_arr_quality_profile "$1" 8989 sonarr
 }
 
 # --- Radarr configuration ---

@@ -20,6 +20,7 @@ assert_true "has lib/bazarr.sh" "echo \"\$list\" | grep -q 'lib/bazarr.sh|lib/ba
 assert_true "has lib/upgrade.sh" "echo \"\$list\" | grep -q 'lib/upgrade.sh|lib/upgrade.sh'"
 assert_true "has lib/services.sh" "echo \"\$list\" | grep -q 'lib/services.sh|lib/services.sh'"
 assert_true "has lib/config_edit.sh" "echo \"\$list\" | grep -q 'lib/config_edit.sh|lib/config_edit.sh'"
+assert_true "has lib/quality.sh" "echo \"\$list\" | grep -q 'lib/quality.sh|lib/quality.sh'"
 assert_true "has lib/ui.sh" "echo \"\$list\" | grep -q 'lib/ui.sh|lib/ui.sh'"
 assert_true "has compose/base.yaml" "echo \"\$list\" | grep -q 'compose/base.yaml|compose/base.yaml'"
 assert_true "has vpn-watchdog Dockerfile" "echo \"\$list\" | grep -q 'compose/sidecars/vpn-watchdog.Dockerfile'"
@@ -107,7 +108,10 @@ fi
 rm -rf "$tmp3"
 
 test_suite "upgrade uses --build --remove-orphans and non-interactive wiring"
-assert_true "upgrade up -d --build --remove-orphans" "grep -q 'up -d --build --remove-orphans' \"$REPO_ROOT/lib/upgrade.sh\""
+assert_true "upgrade rebuilds via compose_up_stack --build" \
+    "grep -q 'compose_up_stack .* --build' \"$REPO_ROOT/lib/upgrade.sh\""
+assert_true "compose_up_stack passes --remove-orphans" \
+    "grep -q 'up -d --remove-orphans' \"$REPO_ROOT/lib/compose.sh\""
 assert_true "upgrade wires with ASSEMBLRR_NONINTERACTIVE" "grep -q 'ASSEMBLRR_NONINTERACTIVE=1' \"$REPO_ROOT/lib/upgrade.sh\""
 assert_true "upgrade accepts --skip-stack" "grep -q -- '--skip-stack' \"$REPO_ROOT/lib/upgrade.sh\""
 assert_true "upgrade accepts --skip-wire" "grep -q -- '--skip-wire' \"$REPO_ROOT/lib/upgrade.sh\""

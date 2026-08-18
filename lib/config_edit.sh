@@ -18,7 +18,7 @@ _config_edit_catalog() {
 indexers|Prowlarr indexers
 providers|Bazarr subtitle providers
 language|Preferred subtitle language
-profile|Default movie quality (Radarr + Seerr)
+profile|Default quality (Radarr, Sonarr, Seerr)
 opensubtitles|OpenSubtitles.com credentials
 auth|Shared login for every service UI
 timezone|Container timezone
@@ -85,6 +85,19 @@ config_set_kv() {
     mv "$tmp" "$file"
 }
 
+# Remove KEY=... lines from a dotenv / runtime-config file.
+config_unset_kv() {
+    local file="$1"
+    local key="$2"
+    local tmp
+
+    [ -n "$file" ] && [ -n "$key" ] || return 1
+    [ -f "$file" ] || return 0
+    tmp=$(mktemp)
+    grep -v "^${key}=" "$file" > "$tmp" || true
+    mv "$tmp" "$file"
+}
+
 # --- load install + *arr libs (idempotent) ---
 
 _config_edit_loaded=0
@@ -145,6 +158,8 @@ _config_edit_load() {
     # shellcheck source=/dev/null
     [ -f "$lib/api.sh" ] && source "$lib/api.sh"
     # shellcheck source=/dev/null
+    [ -f "$lib/quality.sh" ] && source "$lib/quality.sh"
+    # shellcheck source=/dev/null
     [ -f "$lib/arr.sh" ] && source "$lib/arr.sh"
     # shellcheck source=/dev/null
     [ -f "$lib/jellyfin.sh" ] && source "$lib/jellyfin.sh"
@@ -181,7 +196,7 @@ _config_edit_runtime_file() {
 _config_edit_restart_stack() {
     log_info "Restarting stack to apply compose/env changes..."
     build_compose_args "$INSTALL_DIR" "${VPN_ENABLED:-n}"
-    if ! run_docker compose "${COMPOSE_ARGS[@]}" --profile "${MEDIA_SERVICE:-jellyfin}" up -d --remove-orphans; then
+    if ! compose_up_stack "${MEDIA_SERVICE:-jellyfin}"; then
         log_error "docker compose up failed"
     fi
     log_success "Stack restarted"
@@ -290,11 +305,11 @@ _config_edit_language() {
 
 _config_edit_profile() {
     _config_edit_load
-    configure_seerr_profile
-    config_set_kv "$(_config_edit_runtime_file)" "SEERR_DEFAULT_PROFILE" "${seerr_default_profile:-1}"
-    config_set_kv "$(_config_edit_runtime_file)" "SEERR_IS_4K" "${seerr_is_4k:-false}"
-    SEERR_DEFAULT_PROFILE="${seerr_default_profile:-1}"
-    SEERR_IS_4K="${seerr_is_4k:-false}"
+    configure_quality_profile
+    quality_sync_exports
+    config_set_kv "$(_config_edit_runtime_file)" "QUALITY_TIER" "$QUALITY_TIER"
+    config_set_kv "$(_config_edit_runtime_file)" "SEERR_IS_4K" "$SEERR_IS_4K"
+    config_unset_kv "$(_config_edit_runtime_file)" "SEERR_DEFAULT_PROFILE"
     if [ -n "${RADARR_API_KEY:-}" ]; then
         set_default_quality_profile "Radarr" "7878" "$RADARR_API_KEY" "lookup_radarr_profile" || true
     fi

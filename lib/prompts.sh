@@ -59,36 +59,39 @@ configure_media_service() {
     export media_service media_service_port
 }
 
-configure_seerr_profile() {
-    # Express mode: default to Ultra-HD (4K)
-    if [ "${SETUP_MODE:-}" = "express" ]; then
-        seerr_default_profile="5"
-        seerr_is_4k="true"
-        log_success "Quality profile: Ultra-HD (4K)"
-        export seerr_default_profile seerr_is_4k
-        return 0
-    fi
-
+configure_quality_profile() {
     ui_intro \
-        "What default quality profile should movies use (Radarr and Seerr)?" \
-        "Change the default movie quality on Radarr and Seerr."
-    echo "  1) Ultra-HD (4K - assemblrr UHD Bluray + WEB)"
-    echo "  2) 1080p (assemblrr HD Bluray + WEB)"
-    echo "  3) Any"
+        "What default quality should movies and TV use (Radarr, Sonarr, and Seerr)?" \
+        "Change the default quality on Radarr, Sonarr, and Seerr."
+    echo "  1) Ultra-HD (4K — movies: assemblrr UHD Bluray + WEB, TV: assemblrr WEB-2160p)"
+    echo "  2) 1080p (movies: assemblrr HD Bluray + WEB, TV: assemblrr WEB-1080p)"
+    echo "  3) Any (stock *arr profile — no quality preference)"
 
     while true; do
-        read -p "Choose your Seerr default profile [1]: " seerr_profile_choice
-        seerr_profile_choice=${seerr_profile_choice:-1}
+        read -p "Choose your default quality profile [1]: " quality_choice
+        quality_choice=${quality_choice:-1}
 
-        case "$seerr_profile_choice" in
-            1) seerr_default_profile="5"; seerr_is_4k="true"; break ;;
-            2) seerr_default_profile="4"; seerr_is_4k="false"; break ;;
-            3) seerr_default_profile="1"; seerr_is_4k="false"; break ;;
+        case "$quality_choice" in
+            1) QUALITY_TIER="uhd"; break ;;
+            2) QUALITY_TIER="hd"; break ;;
+            3) QUALITY_TIER="any"; break ;;
             *) log_warning "Invalid choice. Please choose 1, 2, or 3." ;;
         esac
     done
 
-    export seerr_default_profile seerr_is_4k
+    seerr_is_4k="false"
+    [ "$QUALITY_TIER" = "uhd" ] && seerr_is_4k="true"
+    export QUALITY_TIER seerr_is_4k
+    case "$QUALITY_TIER" in
+        uhd) log_success "Quality: Ultra-HD (4K) for movies and TV" ;;
+        hd)  log_success "Quality: 1080p for movies and TV" ;;
+        *)   log_success "Quality: Any" ;;
+    esac
+}
+
+# Older name — setup / config edit used this when the question was Seerr-only.
+configure_seerr_profile() {
+    configure_quality_profile
 }
 
 configure_subtitle_language() {

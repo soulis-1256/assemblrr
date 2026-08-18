@@ -55,6 +55,13 @@ assert_contains "$(cat "$envf")" "VPN_ENABLED=y" "updates VPN_ENABLED"
 env_tz=$(grep -c '^TZ=' "$envf" || true)
 assert_eq "1" "$env_tz" "only one TZ= line in .env"
 
+test_suite "config_unset_kv"
+config_set_kv "$cfg" "SEERR_DEFAULT_PROFILE" "5"
+assert_contains "$(cat "$cfg")" 'SEERR_DEFAULT_PROFILE="5"' "legacy key present"
+config_unset_kv "$cfg" "SEERR_DEFAULT_PROFILE"
+assert_not_contains "$(cat "$cfg")" "SEERR_DEFAULT_PROFILE=" "legacy key removed"
+assert_contains "$(cat "$cfg")" 'TZ="Europe/Athens"' "other keys kept"
+
 test_suite "config_edit_usage"
 usage=$(config_edit_usage)
 assert_contains "$usage" "config edit" "usage is just config edit"
@@ -66,6 +73,8 @@ auth_line=$(_config_edit_catalog | grep '^auth|' || true)
 assert_contains "$auth_line" "every service UI" "auth catalog says every UI"
 profile_line=$(_config_edit_catalog | grep '^profile|' || true)
 assert_contains "$profile_line" "Radarr" "profile catalog mentions Radarr"
+assert_contains "$profile_line" "Sonarr" "profile catalog mentions Sonarr"
+assert_contains "$profile_line" "Seerr" "profile catalog mentions Seerr"
 
 test_suite "vpn edit chmods only vpn secret files"
 vpn_fn=$(sed -n '/^_config_edit_vpn()/,/^}/p' "$REPO_ROOT/lib/config_edit.sh")

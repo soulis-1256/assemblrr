@@ -6,6 +6,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/../helpers.sh"
 # shellcheck disable=SC1091
+source "$REPO_ROOT/lib/core.sh"
+# shellcheck disable=SC1091
 source "$REPO_ROOT/lib/compose.sh"
 
 tmp=$(mktemp -d)
@@ -64,5 +66,15 @@ assert_contains "$(awk '/media-purge-watch:/,/^  [a-z]/{print}' "$REPO_ROOT/comp
     "pull_policy: build" "media-purge-watch builds locally"
 assert_contains "$(awk '/vpn-watchdog:/,/^  [a-z]/{print}' "$REPO_ROOT/compose/vpn.yaml")" \
     "pull_policy: build" "vpn-watchdog builds locally"
+
+test_suite "compose_up_stack hides build output"
+up=$(sed -n '/^compose_up_stack()/,/^}/p' "$REPO_ROOT/lib/compose.sh")
+assert_contains "$up" "wait_while" "captures compose up behind a spinner"
+assert_contains "$up" "Starting services" "friendly wait label"
+assert_contains "$up" "tail -n 40" "prints a log tail on failure"
+assert_true "setup uses compose_up_stack" "grep -q 'compose_up_stack' \"$REPO_ROOT/bin/setup.sh\""
+assert_true "upgrade uses compose_up_stack" "grep -q 'compose_up_stack' \"$REPO_ROOT/lib/upgrade.sh\""
+assert_not_contains "$(sed -n '/compose_up_stack/,/exit 1/p' "$REPO_ROOT/bin/setup.sh")" \
+    "run_docker compose" "setup no longer streams compose up"
 
 test_summary

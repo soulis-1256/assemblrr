@@ -44,5 +44,12 @@ assert_true "promotes assemblrr profile to id 1" "grep -q 'arr_promote_quality_p
 assert_true "writes qualityprofile/1" "grep -q '/api/v3/qualityprofile/1' \"$src\""
 assert_not_contains "$apply" '"all"' "does not remap the whole library"
 assert_not_contains "$apply" "any-only" "does not remap titles still on Any"
+assert_contains "$apply" "quality_wants_named_profile" "named-profile check uses the tier"
+
+test_suite "lookups share quality_profile_names"
+assert_contains "$(sed -n '/^lookup_radarr_profile()/,/^}/p' "$src")" \
+    "lookup_arr_quality_profile" "radarr lookup is the shared helper"
+assert_contains "$(sed -n '/^lookup_sonarr_profile()/,/^}/p' "$src")" \
+    "lookup_arr_quality_profile" "sonarr lookup is the shared helper"
 
 test_summary

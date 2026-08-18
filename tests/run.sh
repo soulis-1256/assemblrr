@@ -46,6 +46,7 @@ run_unit() {
         "$SCRIPT_DIR/unit/test_media_purge_match.sh" \
         "$SCRIPT_DIR/unit/test_media_purge_watch.sh" \
         "$SCRIPT_DIR/unit/test_prepare_install_dirs.sh" \
+        "$SCRIPT_DIR/unit/test_quality.sh" \
         "$SCRIPT_DIR/unit/test_qbit_prefs.sh" \
         "$SCRIPT_DIR/unit/test_seerr_gateway.sh" \
         "$SCRIPT_DIR/unit/test_ui.sh" \
