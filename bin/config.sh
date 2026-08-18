@@ -113,7 +113,6 @@ source "$_lib_dir/bazarr.sh"
 
 echo
 _cfg_log_info "Wiring ${APP_DISPLAY_NAME} services..."
-echo
 
 # API keys from config.xml (services write these on first start)
 RADARR_API_KEY=""

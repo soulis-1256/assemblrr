@@ -31,9 +31,8 @@ ui_set_mode() {
     esac
 }
 
-# Two-line intro: setup copy, then edit copy.
+# One blank line, then setup or edit copy.
 ui_intro() {
-    echo
     echo
     if ui_is_edit; then
         log_info "$2"

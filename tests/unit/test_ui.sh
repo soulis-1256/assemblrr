@@ -26,6 +26,15 @@ assert_eq "setup" "$(ui_mode)" "back to setup"
 ui_set_mode bogus
 assert_eq "setup" "$(ui_mode)" "unknown mode falls back to setup"
 
+test_suite "ui_intro spacing"
+ui_set_mode setup
+intro=$(ui_intro "Pick indexers." "Change indexers.")
+assert_eq $'\nPick indexers.' "$intro" "one blank line before setup copy"
+ui_set_mode edit
+intro=$(ui_intro "Pick indexers." "Change indexers.")
+assert_eq $'\nChange indexers.' "$intro" "one blank line before edit copy"
+ui_set_mode setup
+
 test_suite "ui_intro / ui_picker_done copy"
 ui_set_mode setup
 FZF_SELECT_STATUS=cancelled

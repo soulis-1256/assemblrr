@@ -490,19 +490,19 @@ uninstall_app() {
 
     log_success "${APP_DISPLAY_NAME} uninstalled."
     if [ "$removed_config" = true ]; then
-        echo "  Config: $INSTALL_DIR"
+        echo "  Config removed: $INSTALL_DIR"
     else
         echo "  Config kept: $INSTALL_DIR"
     fi
     if [ "$removed_media" = true ]; then
-        echo "  Media:  $MEDIA_DIRECTORY"
+        echo "  Media removed: $MEDIA_DIRECTORY"
     else
         echo "  Media kept: $MEDIA_DIRECTORY"
     fi
     local p
     if [ "${#extra_removed[@]}" -gt 0 ]; then
         for p in "${extra_removed[@]}"; do
-            echo "  Leftover: $p"
+            echo "  Leftover removed: $p"
         done
     fi
     if [ "${#extra_kept[@]}" -gt 0 ]; then

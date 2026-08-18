@@ -38,7 +38,7 @@ read_api_key() {
             local key
             key=$(sed -n 's/.*<ApiKey>\(.*\)<\/ApiKey>.*/\1/p' "$config_file" 2>/dev/null | head -1)
             if [ -n "$key" ]; then
-                echo >&2
+                [ "$wait_time" -gt 0 ] && echo >&2
                 echo "$key"
                 return 0
             fi
@@ -134,7 +134,7 @@ wait_for_api() {
 
     while [ $wait_time -lt $max_wait ]; do
         if _api_ready "$port" "$apikey" "$api_path"; then
-            echo >&2
+            [ "$wait_time" -gt 0 ] && echo >&2
             return 0
         fi
         wait_inline "Waiting for $name API" "$wait_time"

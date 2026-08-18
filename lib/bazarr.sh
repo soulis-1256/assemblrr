@@ -66,7 +66,7 @@ read_bazarr_api_key() {
         if cfg=$(_bazarr_config_file 2>/dev/null); then
             key=$(_bazarr_extract_apikey "$cfg")
             if [ -n "$key" ] && [ "$key" != "null" ]; then
-                echo >&2
+                [ "$wait_time" -gt 0 ] && echo >&2
                 echo "$key"
                 return 0
             fi
@@ -90,7 +90,7 @@ wait_for_bazarr() {
         code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 3 \
             "http://${API_HOST}:${BAZARR_PORT}/api/system/status?apikey=${apikey}" 2>/dev/null || echo "000")
         if [ "$code" = "200" ]; then
-            echo >&2
+            [ "$wait_time" -gt 0 ] && echo >&2
             return 0
         fi
         wait_inline "Waiting for Bazarr API" "$wait_time"
