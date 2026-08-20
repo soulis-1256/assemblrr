@@ -10,10 +10,10 @@ radarr:
     api_key: ${RADARR_API_KEY}
     # No quality_definition → no min/max size filters from Recyclarr.
     include:
-      - config: radarr-hd.yml
-      - config: radarr-uhd.yml
-      - config: radarr-web-1080.yml
-      - config: radarr-web-2160.yml
+      - config: radarr-1080p-bluray.yml
+      - config: radarr-4k-bluray.yml
+      - config: radarr-1080p-web.yml
+      - config: radarr-4k-web.yml
       - config: radarr-soft-cfs.yml
 
 sonarr:
@@ -21,6 +21,6 @@ sonarr:
     base_url: http://sonarr:8989
     api_key: ${SONARR_API_KEY}
     include:
-      - config: sonarr-web-1080.yml
-      - config: sonarr-web-2160.yml
+      - config: sonarr-1080p-web.yml
+      - config: sonarr-4k-web.yml
       - config: sonarr-soft-cfs.yml

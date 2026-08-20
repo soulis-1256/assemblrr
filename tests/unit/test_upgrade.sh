@@ -21,8 +21,8 @@ assert_true "has lib/upgrade.sh" "echo \"\$list\" | grep -q 'lib/upgrade.sh|lib/
 assert_true "has lib/services.sh" "echo \"\$list\" | grep -q 'lib/services.sh|lib/services.sh'"
 assert_true "has lib/config_edit.sh" "echo \"\$list\" | grep -q 'lib/config_edit.sh|lib/config_edit.sh'"
 assert_true "has lib/quality.sh" "echo \"\$list\" | grep -q 'lib/quality.sh|lib/quality.sh'"
-assert_true "has radarr WEB-1080p pack" "echo \"\$list\" | grep -q 'radarr-web-1080.yml'"
-assert_true "has radarr WEB-2160p pack" "echo \"\$list\" | grep -q 'radarr-web-2160.yml'"
+assert_true "has radarr 1080p WEB pack" "echo \"\$list\" | grep -q 'radarr-1080p-web.yml'"
+assert_true "has radarr 4K WEB pack" "echo \"\$list\" | grep -q 'radarr-4k-web.yml'"
 assert_true "has lib/ui.sh" "echo \"\$list\" | grep -q 'lib/ui.sh|lib/ui.sh'"
 assert_true "has compose/base.yaml" "echo \"\$list\" | grep -q 'compose/base.yaml|compose/base.yaml'"
 assert_true "has vpn-watchdog Dockerfile" "echo \"\$list\" | grep -q 'compose/sidecars/vpn-watchdog.Dockerfile'"
@@ -107,6 +107,31 @@ if migration_should_skip "$tmp3"; then
 else
     _TEST_FAILURES=$((_TEST_FAILURES + 1))
     echo "  FAIL: expected skip for custom.yaml portainer"
+fi
+
+test_suite "migration 003 cleans up legacy recyclarr include files"
+tmp4=$(mktemp -d)
+mkdir -p "$tmp4/templates/recyclarr/includes" "$tmp4/config/recyclarr/includes"
+touch "$tmp4/templates/recyclarr/includes/radarr-hd.yml" "$tmp4/config/recyclarr/includes/sonarr-web-2160.yml"
+unset -f migration_should_skip migration_apply 2>/dev/null || true
+# shellcheck source=/dev/null
+source "$REPO_ROOT/migrations/003_standardize_quality_profiles.sh"
+if migration_should_skip "$tmp4"; then
+    _TEST_FAILURES=$((_TEST_FAILURES + 1))
+    echo "  FAIL: should not skip when legacy files present"
+else
+    _TEST_PASSES=$((_TEST_PASSES + 1))
+    echo "  PASS: detects legacy recyclarr include files"
+fi
+migration_apply "$tmp4"
+assert_true "removes legacy template include" "[ ! -f '$tmp4/templates/recyclarr/includes/radarr-hd.yml' ]"
+assert_true "removes legacy config include" "[ ! -f '$tmp4/config/recyclarr/includes/sonarr-web-2160.yml' ]"
+if migration_should_skip "$tmp4"; then
+    _TEST_PASSES=$((_TEST_PASSES + 1))
+    echo "  PASS: skips after cleanup"
+else
+    _TEST_FAILURES=$((_TEST_FAILURES + 1))
+    echo "  FAIL: should skip after files removed"
 fi
 rm -rf "$tmp3"
 

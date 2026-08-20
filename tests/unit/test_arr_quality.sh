@@ -22,10 +22,10 @@ assert_eq '[2]' "$(echo "$items" | arr_quality_ids_needing_update 1 from:6)" "fr
 assert_eq '[]' "$(echo '[]' | arr_quality_ids_needing_update 6 all)" "empty library"
 
 test_suite "arr_quality_profile_clone_json"
-src='{"id":6,"name":"assemblrr WEB-1080p","upgradeAllowed":true,"cutoff":8}'
-cloned=$(echo "$src" | arr_quality_profile_clone_json 1 "assemblrr WEB-1080p")
+src='{"id":6,"name":"assemblrr 1080p WEB","upgradeAllowed":true,"cutoff":8}'
+cloned=$(echo "$src" | arr_quality_profile_clone_json 1 "assemblrr 1080p WEB")
 assert_eq "1" "$(echo "$cloned" | jq -r '.id')" "clone uses id 1"
-assert_eq "assemblrr WEB-1080p" "$(echo "$cloned" | jq -r '.name')" "keeps name"
+assert_eq "assemblrr 1080p WEB" "$(echo "$cloned" | jq -r '.name')" "keeps name"
 assert_eq "true" "$(echo "$cloned" | jq -r '.upgradeAllowed')" "keeps body"
 
 test_suite "arr_rootfolder_with_default_profile"

@@ -1,21 +1,23 @@
-# Include: Radarr 4K WEB-only (UHD Bluray + WEB trash_id, WEB cutoff)
+# Include: Radarr 1080p WEB-only (HD Bluray + WEB trash_id, WEB cutoff)
 
 quality_profiles:
-  - trash_id: 64fb5f9858489bdac2af690e27c8f42f  # UHD Bluray + WEB
-    name: assemblrr WEB-2160p
+  - trash_id: d1d67249d3890e49bc12e275d989a7e9  # HD Bluray + WEB
+    name: assemblrr 1080p WEB
     reset_unmatched_scores:
       enabled: true
     min_format_score: -1000
     upgrade:
       allowed: true
-      until_quality: WEB 2160p
+      until_quality: WEB 1080p
       until_score: 10000
     qualities:
-      - name: WEB 2160p
+      - name: WEB 1080p
         qualities:
-          - WEBRip-2160p
-          - WEBDL-2160p
-      - name: Bluray-2160p
+          - WEBRip-1080p
+          - WEBDL-1080p
+      - name: Bluray-1080p
+        enabled: false
+      - name: Bluray-720p
         enabled: false
 
 custom_formats:
@@ -26,5 +28,5 @@ custom_formats:
       - 839bea857ed2c0a8e084f3cbdbd65ecb  # x265 (no HDR/DV)
       - b8cd450cbfa689c0259a01d9e29ba3d6  # 3D
     assign_scores_to:
-      - name: assemblrr WEB-2160p
+      - name: assemblrr 1080p WEB
         score: 0

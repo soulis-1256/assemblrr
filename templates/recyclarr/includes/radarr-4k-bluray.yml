@@ -2,7 +2,7 @@
 
 quality_profiles:
   - trash_id: 64fb5f9858489bdac2af690e27c8f42f  # UHD Bluray + WEB
-    name: assemblrr UHD Bluray + WEB
+    name: assemblrr 4K Bluray + WEB
     reset_unmatched_scores:
       enabled: true
     min_format_score: -1000

@@ -57,11 +57,7 @@ card is `DELETE /api/v1/media/:id/file`. That always removes the **entire
 series** from Sonarr (`deleteFiles: true`). assemblrr does **not** intercept
 that path: it means “this title”.
 
-A recycle bin at `/data/media/.recycle` (Sonarr/Radarr, 7-day cleanup) makes a
-mistaken title delete recoverable for library files. The series-delete hook
-then removes the matching qB torrent **and** leftover folders under
-`torrents/tv` / `torrents/movies` (Completed Download Handling often drops the
-qB row first, which used to leave the download directory behind).
+When a title is deleted, library files are deleted immediately to instantly reclaim disk space. The series-delete hook then removes the matching qB torrent **and** leftover folders under `torrents/tv` / `torrents/movies` (Completed Download Handling often drops the qB row first, which used to leave the download directory behind).
 
 ### Purge safety (qB)
 

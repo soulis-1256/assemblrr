@@ -8,7 +8,7 @@ custom_formats:
       - 9b64dff695c2115facf1b6ea59c9bd07  # x265 (no HDR/DV)
       - c9eafd50846d299b862ca9bb6ea91950  # x265
     assign_scores_to:
-      - name: assemblrr WEB-1080p
+      - name: assemblrr 1080p WEB
         score: 0
-      - name: assemblrr WEB-2160p
+      - name: assemblrr 4K WEB
         score: 0

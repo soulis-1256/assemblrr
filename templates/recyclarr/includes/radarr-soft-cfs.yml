@@ -8,7 +8,7 @@ custom_formats:
       - 839bea857ed2c0a8e084f3cbdbd65ecb  # x265 (no HDR/DV)
       - b8cd450cbfa689c0259a01d9e29ba3d6  # 3D
     assign_scores_to:
-      - name: assemblrr HD Bluray + WEB
+      - name: assemblrr 1080p Bluray + WEB
         score: 0
-      - name: assemblrr UHD Bluray + WEB
+      - name: assemblrr 4K Bluray + WEB
         score: 0

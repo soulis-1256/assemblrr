@@ -428,19 +428,19 @@ configure_arr_service() {
         critical_errors=$((critical_errors + 1))
     fi
 
-    # 2c. Enable hardlinks in Media Management
+    # 2c. Enable hardlinks in Media Management (recycle bin disabled for instant space recovery)
     local mediamgmt
     mediamgmt=$(api_get "$port" "/api/v3/config/mediamanagement" "$apikey")
     if [ -n "$mediamgmt" ]; then
         local mgmt_payload
         mgmt_payload=$(echo "$mediamgmt" | jq --arg uf "$unmonitor_field" \
             '.copyUsingHardlinks = true | .enableMediaManagement = true | .[$uf] = true
-             | .recycleBin = "/data/media/.recycle" | .recycleBinCleanupDays = 7' 2>/dev/null || echo "")
+             | .recycleBin = "" | .recycleBinCleanupDays = 0' 2>/dev/null || echo "")
         if [ -n "$mgmt_payload" ]; then
             local mgmt_result
             mgmt_result=$(api_put "$port" "/api/v3/config/mediamanagement" "$apikey" "$mgmt_payload")
             if jq_json_has_key "$mgmt_result" "id"; then
-                log_step "${service_name}: enabled hardlinks + recycle bin (/data/media/.recycle)"
+                log_step "${service_name}: enabled hardlinks (recycle bin disabled)"
             else
                 log_step_fail "${service_name}: failed to enable hardlinks"
             fi
@@ -693,9 +693,8 @@ arr_promote_quality_profile() {
     # makes Recyclarr treat that as a rename and the other profile vanishes.
     local id1_name
     id1_name=$(api_get "$port" "/api/v3/qualityprofile/1" "$apikey" | jq -r '.name // empty')
-    if [ -n "$id1_name" ] && [ "$id1_name" != "Any" ] && [ "$id1_name" != "$src_name" ]; then
-        log_step "${service_name}: Add New slot stays ${id1_name}; default is ${src_name} (id ${src_id})"
-        return 1
+    if [ "$id1_name" = "$src_name" ]; then
+        return 0
     fi
 
     local src dest tmp_name tmp_payload code
@@ -733,6 +732,31 @@ arr_promote_quality_profile() {
     return 0
 }
 
+# Remove superseded assemblrr profile names left over from previous versions.
+clean_legacy_arr_quality_profiles() {
+    local service_name="$1"
+    local port="$2"
+    local apikey="$3"
+
+    local profiles
+    profiles=$(api_get "$port" "/api/v3/qualityprofile" "$apikey")
+    [ -n "$profiles" ] || return 0
+
+    local legacy_names=(
+        "assemblrr HD Bluray + WEB"
+        "assemblrr UHD Bluray + WEB"
+        "assemblrr WEB-1080p"
+        "assemblrr WEB-2160p"
+    )
+    for lname in "${legacy_names[@]}"; do
+        local lid
+        lid=$(echo "$profiles" | jq -r --arg n "$lname" '.[] | select(.name == $n) | .id // empty' 2>/dev/null || true)
+        if [ -n "$lid" ] && [ "$lid" != "1" ]; then
+            api_delete "$port" "/api/v3/qualityprofile/${lid}" "$apikey" >/dev/null 2>&1 || true
+        fi
+    done
+}
+
 # Apply the install's chosen quality profile as the *arr Add New default.
 # Existing titles are left alone. Seerr uses the same lookup.
 set_default_quality_profile() {
@@ -759,6 +783,8 @@ set_default_quality_profile() {
     if arr_promote_quality_profile "$service_name" "$port" "$apikey" "$profile_id" "$profile_name"; then
         profile_id="1"
     fi
+
+    clean_legacy_arr_quality_profiles "$service_name" "$port" "$apikey"
 
     if [ -n "${INSTALL_DIR:-}" ]; then
         mkdir -p "$INSTALL_DIR/config"

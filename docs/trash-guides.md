@@ -6,17 +6,17 @@ assemblrr uses [Recyclarr](https://recyclarr.dev/) to sync [TRaSH Guides](https:
 
 **Both resolutions and both movie sources are always installed** as assemblrr-named profiles:
 
-- Movies: **assemblrr HD Bluray + WEB**, **assemblrr UHD Bluray + WEB**, **assemblrr WEB-1080p**, **assemblrr WEB-2160p**
-- TV: **assemblrr WEB-1080p**, **assemblrr WEB-2160p**
+- Movies: **assemblrr 1080p Bluray + WEB**, **assemblrr 4K Bluray + WEB**, **assemblrr 1080p WEB**, **assemblrr 4K WEB**
+- TV: **assemblrr 1080p WEB**, **assemblrr 4K WEB**
 
-TRaSH has no first-class WEB-only Radarr profile. Movie WEB packs reuse the HD/UHD Bluray + WEB trash IDs as Recyclarr variants, with qualities overridden so Blu-ray is disabled and cutoff is WEB. All four stay in the Radarr/Seerr dropdown; setup only picks the default.
+TRaSH has no first-class WEB-only Radarr profile. Movie WEB packs reuse the 1080p/4K Bluray + WEB trash IDs as Recyclarr variants, with qualities overridden so Blu-ray is disabled and cutoff is WEB. All four stay in the Radarr/Seerr dropdown; setup only picks the default.
 
 Setup and `config edit` ask once for resolution, then (unless you chose Any) for movie source. That pair is the default for **Radarr, Sonarr, and Seerr**:
 
-- **Ultra-HD (4K) + Bluray + WEB:** movies → UHD Bluray + WEB, TV → WEB-2160p
-- **Ultra-HD (4K) + WEB:** movies → WEB-2160p, TV → WEB-2160p
-- **1080p + Bluray + WEB:** movies → HD Bluray + WEB, TV → WEB-1080p
-- **1080p + WEB:** movies → WEB-1080p, TV → WEB-1080p
+- **4K + Bluray + WEB:** movies → 4K Bluray + WEB, TV → 4K WEB
+- **4K + WEB:** movies → 4K WEB, TV → 4K WEB
+- **1080p + Bluray + WEB:** movies → 1080p Bluray + WEB, TV → 1080p WEB
+- **1080p + WEB:** movies → 1080p WEB, TV → 1080p WEB
 - **Any:** stock *arr Any (movie source is ignored)
 
 Missing `QUALITY_SOURCE` on an older install means **bluray** (the previous default). TV is always WEB; TRaSH’s English Sonarr defaults are WEB-only.

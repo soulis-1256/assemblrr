@@ -58,20 +58,20 @@ quality_profile_names() {
     case "$(quality_tier)" in
         uhd)
             if [ "$kind" = "sonarr" ]; then
-                printf '%s\n' "assemblrr WEB-2160p|Ultra-HD"
+                printf '%s\n' "assemblrr 4K WEB|Ultra-HD"
             elif [ "$(quality_source)" = "web" ]; then
-                printf '%s\n' "assemblrr WEB-2160p|Ultra-HD"
+                printf '%s\n' "assemblrr 4K WEB|Ultra-HD"
             else
-                printf '%s\n' "assemblrr UHD Bluray + WEB|Ultra-HD"
+                printf '%s\n' "assemblrr 4K Bluray + WEB|Ultra-HD"
             fi
             ;;
         hd)
             if [ "$kind" = "sonarr" ]; then
-                printf '%s\n' "assemblrr WEB-1080p|HD-1080p"
+                printf '%s\n' "assemblrr 1080p WEB|HD-1080p"
             elif [ "$(quality_source)" = "web" ]; then
-                printf '%s\n' "assemblrr WEB-1080p|HD-1080p"
+                printf '%s\n' "assemblrr 1080p WEB|HD-1080p"
             else
-                printf '%s\n' "assemblrr HD Bluray + WEB|HD-1080p"
+                printf '%s\n' "assemblrr 1080p Bluray + WEB|HD-1080p"
             fi
             ;;
         *)

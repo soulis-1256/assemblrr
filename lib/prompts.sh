@@ -63,8 +63,8 @@ configure_quality_profile() {
     ui_intro \
         "What default quality should movies and TV use (Radarr, Sonarr, and Seerr)?" \
         "Change the default quality on Radarr, Sonarr, and Seerr."
-    echo "  1) Ultra-HD (4K — TV: assemblrr WEB-2160p)"
-    echo "  2) 1080p (TV: assemblrr WEB-1080p)"
+    echo "  1) 4K (Ultra-HD — TV: assemblrr 4K WEB)"
+    echo "  2) 1080p (TV: assemblrr 1080p WEB)"
     echo "  3) Any (stock *arr profile — no quality preference)"
 
     while true; do
@@ -103,16 +103,16 @@ configure_quality_profile() {
     case "$QUALITY_TIER" in
         uhd)
             if [ "$QUALITY_SOURCE" = "web" ]; then
-                log_success "Quality: Ultra-HD (4K) WEB for movies and TV"
+                log_success "Quality: 4K WEB for movies and TV"
             else
-                log_success "Quality: Ultra-HD (4K) (movies: Bluray + WEB, TV: WEB)"
+                log_success "Quality: 4K (movies: 4K Bluray + WEB, TV: 4K WEB)"
             fi
             ;;
         hd)
             if [ "$QUALITY_SOURCE" = "web" ]; then
                 log_success "Quality: 1080p WEB for movies and TV"
             else
-                log_success "Quality: 1080p (movies: Bluray + WEB, TV: WEB)"
+                log_success "Quality: 1080p (movies: 1080p Bluray + WEB, TV: 1080p WEB)"
             fi
             ;;
         *)

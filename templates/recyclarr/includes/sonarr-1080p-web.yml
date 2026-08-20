@@ -2,7 +2,7 @@
 
 quality_profiles:
   - trash_id: 72dae194fc92bf828f32cde7744e51a1  # WEB-1080p
-    name: assemblrr WEB-1080p
+    name: assemblrr 1080p WEB
     reset_unmatched_scores:
       enabled: true
     min_format_score: -1000
