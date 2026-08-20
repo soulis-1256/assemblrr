@@ -21,6 +21,8 @@ assert_true "has lib/upgrade.sh" "echo \"\$list\" | grep -q 'lib/upgrade.sh|lib/
 assert_true "has lib/services.sh" "echo \"\$list\" | grep -q 'lib/services.sh|lib/services.sh'"
 assert_true "has lib/config_edit.sh" "echo \"\$list\" | grep -q 'lib/config_edit.sh|lib/config_edit.sh'"
 assert_true "has lib/quality.sh" "echo \"\$list\" | grep -q 'lib/quality.sh|lib/quality.sh'"
+assert_true "has radarr WEB-1080p pack" "echo \"\$list\" | grep -q 'radarr-web-1080.yml'"
+assert_true "has radarr WEB-2160p pack" "echo \"\$list\" | grep -q 'radarr-web-2160.yml'"
 assert_true "has lib/ui.sh" "echo \"\$list\" | grep -q 'lib/ui.sh|lib/ui.sh'"
 assert_true "has compose/base.yaml" "echo \"\$list\" | grep -q 'compose/base.yaml|compose/base.yaml'"
 assert_true "has vpn-watchdog Dockerfile" "echo \"\$list\" | grep -q 'compose/sidecars/vpn-watchdog.Dockerfile'"
@@ -34,8 +36,9 @@ assert_eq "el" "$(_bazarr_lang_code2 gre)" "gre → el"
 assert_eq "en" "$(_bazarr_lang_code2 '')" "empty → en"
 
 test_suite "migration 001 skip when custom.yaml has bazarr"
+tmp="" tmp2=""
 tmp=$(mktemp -d)
-trap 'rm -rf "$tmp" "$tmp2"' EXIT
+trap 'rm -rf "${tmp:-}" "${tmp2:-}"' EXIT
 mkdir -p "$tmp/compose"
 cat >"$tmp/compose/custom.yaml" <<'EOF'
 services:

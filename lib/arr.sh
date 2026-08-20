@@ -689,6 +689,15 @@ arr_promote_quality_profile() {
         return 0
     fi
 
+    # Recyclarr variants share a trash_id. Overwriting id 1 with a sibling
+    # makes Recyclarr treat that as a rename and the other profile vanishes.
+    local id1_name
+    id1_name=$(api_get "$port" "/api/v3/qualityprofile/1" "$apikey" | jq -r '.name // empty')
+    if [ -n "$id1_name" ] && [ "$id1_name" != "Any" ] && [ "$id1_name" != "$src_name" ]; then
+        log_step "${service_name}: Add New slot stays ${id1_name}; default is ${src_name} (id ${src_id})"
+        return 1
+    fi
+
     local src dest tmp_name tmp_payload code
     src=$(api_get "$port" "/api/v3/qualityprofile/${src_id}" "$apikey")
     if [ -z "$src" ] || ! echo "$src" | jq -e '.id' >/dev/null 2>&1; then

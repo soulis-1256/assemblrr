@@ -38,6 +38,8 @@ compose/sidecars/media-purge-watch.Dockerfile|compose/sidecars/media-purge-watch
 templates/recyclarr/recyclarr.yml|templates/recyclarr/recyclarr.yml
 templates/recyclarr/includes/radarr-hd.yml|templates/recyclarr/includes/radarr-hd.yml
 templates/recyclarr/includes/radarr-uhd.yml|templates/recyclarr/includes/radarr-uhd.yml
+templates/recyclarr/includes/radarr-web-1080.yml|templates/recyclarr/includes/radarr-web-1080.yml
+templates/recyclarr/includes/radarr-web-2160.yml|templates/recyclarr/includes/radarr-web-2160.yml
 templates/recyclarr/includes/radarr-soft-cfs.yml|templates/recyclarr/includes/radarr-soft-cfs.yml
 templates/recyclarr/includes/sonarr-web-1080.yml|templates/recyclarr/includes/sonarr-web-1080.yml
 templates/recyclarr/includes/sonarr-web-2160.yml|templates/recyclarr/includes/sonarr-web-2160.yml

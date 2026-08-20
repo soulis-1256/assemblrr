@@ -769,7 +769,11 @@ show_config() {
     echo "  VPN type:           ${VPN_TYPE:-openvpn}"
     echo "  Timezone:           ${TZ:-UTC}"
     if type quality_tier >/dev/null 2>&1; then
-        echo "  Quality:            $(quality_tier)"
+        if [ "$(quality_tier)" = "any" ]; then
+            echo "  Quality:            any"
+        else
+            echo "  Quality:            $(quality_tier) / $(quality_source)"
+        fi
     fi
     if [ "${VPN_ENABLED:-n}" = "y" ]; then
         echo "  VPN secrets:        $INSTALL_DIR/secrets/"

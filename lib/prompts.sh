@@ -63,8 +63,8 @@ configure_quality_profile() {
     ui_intro \
         "What default quality should movies and TV use (Radarr, Sonarr, and Seerr)?" \
         "Change the default quality on Radarr, Sonarr, and Seerr."
-    echo "  1) Ultra-HD (4K — movies: assemblrr UHD Bluray + WEB, TV: assemblrr WEB-2160p)"
-    echo "  2) 1080p (movies: assemblrr HD Bluray + WEB, TV: assemblrr WEB-1080p)"
+    echo "  1) Ultra-HD (4K — TV: assemblrr WEB-2160p)"
+    echo "  2) 1080p (TV: assemblrr WEB-1080p)"
     echo "  3) Any (stock *arr profile — no quality preference)"
 
     while true; do
@@ -79,13 +79,45 @@ configure_quality_profile() {
         esac
     done
 
+    QUALITY_SOURCE="bluray"
+    if [ "$QUALITY_TIER" != "any" ]; then
+        echo
+        echo "  Movies: WEB only, or allow Blu-ray upgrades?"
+        echo "  (TV stays WEB. TRaSH has no English Blu-ray TV default.)"
+        echo "  1) WEB only (smaller files; no Blu-ray upgrades)"
+        echo "  2) Bluray + WEB (upgrades WEB to a Blu-ray encode when one exists)"
+        while true; do
+            read -p "Choose movie source [2]: " source_choice
+            source_choice=${source_choice:-2}
+            case "$source_choice" in
+                1) QUALITY_SOURCE="web"; break ;;
+                2) QUALITY_SOURCE="bluray"; break ;;
+                *) log_warning "Invalid choice. Please choose 1 or 2." ;;
+            esac
+        done
+    fi
+
     seerr_is_4k="false"
     [ "$QUALITY_TIER" = "uhd" ] && seerr_is_4k="true"
-    export QUALITY_TIER seerr_is_4k
+    export QUALITY_TIER QUALITY_SOURCE seerr_is_4k
     case "$QUALITY_TIER" in
-        uhd) log_success "Quality: Ultra-HD (4K) for movies and TV" ;;
-        hd)  log_success "Quality: 1080p for movies and TV" ;;
-        *)   log_success "Quality: Any" ;;
+        uhd)
+            if [ "$QUALITY_SOURCE" = "web" ]; then
+                log_success "Quality: Ultra-HD (4K) WEB for movies and TV"
+            else
+                log_success "Quality: Ultra-HD (4K) (movies: Bluray + WEB, TV: WEB)"
+            fi
+            ;;
+        hd)
+            if [ "$QUALITY_SOURCE" = "web" ]; then
+                log_success "Quality: 1080p WEB for movies and TV"
+            else
+                log_success "Quality: 1080p (movies: Bluray + WEB, TV: WEB)"
+            fi
+            ;;
+        *)
+            log_success "Quality: Any"
+            ;;
     esac
 }
 

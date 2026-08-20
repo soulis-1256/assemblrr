@@ -76,6 +76,11 @@ assert_contains "$profile_line" "Radarr" "profile catalog mentions Radarr"
 assert_contains "$profile_line" "Sonarr" "profile catalog mentions Sonarr"
 assert_contains "$profile_line" "Seerr" "profile catalog mentions Seerr"
 
+test_suite "profile edit persists QUALITY_SOURCE and resyncs Recyclarr"
+profile_fn=$(sed -n '/^_config_edit_profile()/,/^}/p' "$REPO_ROOT/lib/config_edit.sh")
+assert_contains "$profile_fn" 'QUALITY_SOURCE' "writes QUALITY_SOURCE"
+assert_contains "$profile_fn" "configure_recyclarr" "resyncs Recyclarr so WEB packs exist"
+
 test_suite "vpn edit chmods only vpn secret files"
 vpn_fn=$(sed -n '/^_config_edit_vpn()/,/^}/p' "$REPO_ROOT/lib/config_edit.sh")
 assert_not_contains "$vpn_fn" 'chmod 600 "$secrets_dir"/*.txt' "vpn edit does not chmod every secret"

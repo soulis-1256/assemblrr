@@ -1,7 +1,9 @@
 #!/bin/bash
 # One quality choice for Radarr, Sonarr, and Seerr.
 # Canonical: QUALITY_TIER=uhd|hd|any
+#            QUALITY_SOURCE=web|bluray  (movies only; TV is always WEB)
 # Older installs only have SEERR_IS_4K / SEERR_DEFAULT_PROFILE (stock *arr ids).
+# Missing QUALITY_SOURCE means bluray (legacy HD/UHD Bluray + WEB defaults).
 
 if [ -n "${_ASSEMBLRR_QUALITY_SOURCED:-}" ]; then
     return 0
@@ -26,6 +28,17 @@ quality_tier() {
     fi
 }
 
+# Movies: web = WEB-only (no Blu-ray upgrades). bluray = TRaSH Bluray + WEB.
+quality_source() {
+    case "${QUALITY_SOURCE:-}" in
+        web|bluray)
+            echo "$QUALITY_SOURCE"
+            return 0
+            ;;
+    esac
+    echo bluray
+}
+
 quality_seerr_is_4k() {
     if [ "$(quality_tier)" = "uhd" ]; then
         echo true
@@ -46,12 +59,16 @@ quality_profile_names() {
         uhd)
             if [ "$kind" = "sonarr" ]; then
                 printf '%s\n' "assemblrr WEB-2160p|Ultra-HD"
+            elif [ "$(quality_source)" = "web" ]; then
+                printf '%s\n' "assemblrr WEB-2160p|Ultra-HD"
             else
                 printf '%s\n' "assemblrr UHD Bluray + WEB|Ultra-HD"
             fi
             ;;
         hd)
             if [ "$kind" = "sonarr" ]; then
+                printf '%s\n' "assemblrr WEB-1080p|HD-1080p"
+            elif [ "$(quality_source)" = "web" ]; then
                 printf '%s\n' "assemblrr WEB-1080p|HD-1080p"
             else
                 printf '%s\n' "assemblrr HD Bluray + WEB|HD-1080p"
@@ -65,8 +82,9 @@ quality_profile_names() {
 
 quality_sync_exports() {
     QUALITY_TIER="$(quality_tier)"
+    QUALITY_SOURCE="$(quality_source)"
     SEERR_IS_4K="$(quality_seerr_is_4k)"
-    export QUALITY_TIER SEERR_IS_4K
+    export QUALITY_TIER QUALITY_SOURCE SEERR_IS_4K
 }
 
 # stdin: JSON array of {id,name}

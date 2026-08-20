@@ -6,7 +6,7 @@ Stock Seerr DELETE /api/v1/request/:id only removes the request row. assemblrr
 intercepts that call (when enabled):
 
   * Movies (and TV requests that cover every remaining season): drain the
-    *arr download queue (removeFromClient) first, then DELETE
+    *arr download queue (removeFromClient) for this title first, then DELETE
     /api/v1/media/:id/file → Radarr/Sonarr deleteFiles + purge hooks.
   * TV requests for a subset of seasons: drain only those seasons' queue
     items, then delete those seasons' episode files via Sonarr and unmonitor
@@ -440,10 +440,26 @@ def drain_arr_queue(
     considered = 0
     req = _radarr_request if kind == "movie" else _sonarr_request
     for row in rows:
-        if wanted is not None:
-            sn = queue_record_season(row)
-            if sn is None or sn not in wanted:
-                continue
+        if kind == "movie":
+            mid = row.get("movieId")
+            if mid is not None:
+                try:
+                    if int(mid) != int(arr_id):
+                        continue
+                except (TypeError, ValueError):
+                    continue
+        elif kind == "series":
+            sid = row.get("seriesId")
+            if sid is not None:
+                try:
+                    if int(sid) != int(arr_id):
+                        continue
+                except (TypeError, ValueError):
+                    continue
+            if wanted is not None:
+                sn = queue_record_season(row)
+                if sn is None or sn not in wanted:
+                    continue
         qid = row.get("id")
         if qid is None:
             continue
@@ -700,7 +716,6 @@ def purge_then_delete_request(
         payload = parse_request_payload(get_body)
         media_id, is4k = media_ids_from_request(payload)
     elif get_status in (401, 403):
-        # Auth failed — surface upstream response; do not delete.
         return get_status, [("Content-Type", "application/json")], get_body, "auth_failed"
     else:
         log.warning("GET /api/v1/request/%s → HTTP %s (continuing with request delete)", request_id, get_status)
@@ -719,7 +734,6 @@ def purge_then_delete_request(
             try:
                 series_id = sonarr_lookup_series_id(payload, api_key)
                 if series_id is None:
-                    # Not in Sonarr — drop the request only (under-delete).
                     log.info("request %s: series not in Sonarr; request-delete only", request_id)
                     purge_note = "sonarr_series_missing"
                 else:
@@ -750,15 +764,15 @@ def purge_then_delete_request(
                         qnote = _drain_queue_note(
                             "series", series_id, api_key, None, request_id
                         )
-                        purge_note, _ = _delete_media_file(media_id, is4k, headers)
-                        purge_note = f"{qnote};{purge_note}"
+                        pnote, _ = _delete_media_file(media_id, is4k, headers)
+                        purge_note = f"{qnote};{pnote}"
             except Exception as exc:
                 log.error("request %s: season purge failed: %s", request_id, exc)
                 return _season_purge_fail(str(exc), "season_purge_failed")
         else:
             qnote = _drain_movie_queue_note(payload, request_id)
-            purge_note, _ = _delete_media_file(media_id, is4k, headers)
-            purge_note = f"{qnote};{purge_note}" if qnote else purge_note
+            pnote, _ = _delete_media_file(media_id, is4k, headers)
+            purge_note = f"{qnote};{pnote}" if qnote else pnote
     else:
         log.info("request %s: no linked media id; deleting request only", request_id)
 
@@ -1134,11 +1148,17 @@ def _reset_mock_sonarr() -> None:
             "downloadId": "bbb",
             "episode": {"seasonNumber": 2},
         },
+        {
+            "id": 203,
+            "seriesId": 11,
+            "downloadId": "ccc",
+            "episode": {"seasonNumber": 1},
+        },
     ]
 
 
 class _MockRadarr(BaseHTTPRequestHandler):
-    """Radarr stand-in: movie 1 with one queue item unless deleted."""
+    """Radarr stand-in: movie 1 with queue item 99 and movie 2 with queue item 100."""
 
     protocol_version = "HTTP/1.1"
     calls: List[str] = []
@@ -1183,9 +1203,11 @@ def _reset_mock_radarr() -> None:
     _MockRadarr.calls = []
     _MockRadarr.movies = [
         {"id": 1, "tmdbId": 10378, "title": "Big Buck Bunny"},
+        {"id": 2, "tmdbId": 1726, "title": "Iron Man"},
     ]
     _MockRadarr.queue = [
         {"id": 99, "movieId": 1, "downloadId": "abc123"},
+        {"id": 100, "movieId": 2, "downloadId": "iron456"},
     ]
 
 
@@ -1306,10 +1328,13 @@ def self_test() -> int:
         "movie queue item removed from download client",
     )
     check(
+        not any(c.startswith("DELETE /api/v3/queue/100") for c in radarr_calls),
+        "other movie queue item left alone",
+    )
+    check(
         "queue_movie:1:1" in (hdrs.get("X-Assemblrr-Purge-Detail") or ""),
         f"purge detail notes queue drain ({hdrs.get('X-Assemblrr-Purge-Detail')})",
     )
-    # Order: GET, media file, request delete
     try:
         i_get = next(i for i, c in enumerate(calls) if c.startswith("GET /api/v1/request/42"))
         i_file = next(i for i, c in enumerate(calls) if "DELETE /api/v1/media/7/file" in c)
@@ -1442,6 +1467,10 @@ def self_test() -> int:
     check(
         not any(c == "DELETE /api/v3/queue/202" for c in _MockSonarr.calls),
         "TV S01 leaves S02 queue item",
+    )
+    check(
+        not any(c == "DELETE /api/v3/queue/203" for c in _MockSonarr.calls),
+        "TV S01 leaves other series queue item",
     )
     check(
         "seasons_deleted" in (hdrs.get("X-Assemblrr-Purge-Detail") or ""),
@@ -1583,6 +1612,10 @@ def self_test() -> int:
         any(c == "DELETE /api/v3/queue/201" for c in _MockSonarr.calls)
         and any(c == "DELETE /api/v3/queue/202" for c in _MockSonarr.calls),
         "TV all-seasons drains every series queue item",
+    )
+    check(
+        not any(c == "DELETE /api/v3/queue/203" for c in _MockSonarr.calls),
+        "TV all-seasons leaves other series queue item",
     )
 
     tv_s01 = {

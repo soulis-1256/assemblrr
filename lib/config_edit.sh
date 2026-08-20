@@ -308,8 +308,10 @@ _config_edit_profile() {
     configure_quality_profile
     quality_sync_exports
     config_set_kv "$(_config_edit_runtime_file)" "QUALITY_TIER" "$QUALITY_TIER"
+    config_set_kv "$(_config_edit_runtime_file)" "QUALITY_SOURCE" "$QUALITY_SOURCE"
     config_set_kv "$(_config_edit_runtime_file)" "SEERR_IS_4K" "$SEERR_IS_4K"
     config_unset_kv "$(_config_edit_runtime_file)" "SEERR_DEFAULT_PROFILE"
+    configure_recyclarr || true
     if [ -n "${RADARR_API_KEY:-}" ]; then
         set_default_quality_profile "Radarr" "7878" "$RADARR_API_KEY" "lookup_radarr_profile" || true
     fi

@@ -42,6 +42,8 @@ assert_true "sets root-folder default" "grep -q defaultQualityProfileId \"$src\"
 assert_true "updates import lists" "grep -q '/api/v3/importlist/' \"$src\""
 assert_true "promotes assemblrr profile to id 1" "grep -q 'arr_promote_quality_profile' \"$src\""
 assert_true "writes qualityprofile/1" "grep -q '/api/v3/qualityprofile/1' \"$src\""
+assert_contains "$(sed -n '/^arr_promote_quality_profile()/,/^}/p' "$src")" \
+    'id1_name' "promote does not overwrite a sibling assemblrr profile"
 assert_not_contains "$apply" '"all"' "does not remap the whole library"
 assert_not_contains "$apply" "any-only" "does not remap titles still on Any"
 assert_contains "$apply" "quality_wants_named_profile" "named-profile check uses the tier"

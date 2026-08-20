@@ -505,26 +505,36 @@ arr_queue_hashes() {
     local endpoint raw
     if [ "$kind" = "movie" ]; then
         endpoint="/api/v3/queue?pageSize=250&movieId=${id}"
+        raw=$(arr_get "$base" "$key" "$endpoint")
+        echo "$raw" | jq -r --argjson id "$id" '
+            if type == "array" then .[]
+            elif type == "object" then .records[]?
+            else empty end
+            | select((.movieId // empty) == ($id|tonumber))
+            | .downloadId // .data.torrentInfoHash // empty
+        ' 2>/dev/null | tr 'A-F' 'a-f' | sort -u
     else
         endpoint="/api/v3/queue?pageSize=250&seriesId=${id}"
+        raw=$(arr_get "$base" "$key" "$endpoint")
+        echo "$raw" | jq -r --argjson id "$id" '
+            if type == "array" then .[]
+            elif type == "object" then .records[]?
+            else empty end
+            | select((.seriesId // empty) == ($id|tonumber))
+            | .downloadId // .data.torrentInfoHash // empty
+        ' 2>/dev/null | tr 'A-F' 'a-f' | sort -u
     fi
-    raw=$(arr_get "$base" "$key" "$endpoint")
-    echo "$raw" | jq -r '
-        if type == "array" then .[]
-        elif type == "object" then .records[]?
-        else empty end
-        | .downloadId // .data.torrentInfoHash // empty
-    ' 2>/dev/null | tr 'A-F' 'a-f' | sort -u
 }
 
 arr_queue_hashes_seasons() {
     local base="$1" key="$2" id="$3" seasons_json="$4"
     local raw
     raw=$(arr_get "$base" "$key" "/api/v3/queue?pageSize=250&seriesId=${id}")
-    echo "$raw" | jq -r --argjson seasons "$seasons_json" '
+    echo "$raw" | jq -r --argjson id "$id" --argjson seasons "$seasons_json" '
         if type == "array" then .[]
         elif type == "object" then .records[]?
         else empty end
+        | select((.seriesId // empty) == ($id|tonumber))
         | . as $r
         | (
             $r.episode.seasonNumber
@@ -676,6 +686,9 @@ arr_id_for_path() {
     local base="$1" key="$2" kind="$3" path="$4"
     local b json
     b=$(basename_of "$path")
+    case "$b" in
+        movies|tv|media|torrents|incomplete|data|""|.) return 0 ;;
+    esac
     if [ "$kind" = "movie" ]; then
         json=$(arr_get "$base" "$key" "/api/v3/movie")
         echo "$json" | jq -r --arg p "$path" --arg b "$b" '

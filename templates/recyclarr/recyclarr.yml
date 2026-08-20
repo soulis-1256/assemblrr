@@ -1,7 +1,8 @@
 # yaml-language-server: $schema=https://schemas.recyclarr.dev/v8/config-schema.json
 # Root: instance URLs/keys + include list. Profile packs are under includes/.
 # All packs listed here are synced; the default (movies + TV) is chosen at setup.
-# See README "Quality Profiles & TRaSH Guides".
+# Movie WEB packs are Recyclarr variants of the HD/UHD Bluray + WEB trash IDs.
+# See docs/trash-guides.md.
 
 radarr:
   radarr-instance:
@@ -11,6 +12,8 @@ radarr:
     include:
       - config: radarr-hd.yml
       - config: radarr-uhd.yml
+      - config: radarr-web-1080.yml
+      - config: radarr-web-2160.yml
       - config: radarr-soft-cfs.yml
 
 sonarr:

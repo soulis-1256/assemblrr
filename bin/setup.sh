@@ -557,6 +557,7 @@ VPN_ENABLED="${setup_vpn,,}"
 VPN_TYPE="${vpn_type:-openvpn}"
 TZ="$tz"
 QUALITY_TIER="$(quality_tier)"
+QUALITY_SOURCE="$(quality_source)"
 SEERR_IS_4K="$(quality_seerr_is_4k)"
 SUBTITLE_LANGUAGE="${subtitle_language:-}"
 SETUP_MODE="${SETUP_MODE:-manual}"
@@ -656,7 +657,11 @@ else
     echo "  VPN:               DISABLED"
 fi
 echo "  Media service:     $media_service (port $media_service_port)"
-echo "  Quality profile:   $QUALITY_TIER (4K=$seerr_is_4k)"
+if [ "$QUALITY_TIER" = "any" ]; then
+    echo "  Quality profile:   any"
+else
+    echo "  Quality profile:   $QUALITY_TIER / ${QUALITY_SOURCE:-bluray} (4K=$seerr_is_4k)"
+fi
 echo "  Subtitle language: ${subtitle_language:-en (Bazarr default)}"
 if [ "${opensubtitles_enabled:-n}" = "y" ]; then
     echo "  OpenSubtitles.com: yes (username=${opensubtitles_username})"

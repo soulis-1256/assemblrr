@@ -177,7 +177,7 @@ services:
 
   # Seerr — media request management (successor to Jellyseerr/Overseerr)
   # Host port 5055 is published by seerr-gateway (not seerr) so DELETE /request
-  # can cascade into media file purge. Seerr stays on the Docker network only.
+  # can cancel in-flight *arr/qB grabs. Seerr stays on the Docker network only.
   # Retirement: see docs/seerr-delete-request.md
   seerr:
     image: ghcr.io/seerr-team/seerr:v3.4.1
@@ -201,7 +201,7 @@ services:
       assemblrr_network:
         ipv4_address: 172.60.0.17
 
-  # Thin reverse proxy in front of Seerr: pass-through + delete-request purge.
+  # Thin reverse proxy in front of Seerr: pass-through + delete-request queue drain.
   # TV: season-scoped via Sonarr when the request is a subset of remaining seasons.
   # SEERR_DELETE_REQUEST_PURGE=0 disables intercept (stock Seerr semantics).
   seerr-gateway:
