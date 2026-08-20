@@ -74,7 +74,12 @@ assert_contains "$up" "Starting services" "friendly wait label"
 assert_contains "$up" "tail -n 40" "prints a log tail on failure"
 assert_true "setup uses compose_up_stack" "grep -q 'compose_up_stack' \"$REPO_ROOT/bin/setup.sh\""
 assert_true "upgrade uses compose_up_stack" "grep -q 'compose_up_stack' \"$REPO_ROOT/lib/upgrade.sh\""
+assert_true "cli uses compose_up_stack" "grep -q 'compose_up_stack' \"$REPO_ROOT/bin/cli.sh\""
 assert_not_contains "$(sed -n '/compose_up_stack/,/exit 1/p' "$REPO_ROOT/bin/setup.sh")" \
     "run_docker compose" "setup no longer streams compose up"
+
+test_suite "healthcheck fast-start intervals"
+assert_contains "$(grep start_interval "$REPO_ROOT/compose/base.yaml")" "start_interval: 2s" "base.yaml has fast healthcheck start_interval"
+assert_contains "$(grep start_interval "$REPO_ROOT/compose/vpn.yaml")" "start_interval: 2s" "vpn.yaml has fast healthcheck start_interval"
 
 test_summary

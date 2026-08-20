@@ -36,10 +36,11 @@ services:
           "CMD-SHELL",
           "wget -qO /dev/null http://127.0.0.1:9999/v1/healthcheck || exit 1",
         ]
-      interval: 15s
+      interval: 10s
       timeout: 5s
       retries: 3
-      start_period: 15s
+      start_period: 10s
+      start_interval: 2s
     volumes:
       - ${INSTALL_DIRECTORY}/config/gluetun:/gluetun
     restart: unless-stopped
@@ -60,6 +61,7 @@ services:
       timeout: 3s
       retries: 2
       start_period: 10s
+      start_interval: 2s
     restart: unless-stopped
 
   deunhealth:

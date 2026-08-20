@@ -16,11 +16,12 @@ services:
     ports:
       - 8096:8096
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8096/health"]
-      interval: 30s
-      timeout: 10s
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8096/health"]
+      interval: 10s
+      timeout: 5s
       retries: 3
-      start_period: 60s
+      start_period: 30s
+      start_interval: 2s
     restart: unless-stopped
     networks:
       assemblrr_network:
@@ -43,11 +44,12 @@ services:
     ports:
       - 8096:8096
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8096/emby/System/Ping"]
-      interval: 30s
-      timeout: 10s
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8096/emby/System/Ping"]
+      interval: 10s
+      timeout: 5s
       retries: 3
-      start_period: 60s
+      start_period: 30s
+      start_interval: 2s
     restart: unless-stopped
     networks:
       assemblrr_network:
@@ -70,11 +72,12 @@ services:
       - ${INSTALL_DIRECTORY}/config/plex:/config
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:32400/identity"]
-      interval: 30s
-      timeout: 10s
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:32400/identity"]
+      interval: 10s
+      timeout: 5s
       retries: 3
-      start_period: 90s
+      start_period: 30s
+      start_interval: 2s
 
   # qBittorrent — torrent client (ports added by overlay)
   qbittorrent:
@@ -91,11 +94,12 @@ services:
       - ${INSTALL_DIRECTORY}/config/qbittorrent:/config
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8081"]
-      interval: 30s
-      timeout: 10s
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8081"]
+      interval: 5s
+      timeout: 3s
       retries: 3
-      start_period: 30s
+      start_period: 20s
+      start_interval: 2s
 
   # Sonarr — TV show management and automation
   sonarr:
@@ -114,11 +118,12 @@ services:
     ports:
       - 8989:8989
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8989/ping"]
-      interval: 30s
-      timeout: 10s
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8989/ping"]
+      interval: 10s
+      timeout: 5s
       retries: 3
-      start_period: 30s
+      start_period: 60s
+      start_interval: 2s
     restart: unless-stopped
     networks:
       assemblrr_network:
@@ -141,11 +146,12 @@ services:
     ports:
       - 7878:7878
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:7878/ping"]
-      interval: 30s
-      timeout: 10s
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:7878/ping"]
+      interval: 10s
+      timeout: 5s
       retries: 3
-      start_period: 30s
+      start_period: 60s
+      start_interval: 2s
     restart: unless-stopped
     networks:
       assemblrr_network:
@@ -165,11 +171,12 @@ services:
     ports:
       - 9696:9696
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:9696/ping"]
-      interval: 30s
-      timeout: 10s
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:9696/ping"]
+      interval: 10s
+      timeout: 5s
       retries: 3
-      start_period: 30s
+      start_period: 60s
+      start_interval: 2s
     restart: unless-stopped
     networks:
       assemblrr_network:
@@ -191,11 +198,12 @@ services:
     expose:
       - "5055"
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5055/api/v1/settings/public"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:5055/api/v1/settings/public"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+      start_interval: 2s
     restart: unless-stopped
     networks:
       assemblrr_network:
@@ -236,10 +244,11 @@ services:
           "-c",
           "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5055/_assemblrr/ready', timeout=5)",
         ]
-      interval: 30s
-      timeout: 10s
+      interval: 10s
+      timeout: 5s
       retries: 3
-      start_period: 20s
+      start_period: 30s
+      start_interval: 2s
     command: ["python3", "/scripts/seerr-gateway.py"]
     restart: unless-stopped
     networks:
@@ -307,11 +316,12 @@ services:
     ports:
       - 6767:6767
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:6767/api/system/ping"]
-      interval: 30s
-      timeout: 10s
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:6767/api/system/ping"]
+      interval: 10s
+      timeout: 5s
       retries: 3
-      start_period: 60s
+      start_period: 30s
+      start_interval: 2s
     restart: unless-stopped
     networks:
       assemblrr_network:

@@ -34,7 +34,7 @@ log_debug()   { _log_to_file "DEBUG: $1"; return 0; }
 wait_inline() {
     local label="$1"
     local secs="${2:-0}"
-    printf '\r%s (%ss)   ' "$label" "$secs" >&2
+    printf '\r\033[K%s (%ss)' "$label" "$secs" >&2
 }
 
 # Run a command while updating wait_inline every second.
@@ -62,7 +62,7 @@ wait_while() {
     [ "$had_errexit" = 1 ] && set -e
     kill "$ticker" 2>/dev/null || true
     wait "$ticker" 2>/dev/null || true
-    echo >&2
+    printf '\r\033[K' >&2
     WAIT_WHILE_OUTPUT=$(cat "$out" 2>/dev/null || true)
     rm -f "$out"
     return "$rc"

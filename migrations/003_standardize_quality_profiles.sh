@@ -4,7 +4,7 @@
 migration_id="003_standardize_quality_profiles"
 migration_description="Remove superseded Recyclarr include packs from prior versions"
 
-readonly LEGACY_RECYCLARR_INCLUDES=(
+LEGACY_RECYCLARR_INCLUDES=(
     "radarr-hd.yml"
     "radarr-uhd.yml"
     "radarr-web-1080.yml"

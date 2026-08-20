@@ -244,7 +244,7 @@ wait_for_services() {
         fi
 
         if [ "$total" -gt 0 ] && [ "$ready" -eq "$total" ]; then
-            echo >&2
+            printf '\r\033[K' >&2
             log_success "All $total services are ready."
             return 0
         fi
@@ -258,7 +258,7 @@ wait_for_services() {
         wait_time=$((wait_time + 1))
     done
 
-    echo >&2
+    printf '\r\033[K' >&2
     log_error "Not all services became ready within ${timeout}s ($ready/$total ready${waiting[*]:+: ${waiting[*]}})"
 }
 
@@ -542,10 +542,12 @@ start_app() {
     fi
 
     if [ "$#" -eq 0 ]; then
-        "${DC[@]}" up -d --remove-orphans || log_error "Failed to start services"
+        compose_up_stack "${MEDIA_SERVICE:-jellyfin}" || log_error "Failed to start services"
         wait_for_services
+        echo
+        check_status || true
     else
-        "${DC[@]}" up -d --remove-orphans "$@" || log_error "Failed to start services"
+        compose_up_stack "${MEDIA_SERVICE:-jellyfin}" "$@" || log_error "Failed to start services"
     fi
 }
 
@@ -554,12 +556,14 @@ restart_app() {
     prepare_install_dirs "$INSTALL_DIR" "$_HOST_UID" "$_HOST_GID"
 
     if [ "$#" -eq 0 ]; then
-        "${DC[@]}" stop || log_warning "Some services failed to stop"
-        "${DC[@]}" up -d --remove-orphans || log_error "Failed to start services"
+        wait_while "Stopping services" "${DC[@]}" stop || log_warning "Some services failed to stop"
+        compose_up_stack "${MEDIA_SERVICE:-jellyfin}" || log_error "Failed to start services"
         wait_for_services
+        echo
+        check_status || true
     else
         "${DC[@]}" stop "$@" || log_warning "Some services failed to stop"
-        "${DC[@]}" up -d --remove-orphans "$@" || log_error "Failed to start services"
+        compose_up_stack "${MEDIA_SERVICE:-jellyfin}" "$@" || log_error "Failed to start services"
     fi
 }
 

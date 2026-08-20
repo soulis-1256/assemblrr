@@ -16,7 +16,7 @@ test_vpn_connection_shared() {
     log_info "Testing VPN connection by starting Gluetun first..."
 
     # Force recreate so updated secrets/.env from a credential retry always apply.
-    if ! "${docker_cmd[@]}" up -d --force-recreate gluetun 2>/dev/null; then
+    if ! "${docker_cmd[@]}" up -d --force-recreate gluetun >/dev/null 2>&1; then
         log_warning "Failed to start Gluetun container. VPN configuration may be incorrect."
         log_info "Check secrets/ (credentials) and .env (VPN_SERVICE, VPN_TYPE, WIREGUARD_ADDRESSES)."
         return 1
@@ -29,16 +29,16 @@ test_vpn_connection_shared() {
         health=$(docker inspect --format='{{.State.Health.Status}}' gluetun 2>/dev/null || echo "unknown")
 
         if [ "$health" = "healthy" ]; then
-            echo >&2
+            printf '\r\033[K' >&2
             log_success "VPN connection established successfully!"
             return 0
         elif [ "$health" = "unhealthy" ]; then
-            echo >&2
+            printf '\r\033[K' >&2
             log_warning "VPN connection failed. Gluetun logs:"
             "${docker_cmd[@]}" logs gluetun --tail=20 2>/dev/null
             echo
             log_info "Fix VPN credentials in secrets/ (and WIREGUARD_ADDRESSES in .env if using WireGuard), then try again."
-            "${docker_cmd[@]}" stop gluetun 2>/dev/null
+            "${docker_cmd[@]}" stop gluetun >/dev/null 2>&1 || true
             return 1
         fi
 
@@ -47,12 +47,12 @@ test_vpn_connection_shared() {
         wait_time=$((wait_time + 3))
     done
 
-    echo >&2
+    printf '\r\033[K' >&2
     log_warning "VPN connection timed out after ${max_wait}s. Gluetun logs:"
     "${docker_cmd[@]}" logs gluetun --tail=20 2>/dev/null
     echo
     log_info "The VPN may need more time, or credentials may be incorrect (see secrets/ and .env)."
-    "${docker_cmd[@]}" stop gluetun 2>/dev/null
+    "${docker_cmd[@]}" stop gluetun >/dev/null 2>&1 || true
     return 1
 }
 
