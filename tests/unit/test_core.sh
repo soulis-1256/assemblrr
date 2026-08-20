@@ -181,6 +181,41 @@ assert_contains "$gate" "uninstall" "points at uninstall"
 assert_contains "$gate" "upgrade" "points at upgrade"
 assert_contains "$gate" "exit 1" "stops setup"
 
+test_suite "offer_leftover_cleanup"
+# shellcheck disable=SC1091
+source "$REPO_ROOT/lib/prompts.sh"
+
+media_only_home="$tmp/media-only-home"
+mkdir -p "$media_only_home/assemblrr-media/torrents/movies"
+out_media=$(HOME="$media_only_home" offer_leftover_cleanup <<< "n" 2>&1 || true)
+assert_contains "$out_media" "Media:   $media_only_home/assemblrr-media" "media labeled in leftover output"
+assert_not_contains "$out_media" "Install:" "no install label when only media leftover"
+assert_true "media directory kept when answering n" "[ -d \"$media_only_home/assemblrr-media\" ]"
+
+HOME="$media_only_home" offer_leftover_cleanup <<< "y" >/dev/null 2>&1 || true
+assert_false "media directory removed when answering y" "[ -d \"$media_only_home/assemblrr-media\" ]"
+
+inst_only_home="$tmp/inst-only-home"
+mkdir -p "$inst_only_home/assemblrr"
+out_inst=$(HOME="$inst_only_home" offer_leftover_cleanup <<< "n" 2>&1 || true)
+assert_contains "$out_inst" "Install: $inst_only_home/assemblrr" "install labeled in leftover output"
+assert_not_contains "$out_inst" "Media:" "no media label when only install leftover"
+assert_true "install directory kept when answering n" "[ -d \"$inst_only_home/assemblrr\" ]"
+
+HOME="$inst_only_home" offer_leftover_cleanup <<< "y" >/dev/null 2>&1 || true
+assert_false "install directory removed when answering y" "[ -d \"$inst_only_home/assemblrr\" ]"
+
+both_home="$tmp/both-home"
+mkdir -p "$both_home/assemblrr" "$both_home/assemblrr-media/torrents/movies"
+out_both=$(HOME="$both_home" offer_leftover_cleanup <<< $'n\nn' 2>&1 || true)
+assert_contains "$out_both" "Install: $both_home/assemblrr" "both: install labeled"
+assert_contains "$out_both" "Media:   $both_home/assemblrr-media" "both: media labeled"
+
+# Remove install only (answer y, then n)
+HOME="$both_home" offer_leftover_cleanup <<< $'y\nn' >/dev/null 2>&1 || true
+assert_false "install directory removed on y" "[ -d \"$both_home/assemblrr\" ]"
+assert_true "media directory kept on n" "[ -d \"$both_home/assemblrr-media\" ]"
+
 test_suite "print_detected_locations"
 loc=$(INSTALL_DIR=/mnt/e/assemblrr MEDIA_DIRECTORY=/mnt/e/assemblrr-media \
     HOME="$ptr_home" print_detected_locations "Detected installation:")

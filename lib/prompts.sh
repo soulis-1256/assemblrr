@@ -559,24 +559,47 @@ offer_leftover_cleanup() {
     leftover=$(list_assemblrr_leftovers || true)
     [ -n "$leftover" ] || return 0
 
+    local has_install=false
+    local has_media=false
+    if echo "$leftover" | grep -q $'^install\t'; then
+        has_install=true
+    fi
+    if echo "$leftover" | grep -q $'^media\t'; then
+        has_media=true
+    fi
+
     echo
-    log_warning "Found leftover assemblrr files from an earlier attempt:"
+    log_warning "Found leftover ${APP_DISPLAY_NAME:-assemblrr} files from an earlier attempt:"
     while IFS=$'\t' read -r kind path; do
         [ -n "$path" ] || continue
-        log_warning "  $path"
+        case "$kind" in
+            install) log_warning "  Install: $path" ;;
+            media)   log_warning "  Media:   $path" ;;
+            *)       log_warning "  $path" ;;
+        esac
     done <<< "$leftover"
 
-    read -p "Remove leftover install files (keeps media)? (Y/n) [Default = y]: " ans
-    ans=${ans:-y}
-    if [ "${ans,,}" = "y" ]; then
-        while IFS=$'\t' read -r kind path; do
-            [ "$kind" = "install" ] && [ -n "$path" ] && safe_rm_rf "$path"
-        done <<< "$leftover"
+    if [ "$has_install" = true ]; then
+        local prompt_msg="Remove leftover install files? (Y/n) [Default = y]: "
+        if [ "$has_media" = true ]; then
+            prompt_msg="Remove leftover install files (keeps media)? (Y/n) [Default = y]: "
+        fi
+        read -p "$prompt_msg" ans
+        ans=${ans:-y}
+        if [ "${ans,,}" = "y" ]; then
+            while IFS=$'\t' read -r kind path; do
+                [ "$kind" = "install" ] && [ -n "$path" ] && safe_rm_rf "$path"
+            done <<< "$leftover"
+        fi
     fi
 
     leftover=$(list_assemblrr_leftovers || true)
     if echo "$leftover" | grep -q $'^media\t'; then
-        read -p "Also remove leftover media directories? (y/N) [Default = n]: " ans
+        local prompt_media="Remove leftover media directories? (y/N) [Default = n]: "
+        if [ "$has_install" = true ]; then
+            prompt_media="Also remove leftover media directories? (y/N) [Default = n]: "
+        fi
+        read -p "$prompt_media" ans
         ans=${ans:-n}
         if [ "${ans,,}" = "y" ]; then
             while IFS=$'\t' read -r kind path; do
