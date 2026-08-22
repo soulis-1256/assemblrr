@@ -63,24 +63,61 @@ echo "Welcome to ${APP_DISPLAY_NAME} (${APP_DESCRIPTION})"
 echo "===================================================="
 echo ""
 
-# --- Setup mode ---
-SETUP_MODE=""
-echo "  1) Express (recommended — minimal questions, smart defaults)"
-echo "  2) Manual (full control over every setting)"
-while true; do
-    read -p "Choose setup mode [1]: " setup_mode_choice
-    setup_mode_choice=${setup_mode_choice:-1}
-    case "$setup_mode_choice" in
-        1) SETUP_MODE="express"; break ;;
-        2) SETUP_MODE="manual"; break ;;
-        *) log_warning "Invalid choice. Please choose 1 or 2." ;;
+# --- Setup mode & argument parsing ---
+RESTORE_BACKUP_FILE=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --restore)
+            SETUP_MODE="restore"
+            if [ -n "${2:-}" ] && [[ ! "$2" =~ ^-- ]]; then
+                RESTORE_BACKUP_FILE="$2"
+                shift
+            fi
+            shift
+            ;;
+        --restore=*)
+            SETUP_MODE="restore"
+            RESTORE_BACKUP_FILE="${1#*=}"
+            shift
+            ;;
+        --express)
+            SETUP_MODE="express"
+            shift
+            ;;
+        --manual)
+            SETUP_MODE="manual"
+            shift
+            ;;
+        *)
+            shift
+            ;;
     esac
 done
+
+if [ -z "${SETUP_MODE:-}" ]; then
+    echo "  1) Express (recommended — minimal questions, smart defaults)"
+    echo "  2) Manual (full control over every setting)"
+    echo "  3) Restore (rebuild stack from an existing backup archive)"
+    while true; do
+        read -p "Choose setup mode [1]: " setup_mode_choice
+        setup_mode_choice=${setup_mode_choice:-1}
+        case "$setup_mode_choice" in
+            1) SETUP_MODE="express"; break ;;
+            2) SETUP_MODE="manual"; break ;;
+            3) SETUP_MODE="restore"; break ;;
+            *) log_warning "Invalid choice. Please choose 1, 2, or 3." ;;
+        esac
+    done
+fi
 export SETUP_MODE
 
 if [ "$SETUP_MODE" = "express" ]; then
     echo ""
     log_success "Express mode — we'll use smart defaults and only ask the essentials."
+    echo ""
+elif [ "$SETUP_MODE" = "restore" ]; then
+    echo ""
+    log_info "Restore mode — we'll rebuild your stack from an existing backup archive."
     echo ""
 else
     echo ""
@@ -611,6 +648,140 @@ set_permissions() {
     log_debug "Ownership set for $install_directory and $media_directory"
 }
 
+restore_from_backup_wizard() {
+    echo ""
+    log_info "========================================================"
+    log_info "  ${APP_DISPLAY_NAME} — Restore from Backup Archive"
+    log_info "========================================================"
+    echo ""
+
+    local backup_file="${RESTORE_BACKUP_FILE:-}"
+    while [ -z "$backup_file" ] || [ ! -f "$backup_file" ]; do
+        read -p "Enter path to backup archive (.tar.gz): " backup_input
+        backup_input=${backup_input:-}
+        if [ -z "$backup_input" ]; then
+            log_warning "Please enter a valid file path."
+            continue
+        fi
+
+        backup_file=$(expand_path "$backup_input")
+        if [ ! -f "$backup_file" ]; then
+            log_warning "Backup file not found: $backup_file"
+            backup_file=""
+            continue
+        fi
+
+        if ! gzip -t "$backup_file" 2>/dev/null; then
+            log_warning "File does not appear to be a valid .tar.gz archive: $backup_file"
+            backup_file=""
+            continue
+        fi
+    done
+
+    echo ""
+    local default_install="$APP_DEFAULT_INSTALL_DIR"
+    local target_install=""
+    while true; do
+        read -p "Enter target installation directory [$default_install]: " target_input
+        target_input=${target_input:-$default_install}
+        target_install=$(expand_path "$target_input")
+        if [ -z "$target_install" ]; then
+            log_warning "Invalid directory path."
+            continue
+        fi
+        break
+    done
+
+    install_directory="$target_install"
+    export install_directory
+
+    if [ -d "$install_directory" ] && [ "$(ls -A "$install_directory" 2>/dev/null)" ]; then
+        echo ""
+        log_warning "Target directory $install_directory already exists and is not empty."
+        read -p "Overwrite existing directory contents with backup? [y/N]: " confirm_overwrite
+        confirm_overwrite=${confirm_overwrite:-n}
+        if [[ ! ${confirm_overwrite,,} =~ ^y$ ]]; then
+            log_info "Restore cancelled."
+            exit 0
+        fi
+    fi
+
+    mkdir -p "$install_directory"
+
+    log_info "Extracting backup archive into $install_directory..."
+    local abs_backup
+    abs_backup=$(realpath "$backup_file")
+
+    if ! tar -xzf "$abs_backup" -C "$install_directory" 2>/dev/null; then
+        if ! run_docker run --rm \
+            -v "$install_directory:/target" \
+            -v "$(dirname "$abs_backup"):/backup" \
+            alpine tar -xzf "/backup/$(basename "$abs_backup")" -C /target; then
+            log_error "Failed to extract backup archive."
+        fi
+    fi
+
+    # Read configuration from restored files
+    local restored_puid restored_pgid restored_media restored_service restored_vpn restored_tz
+    if [ -f "$install_directory/.env" ]; then
+        # shellcheck disable=SC1090
+        safe_source "$install_directory/.env" 2>/dev/null || true
+    fi
+    if [ -f "$install_directory/.assemblrr-config" ]; then
+        safe_source "$install_directory/.assemblrr-config" 2>/dev/null || true
+    elif [ -f "$install_directory/.${APP_NAME}-config" ]; then
+        safe_source "$install_directory/.${APP_NAME}-config" 2>/dev/null || true
+    fi
+
+    puid="${PUID:-$(id -u)}"
+    pgid="${PGID:-$(id -g)}"
+    media_directory="${MEDIA_DIRECTORY:-$APP_DEFAULT_MEDIA_DIR}"
+    media_service="${MEDIA_SERVICE:-jellyfin}"
+    setup_vpn="${VPN_ENABLED:-n}"
+    tz="${TZ:-UTC}"
+
+    export puid pgid media_directory media_service setup_vpn tz
+
+    # Ensure bind-mount skeleton and permissions
+    prepare_install_dirs "$install_directory" "$puid" "$pgid"
+    if [ ! -d "$media_directory" ]; then
+        mkdir -p "$media_directory" 2>/dev/null || true
+    fi
+    ensure_owned "$media_directory" "$puid" "$pgid" 2>/dev/null || true
+    write_install_pointer "$install_directory" "$media_directory"
+
+    # Make scripts executable
+    chmod +x "$install_directory/bin/"*.sh "$install_directory/scripts/"*.sh 2>/dev/null || true
+    chmod +x "$install_directory/cli.sh" "$install_directory/config.sh" "$install_directory/setup.sh" 2>/dev/null || true
+
+    # Install CLI globally
+    install_cli
+
+    log_success "Backup extracted and configuration loaded."
+    echo ""
+    log_info "Starting restored services..."
+
+    build_compose_args "$install_directory" "${setup_vpn,,}"
+    if ! compose_up_stack "$media_service"; then
+        log_warning "Failed to start some restored services."
+        log_info "Run '$APP_CLI_NAME logs' or '$APP_CLI_NAME status' to inspect."
+        exit 1
+    fi
+
+    echo ""
+    if [ -f "$install_directory/cli.sh" ]; then
+        log_info "Service dashboard:"
+        bash "$install_directory/cli.sh" status || true
+    fi
+
+    echo ""
+    log_success "All done! ${APP_DISPLAY_NAME} has been restored and is running."
+    log_info "Install directory: $install_directory"
+    log_info "Media directory:   $media_directory"
+    log_info "Manage the stack:  $APP_CLI_NAME status"
+    exit 0
+}
+
 main() {
 # Prevent running as root
 if [[ "$EUID" = 0 ]]; then
@@ -622,6 +793,11 @@ LOG_FILE="/tmp/${APP_NAME}-setup-$(date '+%Y%m%d-%H%M%S').log"
 log_info "Setup log: $LOG_FILE"
 log_info "Checking prerequisites..."
 check_dependencies
+
+if [ "${SETUP_MODE:-}" = "restore" ]; then
+    restore_from_backup_wizard
+fi
+
 refuse_setup_if_already_installed
 offer_leftover_cleanup
 
