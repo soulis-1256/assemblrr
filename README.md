@@ -21,6 +21,7 @@ assemblrr is an automated setup and management suite for self-hosted media stack
 - **Unified Operator CLI:** Manage the stack (`start`, `stop`, `restart`, `status`), change settings, take backups, and run updates directly from your terminal.
 - **Hardlink-Optimized Storage:** Atomic moves and hardlink-friendly directory layout with automated TRaSH Guides quality profile sync via Recyclarr.
 - **Granular Media Purge:** Single-command cleanup (`assemblrr purge`) that cleanly removes titles across *arr apps, the disk, and matching torrents simultaneously.
+- **Disaster Recovery & Migration:** Rebuild your entire stack on a clean host directly from a backup archive via the setup wizard (`Restore` mode) or `assemblrr restore`.
 
 ---
 
@@ -86,6 +87,20 @@ ASSEMBLRR_REF=dev bash <(curl -fsSL https://raw.githubusercontent.com/soulis-125
 **Windows (PowerShell):**
 ```powershell
 $env:ASSEMBLRR_REF = "dev"; irm https://raw.githubusercontent.com/soulis-1256/assemblrr/main/platform/windows/bootstrap.ps1 | iex
+```
+
+#### Restore on a Clean Host from Backup
+
+To rebuild your entire stack on a fresh host from an existing backup archive, run the bootstrap installer and select `3) Restore`, or pass the `--restore` flag:
+
+**Linux / WSL2:**
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/soulis-1256/assemblrr/main/platform/linux/bootstrap.sh) --restore /path/to/assemblrr-backup.tar.gz
+```
+
+**Windows (PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/soulis-1256/assemblrr/main/platform/windows/bootstrap.ps1 | iex -ArgumentList "--restore", "C:\path\to\assemblrr-backup.tar.gz"
 ```
 
 > [!IMPORTANT]
