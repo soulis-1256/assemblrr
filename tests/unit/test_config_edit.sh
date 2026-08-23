@@ -18,6 +18,7 @@ test_suite "config_edit_section_ids"
 ids=$(config_edit_section_ids)
 assert_contains "$ids" "indexers" "lists indexers"
 assert_contains "$ids" "providers" "lists providers"
+assert_contains "$ids" "language" "lists language"
 assert_contains "$ids" "profile" "lists profile"
 assert_contains "$ids" "vpn" "lists vpn"
 assert_contains "$ids" "all" "lists all (full wizard)"
@@ -75,6 +76,17 @@ profile_line=$(_config_edit_catalog | grep '^profile|' || true)
 assert_contains "$profile_line" "Radarr" "profile catalog mentions Radarr"
 assert_contains "$profile_line" "Sonarr" "profile catalog mentions Sonarr"
 assert_contains "$profile_line" "Seerr" "profile catalog mentions Seerr"
+lang_line=$(_config_edit_catalog | grep '^language|' || true)
+assert_contains "$lang_line" "preferred" "language catalog mentions preferred"
+lang_fn=$(sed -n '/^_config_edit_language()/,/^}/p' "$REPO_ROOT/lib/config_edit.sh")
+assert_contains "$lang_fn" "SUBTITLE_LANGUAGES" "language edit persists extras"
+assert_contains "$lang_fn" "ui_picker_cancelled" "language edit honors Esc"
+run_fn=$(sed -n '/^config_edit_run()/,/^}/p' "$REPO_ROOT/lib/config_edit.sh")
+assert_contains "$run_fn" "flush_tty_input" "edit flushes fzf Enter before section prompts"
+os_fn=$(sed -n '/^configure_opensubtitles()/,/^}/p' "$REPO_ROOT/lib/prompts.sh")
+assert_contains "$os_fn" "read_prompt" "opensubtitles uses read_prompt after the picker"
+edit_os=$(sed -n '/^_config_edit_opensubtitles()/,/^}/p' "$REPO_ROOT/lib/config_edit.sh")
+assert_contains "$edit_os" "Cancelled." "failed/cancelled edit is one line and does not delete secrets"
 
 test_suite "profile edit persists QUALITY_SOURCE and resyncs Recyclarr"
 profile_fn=$(sed -n '/^_config_edit_profile()/,/^}/p' "$REPO_ROOT/lib/config_edit.sh")

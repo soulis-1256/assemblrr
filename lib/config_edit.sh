@@ -17,9 +17,9 @@ _config_edit_catalog() {
     cat <<'EOF'
 indexers|Prowlarr indexers
 providers|Bazarr subtitle providers
-language|Preferred subtitle language
+language|Subtitle languages (preferred + extras)
 profile|Default quality (Radarr, Sonarr, Seerr)
-opensubtitles|OpenSubtitles.com credentials
+opensubtitles|OpenSubtitles.com username and password
 auth|Shared login for every service UI
 timezone|Container timezone
 vpn|VPN on/off, provider, and credentials (restarts stack)
@@ -215,6 +215,7 @@ _config_edit_pick() {
             --layout=reverse \
             --border \
             2>/dev/null | cut -f1 || true)
+        flush_tty_input
         echo "$selected"
         return 0
     fi
@@ -295,8 +296,13 @@ _config_edit_providers() {
 _config_edit_language() {
     _config_edit_load
     configure_subtitle_language
+    if ui_picker_cancelled; then
+        return 0
+    fi
     config_set_kv "$(_config_edit_runtime_file)" "SUBTITLE_LANGUAGE" "${subtitle_language:-}"
+    config_set_kv "$(_config_edit_runtime_file)" "SUBTITLE_LANGUAGES" "${subtitle_languages:-}"
     SUBTITLE_LANGUAGE="${subtitle_language:-}"
+    SUBTITLE_LANGUAGES="${subtitle_languages:-}"
     configure_bazarr || true
     if [ "${MEDIA_SERVICE:-}" = "jellyfin" ]; then
         configure_jellyfin || true
@@ -331,11 +337,10 @@ _config_edit_opensubtitles() {
         echo -n "${opensubtitles_password:-}" > "$secrets_dir/opensubtitles_password.txt"
         chmod 600 "$secrets_dir/opensubtitles_username.txt" "$secrets_dir/opensubtitles_password.txt"
         log_success "OpenSubtitles.com credentials written to $secrets_dir"
-    else
-        rm -f "$secrets_dir/opensubtitles_username.txt" "$secrets_dir/opensubtitles_password.txt" 2>/dev/null || true
-        log_info "OpenSubtitles.com credentials cleared"
+        configure_bazarr || true
+        return 0
     fi
-    configure_bazarr || true
+    log_info "Cancelled."
 }
 
 _config_edit_auth() {
@@ -542,6 +547,9 @@ config_edit_run() {
     if ! section=$(config_edit_resolve "$raw"); then
         log_error "Unknown config section: $raw"
     fi
+
+    # fzf's Enter is still on the tty; drain it before any `read` prompt.
+    flush_tty_input
 
     case "$section" in
         indexers) _config_edit_indexers ;;

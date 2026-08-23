@@ -33,7 +33,19 @@ test_suite "_bazarr_lang_code2 maps eng and 2-letter"
 assert_eq "en" "$(_bazarr_lang_code2 eng)" "eng → en"
 assert_eq "en" "$(_bazarr_lang_code2 en)" "en → en"
 assert_eq "el" "$(_bazarr_lang_code2 gre)" "gre → el"
+assert_eq "el" "$(_bazarr_lang_code2 ell)" "ell → el"
 assert_eq "en" "$(_bazarr_lang_code2 '')" "empty → en"
+
+test_suite "_bazarr_code2_list unique, preferred first"
+assert_eq $'en\nel' "$(_bazarr_code2_list eng ell)" "eng,ell → en,el"
+assert_eq "en" "$(_bazarr_code2_list eng en)" "eng+en collapse to en"
+assert_eq "en" "$(_bazarr_code2_list)" "empty → en"
+
+test_suite "_bazarr_languages_profile_json has both languages, no cutoff"
+profile=$(_bazarr_languages_profile_json eng ell)
+assert_eq "en" "$(echo "$profile" | jq -r '.[0].items[0].language')" "preferred first"
+assert_eq "el" "$(echo "$profile" | jq -r '.[0].items[1].language')" "greek second"
+assert_eq "null" "$(echo "$profile" | jq -r '.[0].cutoff')" "no cutoff so extras still download"
 
 test_suite "migration 001 skip when custom.yaml has bazarr"
 tmp="" tmp2=""

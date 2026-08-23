@@ -127,25 +127,97 @@ configure_seerr_profile() {
 }
 
 configure_subtitle_language() {
-    # Jellyfin ISO 639-1 code (2-letter) to ISO 639-2/B (3-letter) mapping
-    # Source: https://github.com/jellyfin/jellyfin/blob/master/Emby.Server.Implementations/Localization/iso6392.txt
-    # Format: code|bibliographic|terminology|name|english_name
+    # Jellyfin iso6392.txt: iso639-2/T|iso639-2/B|iso639-1|english_name|french_name
     local iso639_url="https://raw.githubusercontent.com/jellyfin/jellyfin/master/Emby.Server.Implementations/Localization/iso6392.txt"
     local awk_filter='$4 != "" {print $1 "\t" $4}'
 
+    SELECTED_SUBTITLE_LANGUAGES=()
+    FZF_SELECT_STATUS="cancelled"
+
     ui_intro \
-        "Select your preferred subtitle language (Jellyfin playback + Bazarr downloads)." \
-        "Change the preferred subtitle language (Jellyfin + Bazarr)."
+        "Select subtitle languages to download. If you pick more than one, a second menu asks which Jellyfin should prefer." \
+        "Change subtitle languages. If you pick more than one, a second menu asks which Jellyfin should prefer."
 
-    # Use fzf single-select with fallback to "en"
-    subtitle_language=$(fzf_single_select "$iso639_url" "$awk_filter" "")
-
-    if [ -n "$subtitle_language" ]; then
-        log_success "Subtitle language: $subtitle_language"
-    else
-        log_success "Subtitle language: none (Bazarr defaults to English)"
+    if [ "${ASSEMBLRR_NONINTERACTIVE:-0}" = "1" ]; then
+        log_info "Skipping subtitle language picker (non-interactive)."
+        return 0
     fi
-    export subtitle_language
+
+    local data
+    data=$(curl -sf --connect-timeout 5 "$iso639_url" 2>/dev/null | awk -F'|' "$awk_filter" | sort -k2) || true
+    if [ -z "$data" ]; then
+        log_info "Could not load language list — leaving subtitle language unchanged."
+        return 0
+    fi
+
+    local prompt header preselect_names=""
+    preselect_names=$(_subtitle_stored_lang_codes)
+    if ui_is_edit; then
+        prompt="Subtitle languages> "
+        header="Enter/TAB=toggle  Ctrl-O=save  Esc=cancel"
+    else
+        prompt="Subtitle languages> "
+        header="Enter/TAB=toggle  Ctrl-O=confirm  Esc=skip"
+    fi
+    fzf_multi_select "$data" \
+        "$prompt" \
+        "$header" \
+        SELECTED_SUBTITLE_LANGUAGES \
+        "language" \
+        "$preselect_names" || true
+    ui_picker_done "languages"
+    if ui_picker_cancelled; then
+        return 0
+    fi
+
+    if [ "${#SELECTED_SUBTITLE_LANGUAGES[@]}" -eq 0 ]; then
+        subtitle_language=""
+        subtitle_languages=""
+        log_success "Subtitle language: none (Bazarr defaults to English)"
+        export subtitle_language subtitle_languages
+        return 0
+    fi
+
+    local preferred="${SELECTED_SUBTITLE_LANGUAGES[0]}"
+    if [ "${#SELECTED_SUBTITLE_LANGUAGES[@]}" -gt 1 ]; then
+        local current_pref="${SUBTITLE_LANGUAGE:-}"
+        current_pref="${current_pref%%,*}"
+        current_pref=${current_pref// /}
+        local in_set=0 code
+        for code in "${SELECTED_SUBTITLE_LANGUAGES[@]}"; do
+            [ "$code" = "$current_pref" ] && in_set=1 && break
+        done
+        [ "$in_set" -eq 0 ] && current_pref="$preferred"
+
+        local selected_data="" row
+        for code in "${SELECTED_SUBTITLE_LANGUAGES[@]}"; do
+            row=$(printf '%s\n' "$data" | awk -F'\t' -v c="$code" '$1 == c { print; exit }')
+            [ -n "$row" ] && selected_data+="$row"$'\n'
+        done
+        ui_intro \
+            "Which of those should Jellyfin prefer for playback?" \
+            "Which of those should Jellyfin prefer for playback?"
+        preferred=$(fzf_single_select_data \
+            "$selected_data" \
+            "Preferred language> " \
+            "↑↓=navigate  Enter=confirm  Esc=keep current preferred" \
+            "$current_pref")
+        [ -z "$preferred" ] && preferred="$current_pref"
+        in_set=0
+        for code in "${SELECTED_SUBTITLE_LANGUAGES[@]}"; do
+            [ "$code" = "$preferred" ] && in_set=1 && break
+        done
+        [ "$in_set" -eq 0 ] && preferred="${SELECTED_SUBTITLE_LANGUAGES[0]}"
+    fi
+
+    subtitle_language="$preferred"
+    subtitle_languages=$(_subtitle_join_preferred_first "$preferred" "${SELECTED_SUBTITLE_LANGUAGES[@]}")
+    if [ "$subtitle_languages" = "$subtitle_language" ]; then
+        log_success "Subtitle language: $subtitle_language (preferred)"
+    else
+        log_success "Subtitle languages: $subtitle_language (preferred), ${subtitle_languages#*,}"
+    fi
+    export subtitle_language subtitle_languages
 }
 
 # OpenSubtitles.com website login accepts email or username; the REST API (and
@@ -208,40 +280,23 @@ _verify_opensubtitles_login() {
     return 1
 }
 
-# Optional OpenSubtitles.com account for Bazarr (free registration).
-# Same y/N + credentials flow for express and manual. Credentials are
-# verified against the OpenSubtitles API before we accept them.
-configure_opensubtitles() {
-    opensubtitles_enabled="n"
-    opensubtitles_username=""
-    opensubtitles_password=""
-
-    ui_intro \
-        "Optional: OpenSubtitles.com credentials for Bazarr (https://www.opensubtitles.com/)." \
-        "Update OpenSubtitles.com credentials for Bazarr. Answer n to clear them."
-    log_info "The website login accepts email or username; Bazarr/API require your profile username."
-    log_info "Find it under your OpenSubtitles profile (not the signup email)."
-    ui_note \
-        "Other subtitle providers can be configured later with: ${APP_CLI_NAME:-assemblrr} config edit" \
-        ""
-    read -p "Do you have OpenSubtitles.com credentials? (y/N) [Default = n]: " opensubtitles_enabled
-    opensubtitles_enabled=${opensubtitles_enabled:-n}
-
-    if [ "${opensubtitles_enabled,,}" != "y" ]; then
-        opensubtitles_enabled="n"
-        log_success "OpenSubtitles.com: not configured"
-        export opensubtitles_enabled opensubtitles_username opensubtitles_password
-        return 0
-    fi
-
+# Collect verified OpenSubtitles.com username/password into the usual globals.
+# $1 = cancel_on_empty_user (1 for config edit, 0 for setup).
+# Returns 0 on verified login, 1 on cancel/skip.
+_opensubtitles_ask_and_verify() {
+    local cancel_on_empty="${1:-0}"
     local retry=""
+
     while true; do
         opensubtitles_username=""
         opensubtitles_password=""
 
         while [ -z "$opensubtitles_username" ]; do
-            read -p "OpenSubtitles.com username (profile name, not email): " opensubtitles_username
+            read_prompt "OpenSubtitles.com username (profile name, not email): " opensubtitles_username
             if [ -z "$opensubtitles_username" ]; then
+                if [ "$cancel_on_empty" = "1" ]; then
+                    return 1
+                fi
                 log_warning "Username cannot be empty."
                 continue
             fi
@@ -252,7 +307,11 @@ configure_opensubtitles() {
             fi
         done
         while [ -z "$opensubtitles_password" ]; do
-            read_masked "OpenSubtitles.com password: " opensubtitles_password
+            if [ -r /dev/tty ]; then
+                read_masked "OpenSubtitles.com password: " opensubtitles_password </dev/tty
+            else
+                read_masked "OpenSubtitles.com password: " opensubtitles_password
+            fi
             if [ -z "$opensubtitles_password" ]; then
                 log_warning "Password cannot be empty."
             fi
@@ -260,23 +319,66 @@ configure_opensubtitles() {
 
         log_info "Verifying OpenSubtitles.com login..."
         if _verify_opensubtitles_login "$opensubtitles_username" "$opensubtitles_password"; then
-            opensubtitles_enabled="y"
             log_success "OpenSubtitles.com: login OK — credentials will be stored under secrets/"
-            export opensubtitles_enabled opensubtitles_username opensubtitles_password
             return 0
         fi
 
-        read -p "Try again? (Y/n) [Default = y]: " retry
+        read_prompt "Try again? (Y/n) [Default = y]: " retry
         retry=${retry:-y}
         if [ "${retry,,}" != "y" ]; then
+            return 1
+        fi
+    done
+}
+
+# Optional OpenSubtitles.com account for Bazarr (free registration).
+# Setup: y/N first (optional). Config edit: user already picked this section,
+# so go straight to username/password. Empty username cancels with no change.
+configure_opensubtitles() {
+    opensubtitles_enabled="n"
+    opensubtitles_username=""
+    opensubtitles_password=""
+
+    if ui_is_edit; then
+        echo
+        if _opensubtitles_ask_and_verify 1; then
+            opensubtitles_enabled="y"
+        else
             opensubtitles_enabled="n"
             opensubtitles_username=""
             opensubtitles_password=""
-            log_warning "OpenSubtitles.com: skipped (credentials not verified)"
-            export opensubtitles_enabled opensubtitles_username opensubtitles_password
-            return 0
         fi
-    done
+        export opensubtitles_enabled opensubtitles_username opensubtitles_password
+        return 0
+    fi
+
+    ui_intro \
+        "Optional: OpenSubtitles.com credentials for Bazarr (https://www.opensubtitles.com/)." \
+        "Update OpenSubtitles.com credentials for Bazarr."
+    log_info "The website login accepts email or username; Bazarr/API require your profile username."
+    log_info "Find it under your OpenSubtitles profile (not the signup email)."
+    ui_note \
+        "Other subtitle providers can be configured later with: ${APP_CLI_NAME:-assemblrr} config edit" \
+        ""
+    read_prompt "Do you have OpenSubtitles.com credentials? (y/N) [Default = n]: " opensubtitles_enabled
+    opensubtitles_enabled=${opensubtitles_enabled:-n}
+
+    if [ "${opensubtitles_enabled,,}" != "y" ]; then
+        opensubtitles_enabled="n"
+        log_success "OpenSubtitles.com: not configured"
+        export opensubtitles_enabled opensubtitles_username opensubtitles_password
+        return 0
+    fi
+
+    if _opensubtitles_ask_and_verify 0; then
+        opensubtitles_enabled="y"
+    else
+        opensubtitles_enabled="n"
+        opensubtitles_username=""
+        opensubtitles_password=""
+        log_warning "OpenSubtitles.com: skipped (credentials not verified)"
+    fi
+    export opensubtitles_enabled opensubtitles_username opensubtitles_password
 }
 
 configure_vpn() {

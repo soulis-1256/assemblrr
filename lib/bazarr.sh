@@ -151,6 +151,50 @@ _bazarr_lang_code2() {
     esac
 }
 
+# Unique ISO 639-1 codes, preferred first. Args are stored picker codes (eng, ell, en, …).
+_bazarr_code2_list() {
+    local -a out=()
+    local c mapped x seen
+    for c in "$@"; do
+        mapped=$(_bazarr_lang_code2 "$c")
+        [ -z "$mapped" ] && continue
+        seen=0
+        for x in "${out[@]+"${out[@]}"}"; do
+            [ "$x" = "$mapped" ] && seen=1 && break
+        done
+        [ "$seen" -eq 0 ] && out+=("$mapped")
+    done
+    if [ ${#out[@]} -eq 0 ]; then
+        out=(en)
+    fi
+    printf '%s\n' "${out[@]}"
+}
+
+# Default profile JSON: every language in the list, no cutoff (download all of them).
+_bazarr_languages_profile_json() {
+    local langs_json
+    langs_json=$(_bazarr_code2_list "$@" | jq -R . | jq -sc .)
+    jq -nc --argjson langs "$langs_json" '[
+      {
+        profileId: 1,
+        name: "Default",
+        cutoff: null,
+        items: ($langs | to_entries | map({
+          id: (.key + 1),
+          language: .value,
+          audio_exclude: "False",
+          audio_only_include: "False",
+          hi: "False",
+          forced: "False"
+        })),
+        mustContain: [],
+        mustNotContain: [],
+        originalFormat: false,
+        tag: null
+      }
+    ]'
+}
+
 # Fetch Jellyfin movie/TV library names + ids for Bazarr refresh (optional)
 _bazarr_jellyfin_libraries() {
     local jf_key="$1"
@@ -200,7 +244,19 @@ configure_bazarr() {
         return 1
     fi
 
-    lang_code2=$(_bazarr_lang_code2 "${SUBTITLE_LANGUAGE:-en}")
+    local -a stored_langs=() lang_code2s=()
+    if type _subtitle_stored_lang_codes >/dev/null 2>&1; then
+        while IFS= read -r lang_code2; do
+            [ -n "$lang_code2" ] && stored_langs+=("$lang_code2")
+        done < <(_subtitle_stored_lang_codes)
+    fi
+    if [ ${#stored_langs[@]} -eq 0 ]; then
+        stored_langs=("${SUBTITLE_LANGUAGE:-en}")
+    fi
+    while IFS= read -r lang_code2; do
+        [ -n "$lang_code2" ] && lang_code2s+=("$lang_code2")
+    done < <(_bazarr_code2_list "${stored_langs[@]}")
+    lang_code2="${lang_code2s[0]}"
 
     if [ -n "${SONARR_API_KEY:-}" ]; then
         has_sonarr=1
@@ -367,38 +423,23 @@ configure_bazarr() {
         fi
     fi
 
-    # Language filter + single-language profile (id 1 = Default)
-    # items: normal (non-HI) preferred language; always include
-    profiles_json=$(jq -nc \
-        --arg lang "$lang_code2" \
-        '[{
-            profileId: 1,
-            name: "Default",
-            cutoff: null,
-            items: [{
-                id: 1,
-                language: $lang,
-                audio_exclude: "False",
-                audio_only_include: "False",
-                hi: "False",
-                forced: "False"
-            }],
-            mustContain: [],
-            mustNotContain: [],
-            originalFormat: false,
-            tag: null
-        }]')
-
-    form_args+=(
-        -F "languages-enabled=${lang_code2}"
-        -F "languages-profiles=${profiles_json}"
-    )
+    # Language filter + profile (id 1 = Default). First language is preferred
+    # (listed first); cutoff stays null so Bazarr still downloads the extras.
+    profiles_json=$(_bazarr_languages_profile_json "${stored_langs[@]}")
+    local enabled
+    for enabled in "${lang_code2s[@]}"; do
+        form_args+=(-F "languages-enabled=${enabled}")
+    done
+    if [ "${#lang_code2s[@]}" -gt 1 ]; then
+        form_args+=(-F "settings-general-single_language=false")
+    fi
+    form_args+=(-F "languages-profiles=${profiles_json}")
 
     http_code=$(_bazarr_post_form "$bazarr_key" "${form_args[@]}")
     if [ "$http_code" = "204" ] || [ "$http_code" = "200" ]; then
         local provider_list
         provider_list=$(IFS=,; echo "${providers[*]}")
-        log_step "Bazarr: configured (lang=${lang_code2}, score S/M=90/80, sync=on, providers=${provider_list})"
+        log_step "Bazarr: configured (lang=$(IFS=,; echo "${lang_code2s[*]}"), score S/M=90/80, sync=on, providers=${provider_list})"
         if [ -n "$os_user" ]; then
             log_step "Bazarr: OpenSubtitles.com credentials applied"
         fi

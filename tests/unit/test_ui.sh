@@ -48,6 +48,9 @@ ui_set_mode setup
 FZF_SELECT_STATUS=confirmed
 out=$(ui_picker_done indexers)
 assert_contains "$out" "No indexers selected." "setup confirm-empty"
+SELECTED_SUBTITLE_LANGUAGES=()
+out=$(ui_picker_done languages)
+assert_contains "$out" "No languages selected." "setup confirm-empty languages"
 ui_set_mode edit
 out=$(ui_picker_done indexers)
 assert_eq "" "$out" "edit confirm-empty is silent (applier syncs)"

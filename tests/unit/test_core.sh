@@ -12,6 +12,26 @@ stub_log_error_no_exit
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
+# --- tty helpers used after fzf ---
+test_suite "flush_tty_input / read_prompt"
+assert_success "flush_tty_input returns 0" flush_tty_input
+assert_true "read_prompt exists" "type read_prompt >/dev/null"
+# EOF on stdin must not trip set -e when /dev/tty is unavailable to the helper's else branch.
+src=$(sed -n '/^read_prompt()/,/^}/p' "$REPO_ROOT/lib/core.sh")
+assert_contains "$src" '</dev/tty' "read_prompt reads the tty"
+assert_contains "$src" '|| true' "read_prompt ignores EOF"
+flush_src=$(sed -n '/^flush_tty_input()/,/^}/p' "$REPO_ROOT/lib/core.sh")
+assert_contains "$flush_src" 'read -r -t' "flush drains leftover Enter"
+assert_not_contains "$flush_src" 'stty' "flush does not change stty"
+assert_contains "$src" 'EPOCHREALTIME' "read_prompt ignores instant empty (leaked Enter)"
+os_fn=$(sed -n '/^configure_opensubtitles()/,/^}/p' "$REPO_ROOT/lib/prompts.sh")
+assert_contains "$os_fn" 'ui_is_edit' "edit skips the optional y/N"
+assert_contains "$os_fn" '_opensubtitles_ask_and_verify 1' "edit goes straight to username/password"
+assert_not_contains "$os_fn" 'Answer n to clear' "edit does not ask n to clear"
+edit_os=$(sed -n '/^_config_edit_opensubtitles()/,/^}/p' "$REPO_ROOT/lib/config_edit.sh")
+assert_contains "$edit_os" 'Cancelled.' "edit cancel is one line"
+assert_not_contains "$os_fn" 'cancelled — no change' "prompt layer does not also log cancel"
+
 # --- wait_inline ---
 test_suite "wait_inline"
 assert_contains "$(wait_inline "Waiting for Radarr API" 12 2>&1)" \

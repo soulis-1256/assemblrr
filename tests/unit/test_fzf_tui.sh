@@ -48,4 +48,26 @@ assert_contains "$menu" $'all:/media/u/disk\tdisk — everything here' "linux mo
 assert_contains "$menu" $'browse\tBrowse for a folder...' "browse row"
 assert_contains "$menu" $'custom\tType paths...' "custom row"
 
+test_suite "_subtitle_stored_lang_codes / join"
+SUBTITLE_LANGUAGE="eng"
+unset SUBTITLE_LANGUAGES || true
+assert_eq "eng" "$(_subtitle_stored_lang_codes)" "legacy single language"
+SUBTITLE_LANGUAGES="eng,ell"
+assert_eq $'eng\nell' "$(_subtitle_stored_lang_codes)" "list wins over single"
+SUBTITLE_LANGUAGES="eng, ell, eng"
+assert_eq $'eng\nell' "$(_subtitle_stored_lang_codes)" "strips spaces and duplicates"
+assert_eq "eng,ell" "$(_subtitle_join_preferred_first eng ell eng)" "preferred first, unique"
+assert_eq "ell,eng" "$(_subtitle_join_preferred_first ell eng)" "greek preferred"
+
+test_suite "fzf_single_select_data default row first"
+data=$'ell\tGreek\neng\tEnglish\nfra\tFrench'
+reordered=$(
+    # Replicate the default-first reorder used by fzf_single_select_data
+    default=eng
+    preferred_row=$(printf '%s\n' "$data" | awk -F'\t' -v d="$default" '$1 == d { print; exit }')
+    rest=$(printf '%s\n' "$data" | awk -F'\t' -v d="$default" '$1 != d { print }')
+    printf '%s\n%s\n' "$preferred_row" "$rest"
+)
+assert_eq $'eng\tEnglish' "$(echo "$reordered" | head -1)" "preferred row is first"
+
 test_summary

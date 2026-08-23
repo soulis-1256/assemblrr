@@ -280,7 +280,7 @@ check_dependencies() {
 
 # --- Setup prompts (sourced from lib/prompts.sh) ---
 # Requires: lib/core.sh already sourced, constants defined above
-# fzf-tui helpers (fzf_single_select, fzf_multi_select) must be sourced before prompts
+# fzf-tui helpers (fzf_multi_select, fzf_single_select_data) must be sourced before prompts
 source "$APP_ROOT/lib/managed_files.sh"
 source "$APP_ROOT/lib/fzf-tui.sh"
 source "$APP_ROOT/lib/services.sh"
@@ -597,6 +597,7 @@ QUALITY_TIER="$(quality_tier)"
 QUALITY_SOURCE="$(quality_source)"
 SEERR_IS_4K="$(quality_seerr_is_4k)"
 SUBTITLE_LANGUAGE="${subtitle_language:-}"
+SUBTITLE_LANGUAGES="${subtitle_languages:-${subtitle_language:-}}"
 SETUP_MODE="${SETUP_MODE:-manual}"
 EOF
     chmod 600 "$config_file"
@@ -838,7 +839,11 @@ if [ "$QUALITY_TIER" = "any" ]; then
 else
     echo "  Quality profile:   $QUALITY_TIER / ${QUALITY_SOURCE:-bluray} (4K=$seerr_is_4k)"
 fi
-echo "  Subtitle language: ${subtitle_language:-en (Bazarr default)}"
+if [ -n "${subtitle_languages:-}" ] && [ "${subtitle_languages}" != "${subtitle_language:-}" ]; then
+    echo "  Subtitle languages: ${subtitle_language} (preferred), ${subtitle_languages#*,}"
+else
+    echo "  Subtitle language: ${subtitle_language:-en (Bazarr default)}"
+fi
 if [ "${opensubtitles_enabled:-n}" = "y" ]; then
     echo "  OpenSubtitles.com: yes (username=${opensubtitles_username})"
 else

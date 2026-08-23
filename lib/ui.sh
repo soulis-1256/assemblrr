@@ -67,6 +67,7 @@ ui_picker_done() {
                 case "$noun" in
                     indexers) n=${#SELECTED_INDEXERS[@]} ;;
                     providers) n=${#SELECTED_SUBTITLE_PROVIDERS[@]} ;;
+                    languages) n=${#SELECTED_SUBTITLE_LANGUAGES[@]} ;;
                 esac
                 if [ "$n" -eq 0 ]; then
                     log_info "No ${noun} selected."

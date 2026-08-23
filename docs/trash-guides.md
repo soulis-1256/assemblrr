@@ -2,7 +2,7 @@
 
 assemblrr uses [Recyclarr](https://recyclarr.dev/) to sync [TRaSH Guides](https://trash-guides.info/) quality profiles and custom formats into Radarr and Sonarr.
 
-**Subtitles:** Bazarr is wired separately (not via Recyclarr). On first install and every `assemblrr upgrade`, assemblrr applies [TRaSH Bazarr suggested scoring](https://trash-guides.info/Bazarr/Bazarr-suggested-scoring/) (series min score 90, movies 80, auto-sync thresholds 96/86). Subtitle providers are chosen interactively from the running Bazarr image (fzf multi-select; nothing enabled unless you pick it). OpenSubtitles.com is enabled only when you saved credentials during setup.
+**Subtitles:** Bazarr is wired separately (not via Recyclarr). On first install and every `assemblrr upgrade`, assemblrr applies [TRaSH Bazarr suggested scoring](https://trash-guides.info/Bazarr/Bazarr-suggested-scoring/) (series min score 90, movies 80, auto-sync thresholds 96/86). Subtitle languages are a two-step fzf: multi-select what to download, then (if more than one) which Jellyfin should prefer. Providers are chosen interactively from the running Bazarr image (fzf multi-select; nothing enabled unless you pick it). OpenSubtitles.com is enabled only when you saved credentials during setup.
 
 **Both resolutions and both movie sources are always installed** as assemblrr-named profiles:
 

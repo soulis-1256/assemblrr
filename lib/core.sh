@@ -926,6 +926,42 @@ run_docker() {
     return $exit_code
 }
 
+# Discard a pending line on the tty (fzf's confirming Enter). Non-blocking.
+flush_tty_input() {
+    local __ft_junk
+    [ -r /dev/tty ] || return 0
+    read -r -t 0.01 __ft_junk </dev/tty || true
+    return 0
+}
+
+# Prompt and read a line from the tty. Never trips set -e on EOF.
+# After fzf, Enter is often still queued: that arrives as an instant empty
+# answer. Ignore one of those and ask again so the user actually sees the prompt.
+read_prompt() {
+    local prompt="$1"
+    local __rp_var="$2"
+    local __rp_reply=""
+    local __rp_t0 __rp_t1
+
+    _read_prompt_once() {
+        __rp_reply=""
+        if [ -r /dev/tty ]; then
+            read -r -p "$prompt" __rp_reply </dev/tty || true
+        else
+            read -r -p "$prompt" __rp_reply || true
+        fi
+    }
+
+    __rp_t0=${EPOCHREALTIME-}
+    _read_prompt_once
+    __rp_t1=${EPOCHREALTIME-}
+    if [ -z "$__rp_reply" ] && [ -n "$__rp_t0" ] && [ -n "$__rp_t1" ] \
+        && awk -v a="$__rp_t0" -v b="$__rp_t1" 'BEGIN { exit (b - a < 0.25) ? 0 : 1 }'; then
+        _read_prompt_once
+    fi
+    printf -v "$__rp_var" '%s' "$__rp_reply"
+}
+
 # --- Masked input ---
 # Read masked input (shows asterisks for each character, works in WSL2)
 read_masked() {

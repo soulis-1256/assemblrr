@@ -319,6 +319,8 @@ configure_jellyfin_libraries() {
     # otherwise Jellyfin wipes all other user settings.
     if [ -n "$user_id" ]; then
         local sub_lang="${SUBTITLE_LANGUAGE:-en}"
+        sub_lang="${sub_lang%%,*}"
+        sub_lang=${sub_lang// /}
 
         # Convert ISO 639-1 (two-letter) to ISO 639-2/T (three-letter) code
         # Jellyfin uses ISO 639-2/T (e.g., "eng" not "en"), so we must convert.

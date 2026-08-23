@@ -1,7 +1,7 @@
 #!/bin/bash
 # fzf-based TUI for selections (Prowlarr indexers, Bazarr providers, languages, paths)
 # Provides reusable fzf selection patterns for assemblrr.
-# Sets SELECTED_INDEXERS / SELECTED_SUBTITLE_PROVIDERS arrays.
+# Sets SELECTED_INDEXERS / SELECTED_SUBTITLE_PROVIDERS / SELECTED_SUBTITLE_LANGUAGES arrays.
 # Usage: source lib/fzf-tui.sh; configure_indexers "$api_key"
 
 set -euo pipefail
@@ -12,6 +12,32 @@ _fzf_tui_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 SELECTED_INDEXERS=()
 SELECTED_SUBTITLE_PROVIDERS=()
+SELECTED_SUBTITLE_LANGUAGES=()
+
+# Stored picker codes, preferred first. SUBTITLE_LANGUAGES="eng,ell" wins;
+# otherwise SUBTITLE_LANGUAGE (legacy single value).
+_subtitle_stored_lang_codes() {
+    local raw="${SUBTITLE_LANGUAGES:-${SUBTITLE_LANGUAGE:-}}"
+    raw=${raw// /}
+    [ -z "$raw" ] && return 0
+    echo "$raw" | tr ',' '\n' | awk 'NF && !seen[$0]++'
+}
+
+# $1 = preferred code; remaining args = the full set (may include preferred).
+# Prints comma-separated, preferred first, unique.
+_subtitle_join_preferred_first() {
+    local preferred="${1:-}"
+    shift || true
+    local -a out=()
+    local c
+    [ -n "$preferred" ] && out+=("$preferred")
+    for c in "$@"; do
+        [ -z "$c" ] && continue
+        [ "$c" = "$preferred" ] && continue
+        out+=("$c")
+    done
+    (IFS=,; echo "${out[*]}")
+}
 
 # --- TTY detection (reused across functions) ---
 _fzf_has_tty() {
@@ -239,56 +265,61 @@ pick_storage_paths() {
     done
 }
 
-# --- Generic single-select fzf (for languages, etc.) ---
-# Args: $1 = url, $2 = awk filter, $3 = default (on failure)
-# Output: selected value or $3
-# Pre-selects "None" by default; Enter confirms, arrows change selection
-fzf_single_select() {
-    local url="$1"
-    local awk_filter="$2"
-    local default="${3:-}"
-
-    local has_tty=false
-    _fzf_has_tty && has_tty=true
-
-    # Download and parse
-    local data
-    data=$(curl -sf --connect-timeout 5 "$url" 2>/dev/null | awk -F'|' "$awk_filter" | sort -k2) || true
+# Single-select from TSV rows (first column is the value).
+# Args: $1 = data, $2 = prompt, $3 = header, $4 = default (Esc / empty / no TTY)
+# Puts the default row first so fzf highlights it.
+fzf_single_select_data() {
+    local data="$1"
+    local prompt="${2:-Select> }"
+    local header="${3:-↑↓=navigate  Enter=confirm  Esc=default}"
+    local default="${4:-}"
 
     if [ -z "$data" ]; then
-        [ -n "$default" ] && echo "$default"
+        echo "$default"
         return 0
     fi
 
-    # Prepend "None" as first option (pre-selected)
-    data=$'None\tNo subtitle language preference\n'"$data"
+    if [ -n "$default" ]; then
+        local preferred_row rest
+        preferred_row=$(printf '%s\n' "$data" | awk -F'\t' -v d="$default" '$1 == d { print; exit }')
+        rest=$(printf '%s\n' "$data" | awk -F'\t' -v d="$default" '$1 != d { print }')
+        if [ -n "$preferred_row" ]; then
+            data="$preferred_row"
+            [ -n "$rest" ] && data+=$'\n'"$rest"
+        fi
+    fi
 
-    # If no TTY, show list and prompt
-    if ! $has_tty; then
+    if ! _fzf_has_tty; then
         echo "$data" | head -25 >&2
-        echo "Enter selection (default: None): " >&2
+        echo "Enter selection (default: ${default:-first}): " >&2
+        local input=""
         read -r input || true
         if [ -z "$input" ]; then
-            [ -n "$default" ] && echo "$default"
+            if [ -n "$default" ]; then
+                echo "$default"
+            else
+                echo "$data" | head -1 | cut -f1
+            fi
         else
             echo "$input" | cut -f1
         fi
         return 0
     fi
 
-    # fzf single-select with None pre-selected
     local selected
     selected=$(echo "$data" | fzf \
-        --prompt="Subtitle language> " \
-        --height=60% \
+        --prompt="$prompt" \
+        --height=40% \
         --reverse \
         --border \
-        --header="↑↓=navigate  Enter=confirm  Esc=default" \
+        --header="$header" \
+        --delimiter=$'\t' \
+        --with-nth=1..2 \
         --scrollbar='│' \
         2>/dev/null | cut -f1) || true
 
-    if [ -z "$selected" ] || [ "$selected" = "None" ]; then
-        [ -n "$default" ] && echo "$default" || echo ""
+    if [ -z "$selected" ]; then
+        echo "$default"
     else
         echo "$selected"
     fi
