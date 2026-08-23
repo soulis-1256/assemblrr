@@ -170,6 +170,44 @@ _bazarr_code2_list() {
     printf '%s\n' "${out[@]}"
 }
 
+# TRaSH 90/80 assumes hash-rich English catalogs. Non-English OpenSubtitles.com
+# hits typically miss hash and source (WEB-DL vs community BluRay) and score ~55-74,
+# so a 90/80 floor skips them. Subsync still retimes anything below 96/86.
+# Prints: "<series> <movie>"
+_bazarr_min_scores() {
+    local series=90 movie=80 c mapped
+    for c in "$@"; do
+        mapped=$(_bazarr_lang_code2 "$c")
+        if [ "$mapped" != "en" ]; then
+            series=70
+            movie=50
+            break
+        fi
+    done
+    echo "$series $movie"
+}
+
+# Append a provider if it is not already in the providers array.
+_bazarr_providers_add() {
+    local name="$1" p
+    for p in "${providers[@]+"${providers[@]}"}"; do
+        [ "$p" = "$name" ] && return 0
+    done
+    providers+=("$name")
+}
+
+# Providers that actually carry a language. Only when the picker did not
+# confirm a set (same rule as auto-adding OpenSubtitles.com).
+_bazarr_add_language_providers() {
+    local code
+    [ "${FZF_SELECT_STATUS:-}" = "confirmed" ] && return 0
+    for code in "$@"; do
+        case "$code" in
+            el) _bazarr_providers_add greeksubs ;;
+        esac
+    done
+}
+
 # Default profile JSON: every language in the list, no cutoff (download all of them).
 _bazarr_languages_profile_json() {
     local langs_json
@@ -227,7 +265,6 @@ _bazarr_jellyfin_libraries() {
 
 configure_bazarr() {
     local bazarr_key=""
-    local lang_code2
     local os_user="" os_pass=""
     local form_args=()
     local http_code
@@ -256,7 +293,6 @@ configure_bazarr() {
     while IFS= read -r lang_code2; do
         [ -n "$lang_code2" ] && lang_code2s+=("$lang_code2")
     done < <(_bazarr_code2_list "${stored_langs[@]}")
-    lang_code2="${lang_code2s[0]}"
 
     if [ -n "${SONARR_API_KEY:-}" ]; then
         has_sonarr=1
@@ -310,12 +346,17 @@ configure_bazarr() {
         fi
     fi
 
+    _bazarr_add_language_providers "${lang_code2s[@]}"
+
+    local min_series=90 min_movie=80
+    read -r min_series min_movie < <(_bazarr_min_scores "${stored_langs[@]}")
+
     # --- Core integrations + TRaSH-style scoring ---
     form_args=(
         -F "settings-general-use_sonarr=$([ "$has_sonarr" -eq 1 ] && echo true || echo false)"
         -F "settings-general-use_radarr=$([ "$has_radarr" -eq 1 ] && echo true || echo false)"
-        -F "settings-general-minimum_score=90"
-        -F "settings-general-minimum_score_movie=80"
+        -F "settings-general-minimum_score=${min_series}"
+        -F "settings-general-minimum_score_movie=${min_movie}"
         -F "settings-general-subfolder=current"
         -F "settings-general-upgrade_subs=true"
         -F "settings-general-days_to_upgrade_subs=7"
@@ -439,7 +480,7 @@ configure_bazarr() {
     if [ "$http_code" = "204" ] || [ "$http_code" = "200" ]; then
         local provider_list
         provider_list=$(IFS=,; echo "${providers[*]}")
-        log_step "Bazarr: configured (lang=$(IFS=,; echo "${lang_code2s[*]}"), score S/M=90/80, sync=on, providers=${provider_list})"
+        log_step "Bazarr: configured (lang=$(IFS=,; echo "${lang_code2s[*]}"), score S/M=${min_series}/${min_movie}, sync=on, providers=${provider_list})"
         if [ -n "$os_user" ]; then
             log_step "Bazarr: OpenSubtitles.com credentials applied"
         fi
@@ -457,15 +498,21 @@ configure_bazarr() {
     echo -n "$bazarr_key" > "$INSTALL_DIR/secrets/bazarr_api_key.txt"
     chmod 600 "$INSTALL_DIR/secrets/bazarr_api_key.txt" 2>/dev/null || true
 
-    # Kick library sync tasks (best-effort; scheduler also runs on interval)
+    # Kick library sync, then search wanted now (don't wait for the 6h interval).
     if [ "$has_sonarr" -eq 1 ]; then
         curl -s -o /dev/null --connect-timeout 5 -X POST \
             -F "taskid=update_series" \
+            "http://${API_HOST}:${BAZARR_PORT}/api/system/tasks?apikey=${bazarr_key}" 2>/dev/null || true
+        curl -s -o /dev/null --connect-timeout 5 -X POST \
+            -F "taskid=wanted_search_missing_subtitles_series" \
             "http://${API_HOST}:${BAZARR_PORT}/api/system/tasks?apikey=${bazarr_key}" 2>/dev/null || true
     fi
     if [ "$has_radarr" -eq 1 ]; then
         curl -s -o /dev/null --connect-timeout 5 -X POST \
             -F "taskid=update_movies" \
+            "http://${API_HOST}:${BAZARR_PORT}/api/system/tasks?apikey=${bazarr_key}" 2>/dev/null || true
+        curl -s -o /dev/null --connect-timeout 5 -X POST \
+            -F "taskid=wanted_search_missing_subtitles_movies" \
             "http://${API_HOST}:${BAZARR_PORT}/api/system/tasks?apikey=${bazarr_key}" 2>/dev/null || true
     fi
 

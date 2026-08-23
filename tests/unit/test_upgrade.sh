@@ -47,6 +47,30 @@ assert_eq "en" "$(echo "$profile" | jq -r '.[0].items[0].language')" "preferred 
 assert_eq "el" "$(echo "$profile" | jq -r '.[0].items[1].language')" "greek second"
 assert_eq "null" "$(echo "$profile" | jq -r '.[0].cutoff')" "no cutoff so extras still download"
 
+test_suite "_bazarr_min_scores TRaSH for English, lenient otherwise"
+assert_eq "90 80" "$(_bazarr_min_scores eng)" "english 3-letter keeps TRaSH"
+assert_eq "90 80" "$(_bazarr_min_scores en)" "english 2-letter keeps TRaSH"
+assert_eq "90 80" "$(_bazarr_min_scores)" "empty stays TRaSH"
+assert_eq "70 50" "$(_bazarr_min_scores ell)" "greek alone is lenient"
+assert_eq "70 50" "$(_bazarr_min_scores eng ell)" "english+greek is lenient"
+assert_eq "70 50" "$(_bazarr_min_scores de)" "german is lenient"
+
+test_suite "_bazarr_add_language_providers greeksubs"
+providers=()
+FZF_SELECT_STATUS=""
+_bazarr_add_language_providers el en
+assert_eq "greeksubs" "${providers[*]}" "adds greeksubs for el"
+providers=(opensubtitlescom)
+_bazarr_add_language_providers el
+assert_eq "opensubtitlescom greeksubs" "${providers[*]}" "keeps existing and appends"
+providers=(greeksubs)
+_bazarr_add_language_providers el
+assert_eq "greeksubs" "${providers[*]}" "does not duplicate"
+providers=()
+FZF_SELECT_STATUS="confirmed"
+_bazarr_add_language_providers el
+assert_eq "" "${providers[*]-}" "respects confirmed picker"
+
 test_suite "migration 001 skip when custom.yaml has bazarr"
 tmp="" tmp2=""
 tmp=$(mktemp -d)
