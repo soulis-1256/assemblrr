@@ -90,23 +90,28 @@ assert_eq "n" "${vuetorrent_enabled:-}" "selecting qui clears vuetorrent_enabled
 edit_qbit_out=$(ui_set_mode edit && QBIT_UI=vuetorrent SETUP_MODE=manual configure_qbit_ui <<< "vuetorrent" 2>&1)
 assert_contains "$edit_qbit_out" "[active]" "edit mode marks current qBittorrent UI [active]"
 
-test_suite "qui password precedence and <8-char validation"
+test_suite "qui shared password sync (<8 chars) & :8081 redirect"
 # shellcheck source=/dev/null
 source "$REPO_ROOT/lib/api.sh"
 log_step() { :; }
 log_step_fail() { echo "fail: $1" >&2; }
 
-mkdir -p "$tmp/secrets"
+mkdir -p "$tmp/secrets" "$tmp/config/qui"
 assert_eq "fallback" "$(INSTALL_DIR="$tmp" QUI_PASSWORD='' AUTH_PASSWORD=fallback _qui_login_password)" "falls back to AUTH_PASSWORD when no qui_password.txt"
-printf '%s' 'from-secret-file' > "$tmp/secrets/qui_password.txt"
-assert_eq "from-secret-file" "$(INSTALL_DIR="$tmp" QUI_PASSWORD='' AUTH_PASSWORD=fallback _qui_login_password)" "prefers secrets/qui_password.txt over AUTH_PASSWORD"
-assert_eq "from-env" "$(INSTALL_DIR="$tmp" QUI_PASSWORD=from-env AUTH_PASSWORD=fallback _qui_login_password)" "prefers QUI_PASSWORD env over secret file"
+assert_eq "from-env" "$(INSTALL_DIR="$tmp" QUI_PASSWORD=from-env AUTH_PASSWORD=fallback _qui_login_password)" "prefers QUI_PASSWORD env over AUTH_PASSWORD"
 
-rm -f "$tmp/secrets/qui_password.txt"
-qui_short_out=""
-qui_short_rc=0
-qui_short_out=$(ASSEMBLRR_NONINTERACTIVE=1 QBIT_UI=qui INSTALL_DIR="$tmp" AUTH_USERNAME=alice AUTH_PASSWORD=short configure_qui 17476 2>&1) || qui_short_rc=$?
-assert_eq "1" "$qui_short_rc" "configure_qui rejects <8-char password in non-interactive mode"
-assert_contains "$qui_short_out" "at least 8 characters" "failure message explains 8-character minimum"
+: > "$tmp/config/qui/qui.db"
+INSTALL_DIR="$tmp" _qui_sync_db_user "alice" "1234"
+db_row=$(python3 -c 'import sqlite3,sys; con=sqlite3.connect(sys.argv[1]); print(con.execute("SELECT username, substr(password_hash,1,10) FROM user WHERE id=1").fetchone())' "$tmp/config/qui/qui.db")
+assert_contains "$db_row" "'alice'" "_qui_sync_db_user stores shared username in qui.db"
+assert_contains "$db_row" "'\$argon2id\$'" "_qui_sync_db_user writes Argon2id hash for <8-char password"
+
+QBIT_UI=qui VUETORRENT_ENABLED=n install_directory="$tmp" auth_username="alice" auth_password="1234" write_qbittorrent_config >/dev/null
+assert_true "qui redirect index.html created" "[ -f \"$tmp/config/qbittorrent/qui-redirect/public/index.html\" ]"
+assert_true "qui redirect login.html created" "[ -f \"$tmp/config/qbittorrent/qui-redirect/public/login.html\" ]"
+assert_contains "$(cat "$tmp/config/qbittorrent/qBittorrent/qBittorrent.conf")" "WebUI\\RootFolder=/config/qui-redirect" "qBittorrent.conf points :8081 to qui-redirect when QBIT_UI=qui"
+qui_prefs=$(QBIT_UI=qui VUETORRENT_ENABLED=n qbit_core_prefs_json)
+assert_contains "$qui_prefs" '"alternative_webui_enabled":true' "qbit_core_prefs_json enables alt WebUI for qui redirect"
+assert_contains "$qui_prefs" '"alternative_webui_path":"/config/qui-redirect"' "qbit_core_prefs_json sets qui-redirect path"
 
 test_summary

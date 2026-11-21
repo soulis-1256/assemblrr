@@ -41,7 +41,7 @@ assert_eq "$gid" "$(stat -c '%g' "$tmp/config")" "config owned by gid"
 
 test_suite "prepare_install_dirs is idempotent"
 prepare_install_dirs "$tmp" "$uid" "$gid"
-assert_true "still writable after second call" "[ -w \"$tmp/config/seerr\" ]"
+assert_true "still writable after second call" "[ -w \"$tmp/config/radarr\" ]"
 
 test_suite "mkdir under config after prepare"
 assert_success "can create sibling of gluetun" mkdir -p "$tmp/config/__test_sibling"

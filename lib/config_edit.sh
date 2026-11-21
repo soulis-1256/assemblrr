@@ -697,6 +697,7 @@ _config_edit_qbit_ui() {
     qbit_set_credentials || true
     if qbit_qui_enabled; then
         configure_qui || true
+        log_success "qui WebUI ready at http://localhost:7476/ (:8081 redirects automatically)"
     fi
 }
 

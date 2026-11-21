@@ -415,12 +415,12 @@ configure_qbit_ui() {
     if type _tui_pad_ansi >/dev/null 2>&1; then
         rows=$(printf '%s\t%s  %s  %s\n' \
             "vuetorrent" "$(_tui_pad_ansi "vuetorrent" 10)" "$(_tui_pad_ansi "$b_vue" 8 32)"   "Modern theme inside qBittorrent (:8081, no extra container)" \
-            "qui"        "$(_tui_pad_ansi "qui" 10)"        "$(_tui_pad_ansi "$b_qui" 8 32)"   "Fast Go+React standalone UI (:7476, keeps stock qBit on :8081)" \
+            "qui"        "$(_tui_pad_ansi "qui" 10)"        "$(_tui_pad_ansi "$b_qui" 8 32)"   "Fast Go+React standalone UI (:7476, :8081 redirects to :7476)" \
             "stock"      "$(_tui_pad_ansi "stock" 10)"      "$(_tui_pad_ansi "$b_stock" 8 32)" "Built-in default qBittorrent WebUI (:8081)")
     else
         rows=$(printf '%s\t%s\n' \
             "vuetorrent" "VueTorrent — Modern theme inside qBittorrent (:8081, no extra container)" \
-            "qui"        "qui — Fast Go+React standalone UI (:7476, keeps stock qBit on :8081)" \
+            "qui"        "qui — Fast Go+React standalone UI (:7476, :8081 redirects to :7476)" \
             "stock"      "Stock — Built-in default qBittorrent WebUI (:8081)")
     fi
 

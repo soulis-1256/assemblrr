@@ -45,6 +45,20 @@ qbit_generate_pbkdf2() {
     fi
 }
 
+_write_qui_redirect_webui() {
+    local base_dir="${1:-${install_directory:-${INSTALL_DIR:-}}}"
+    [ -n "$base_dir" ] || return 1
+    local pub_dir="$base_dir/config/qbittorrent/qui-redirect/public"
+    mkdir -p "$pub_dir"
+    cat <<'EOF' > "$pub_dir/index.html"
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Redirecting to qui…</title>
+<script>window.location.replace(window.location.protocol + "//" + window.location.hostname + ":7476/");</script>
+</head><body>Redirecting to <a href=":7476/">qui (:7476)</a>…</body></html>
+EOF
+    cp "$pub_dir/index.html" "$pub_dir/login.html"
+}
+
 # Write qBittorrent.conf pre-start (always preserves VPN tun0 bind even if python3 is absent).
 write_qbittorrent_config() {
     local base_dir="${install_directory:-${INSTALL_DIR:-}}"
@@ -57,7 +71,15 @@ write_qbittorrent_config() {
     pbkdf2_hash=$(qbit_generate_pbkdf2 "${auth_password:-${AUTH_PASSWORD:-}}")
     local user="${auth_username:-${AUTH_USERNAME:-admin}}"
     local alt_ui="false"
-    qbit_vuetorrent_enabled && alt_ui="true"
+    local alt_root=""
+    if qbit_vuetorrent_enabled; then
+        alt_ui="true"
+        alt_root="/vuetorrent"
+    elif qbit_qui_enabled; then
+        _write_qui_redirect_webui "$base_dir" || true
+        alt_ui="true"
+        alt_root="/config/qui-redirect"
+    fi
 
     (
         umask 077
@@ -75,7 +97,7 @@ write_qbittorrent_config() {
             printf 'WebUI\\Port=8081\n'
             if [ "$alt_ui" = "true" ]; then
                 printf 'WebUI\\AlternativeUIEnabled=true\n'
-                printf 'WebUI\\RootFolder=/vuetorrent\n'
+                printf 'WebUI\\RootFolder=%s\n' "$alt_root"
             else
                 printf 'WebUI\\AlternativeUIEnabled=false\n'
             fi
@@ -92,7 +114,7 @@ write_qbittorrent_config() {
     fi
 }
 
-# setPreferences JSON: save paths, ATM, tun0 (when VPN is on), VueTorrent WebUI, optional creds.
+# setPreferences JSON: save paths, ATM, tun0 (when VPN is on), VueTorrent/qui-redirect WebUI, optional creds.
 qbit_core_prefs_json() {
     local user="${1:-}"
     local pass="${2:-}"
@@ -105,6 +127,9 @@ qbit_core_prefs_json() {
     if qbit_vuetorrent_enabled; then
         alt_ui=true
         alt_path="/vuetorrent"
+    elif qbit_qui_enabled; then
+        alt_ui=true
+        alt_path="/config/qui-redirect"
     fi
 
     if [ -n "$user" ]; then
@@ -395,47 +420,75 @@ _qui_login() {
         -c "$jar" -H "Content-Type: application/json" -H "X-Requested-With: XMLHttpRequest" -d "$payload" || return 1
 }
 
+# Write/update the single qui user (id=1) in config/qui/qui.db with an Argon2id hash.
+# Upstream qui's HTTP /api/auth/setup & /api/auth/change-password enforce >=8 chars,
+# whereas /api/auth/login verifies the stored Argon2id hash of any length. Writing
+# the Argon2id hash directly preserves "one username/password for the whole stack".
+_qui_sync_db_user() {
+    local user="$1"
+    local pass="$2"
+    local base="${INSTALL_DIR:-${install_directory:-}}"
+    [ -n "$base" ] && [ -n "$user" ] && [ -n "$pass" ] || return 1
+    local db_path="$base/config/qui/qui.db"
+    [ -f "$db_path" ] || return 1
+    command -v python3 >/dev/null 2>&1 || return 1
+    command -v openssl >/dev/null 2>&1 || return 1
+
+    QUI_DB_PATH="$db_path" QUI_DB_USER="$user" QUI_DB_PASS="$pass" python3 - <<'PY' >/dev/null 2>&1
+import base64, os, sqlite3, subprocess
+
+db_path = os.environ["QUI_DB_PATH"]
+user = os.environ["QUI_DB_USER"]
+pw = os.environ["QUI_DB_PASS"]
+
+salt = os.urandom(16)
+out_hex = subprocess.check_output([
+    "openssl", "kdf", "-keylen", "32",
+    "-kdfopt", f"pass:{pw}",
+    "-kdfopt", f"hexsalt:{salt.hex()}",
+    "-kdfopt", "iter:3",
+    "-kdfopt", "memcost:65536",
+    "-kdfopt", "lanes:2",
+    "-kdfopt", "threads:1",
+    "ARGON2ID",
+], stderr=subprocess.DEVNULL).decode().strip().replace(":", "")
+salt_b64 = base64.b64encode(salt).decode().rstrip("=")
+hash_b64 = base64.b64encode(bytes.fromhex(out_hex)).decode().rstrip("=")
+encoded = f"$argon2id$v=19$m=65536,t=3,p=2${salt_b64}${hash_b64}"
+
+con = sqlite3.connect(db_path, timeout=10)
+cur = con.cursor()
+cur.execute("""CREATE TABLE IF NOT EXISTS user (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)""")
+cur.execute("SELECT id FROM user WHERE id = 1")
+if cur.fetchone():
+    cur.execute("UPDATE user SET username = ?, password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1", (user, encoded))
+else:
+    cur.execute("INSERT INTO user (id, username, password_hash) VALUES (1, ?, ?)", (user, encoded))
+con.commit()
+con.close()
+PY
+}
+
 configure_qui() {
     qbit_qui_enabled || return 0
     local qui_port="${1:-7476}"
     _QUI_PORT="$qui_port"
 
     local qui_user="${QUI_USERNAME:-${AUTH_USERNAME:-}}"
-    local qui_pass secret_path
-    qui_pass=$(_qui_login_password)
+    local qui_pass="${QUI_PASSWORD:-${AUTH_PASSWORD:-}}"
+    local secret_path
     secret_path=$(_qui_secret_path)
+    [ -n "$secret_path" ] && rm -f "$secret_path" 2>/dev/null || true
 
-    if [ -z "$qui_user" ] || [ -z "${AUTH_PASSWORD:-}" ]; then
+    if [ -z "$qui_user" ] || [ -z "$qui_pass" ]; then
         log_step_fail "qui: auth credentials missing"
         return 1
-    fi
-
-    # Upstream qui requires >= 8-char password for its own account; qBittorrent instance uses shared password.
-    if [ "${#qui_pass}" -lt 8 ]; then
-        if [ -t 0 ] && [ -r /dev/tty ] && [ "${ASSEMBLRR_NONINTERACTIVE:-0}" != "1" ] && type read_masked >/dev/null 2>&1; then
-            log_info "qui requires a login password of at least 8 characters (qBittorrent keeps your shared password)."
-            local confirm=""
-            while true; do
-                qui_pass=""
-                read_masked "qui login password (min 8 chars): " qui_pass
-                if [ "${#qui_pass}" -lt 8 ]; then
-                    log_warning "Password must be at least 8 characters."
-                    continue
-                fi
-                read_masked "Confirm qui password: " confirm
-                if [ "$qui_pass" != "$confirm" ]; then
-                    log_warning "Passwords do not match. Try again."
-                    continue
-                fi
-                break
-            done
-            if [ -n "$secret_path" ]; then
-                write_secret_file "$secret_path" "$qui_pass"
-            fi
-        else
-            log_step_fail "qui: login password must be at least 8 characters (update via '${APP_CLI_NAME:-assemblrr} config edit' -> auth or qbit-ui)"
-            return 1
-        fi
     fi
 
     if ! wait_until "Waiting for qui UI" 60 2 _qui_is_up; then
@@ -445,10 +498,16 @@ configure_qui() {
 
     local jar
     jar=$(mktemp)
-    local setup_payload
-    setup_payload=$(jq -nc --arg u "$qui_user" --arg p "$qui_pass" '{username:$u,password:$p}')
-    if ! http_request POST "http://${API_HOST}:${qui_port}/api/auth/setup" \
-        -c "$jar" -H "Content-Type: application/json" -H "X-Requested-With: XMLHttpRequest" -d "$setup_payload"; then
+    if ! _qui_login "$jar" "$qui_user" "$qui_pass" "$qui_port"; then
+        local boot_pass="$qui_pass"
+        [ "${#boot_pass}" -lt 8 ] && boot_pass="${qui_pass}__assemblrr_init"
+        local setup_payload
+        setup_payload=$(jq -nc --arg u "$qui_user" --arg p "$boot_pass" '{username:$u,password:$p}')
+        http_request POST "http://${API_HOST}:${qui_port}/api/auth/setup" \
+            -c "$jar" -H "Content-Type: application/json" -H "X-Requested-With: XMLHttpRequest" -d "$setup_payload" || true
+        if [ "$boot_pass" != "$qui_pass" ] || ! _qui_login "$jar" "$qui_user" "$qui_pass" "$qui_port"; then
+            _qui_sync_db_user "$qui_user" "$qui_pass" || true
+        fi
         if ! _qui_login "$jar" "$qui_user" "$qui_pass" "$qui_port"; then
             rm -f "$jar"
             log_step_fail "qui: could not initialize or log in as ${qui_user} (HTTP ${HTTP_STATUS})"
@@ -498,65 +557,39 @@ qui_change_credentials() {
     local qui_port="${5:-7476}"
 
     qbit_qui_enabled || return 0
-    if [ -z "$new_pass" ]; then
-        log_step_fail "qui: new password missing"
+    if [ -z "$new_user" ] || [ -z "$new_pass" ]; then
+        log_step_fail "qui: new credentials missing"
         return 1
     fi
 
-    local secret_path cur_pass=""
+    local secret_path
     secret_path=$(_qui_secret_path)
-    if [ -n "$secret_path" ] && [ -s "$secret_path" ]; then
-        cur_pass=$(cat "$secret_path" 2>/dev/null || true)
-    fi
-    cur_pass="${cur_pass:-$old_pass}"
-
-    if [ "${#new_pass}" -lt 8 ]; then
-        if [ "${#cur_pass}" -lt 8 ]; then
-            log_step_fail "qui: password must be at least 8 characters"
-            return 1
-        fi
-        log_info "qui: keeping separate qui login password (qui requires 8+ chars)"
-        QUI_USERNAME="$old_user" QUI_PASSWORD="$cur_pass" \
-            AUTH_USERNAME="$new_user" AUTH_PASSWORD="$new_pass" \
-            configure_qui "$qui_port"
-        return $?
-    fi
-
-    local jar login_pass=""
-    jar=$(mktemp)
-    if _qui_login "$jar" "$old_user" "$cur_pass" "$qui_port"; then
-        login_pass="$cur_pass"
-    elif [ "$cur_pass" != "$old_pass" ] && _qui_login "$jar" "$old_user" "$old_pass" "$qui_port"; then
-        login_pass="$old_pass"
-    else
-        if _qui_login "$jar" "$old_user" "$new_pass" "$qui_port" || \
-           _qui_login "$jar" "$new_user" "$new_pass" "$qui_port"; then
-            rm -f "$jar"
-            [ -n "$secret_path" ] && rm -f "$secret_path" 2>/dev/null || true
-            QUI_USERNAME="$old_user" QUI_PASSWORD="$new_pass" \
-                AUTH_USERNAME="$new_user" AUTH_PASSWORD="$new_pass" \
-                configure_qui "$qui_port" || true
-            log_step "qui: already using the new password"
-            return 0
-        fi
-        rm -f "$jar"
-        log_step_fail "qui: could not log in with old password"
-        return 1
-    fi
-
-    local ch_payload
-    ch_payload=$(jq -nc --arg c "$login_pass" --arg n "$new_pass" '{currentPassword:$c,newPassword:$n}')
-    if ! _qui_api PUT "$qui_port" "/api/auth/change-password" "$jar" -d "$ch_payload"; then
-        rm -f "$jar"
-        log_step_fail "qui: password change failed (HTTP ${HTTP_STATUS})"
-        return 1
-    fi
-    rm -f "$jar"
-
     [ -n "$secret_path" ] && rm -f "$secret_path" 2>/dev/null || true
-    QUI_USERNAME="$old_user" QUI_PASSWORD="$new_pass" \
+
+    local updated=0
+    if _qui_sync_db_user "$new_user" "$new_pass"; then
+        updated=1
+    elif [ "$old_user" = "$new_user" ] && [ "${#new_pass}" -ge 8 ]; then
+        local jar
+        jar=$(mktemp)
+        if _qui_login "$jar" "$old_user" "$old_pass" "$qui_port"; then
+            local ch_payload
+            ch_payload=$(jq -nc --arg c "$old_pass" --arg n "$new_pass" '{currentPassword:$c,newPassword:$n}')
+            if _qui_api PUT "$qui_port" "/api/auth/change-password" "$jar" -d "$ch_payload"; then
+                updated=1
+            fi
+        fi
+        rm -f "$jar"
+    fi
+
+    if [ "$updated" -eq 0 ]; then
+        log_step_fail "qui: password change failed"
+        return 1
+    fi
+
+    QUI_USERNAME="$new_user" QUI_PASSWORD="$new_pass" \
         AUTH_USERNAME="$new_user" AUTH_PASSWORD="$new_pass" \
-        configure_qui "$qui_port" || true
-    log_step "qui: updated password for ${old_user}"
+        configure_qui "$qui_port" || return 1
+    log_step "qui: updated credentials for ${new_user}"
     return 0
 }
