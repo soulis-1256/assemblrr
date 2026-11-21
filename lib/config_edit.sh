@@ -433,6 +433,8 @@ _config_edit_indexers() {
     wait_for_arr_indexer_sync "$RADARR_API_KEY" || true
     arr_set_indexer_min_seeders "Radarr" "7878" "$RADARR_API_KEY" || true
     arr_set_indexer_min_seeders "Sonarr" "8989" "$SONARR_API_KEY" || true
+    [ -n "${RADARR_API_KEY:-}" ] && api_post "7878" "/api/v3/command" "$RADARR_API_KEY" '{"name":"MissingMoviesSearch"}' >/dev/null 2>&1 || true
+    [ -n "${SONARR_API_KEY:-}" ] && api_post "8989" "/api/v3/command" "$SONARR_API_KEY" '{"name":"MissingEpisodeSearch"}' >/dev/null 2>&1 || true
 }
 
 _config_edit_providers() {
@@ -744,6 +746,8 @@ _config_edit_byparr() {
             [ -n "${RADARR_API_KEY:-}" ] && wait_for_arr_indexer_sync "$RADARR_API_KEY" || true
             [ -n "${RADARR_API_KEY:-}" ] && arr_set_indexer_min_seeders "Radarr" "7878" "$RADARR_API_KEY" || true
             [ -n "${SONARR_API_KEY:-}" ] && arr_set_indexer_min_seeders "Sonarr" "8989" "$SONARR_API_KEY" || true
+            [ -n "${RADARR_API_KEY:-}" ] && api_post "7878" "/api/v3/command" "$RADARR_API_KEY" '{"name":"MissingMoviesSearch"}' >/dev/null 2>&1 || true
+            [ -n "${SONARR_API_KEY:-}" ] && api_post "8989" "/api/v3/command" "$SONARR_API_KEY" '{"name":"MissingEpisodeSearch"}' >/dev/null 2>&1 || true
         fi
     fi
 }
