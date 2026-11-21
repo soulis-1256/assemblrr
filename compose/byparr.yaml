@@ -1,4 +1,4 @@
-# Overlay: Byparr Cloudflare challenge solver (drop-in FlareSolverr replacement for Prowlarr)
+# Overlay: Byparr headless-browser HTTP proxy (FlareSolverr-compatible proxy for Prowlarr)
 services:
   byparr:
     image: ghcr.io/thephaseless/byparr:3.1.1

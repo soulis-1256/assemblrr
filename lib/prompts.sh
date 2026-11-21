@@ -592,17 +592,17 @@ configure_byparr() {
         case "${BYPARR_ENABLED:-n}" in y|Y) cur="y" ;; esac
         [ "$cur" = "y" ] && b_y="[active]" || b_n="[active]"
         rows=$(printf '%s\t%s  %s  %s\n' \
-            "y" "$(_tui_pad_ansi "enable" 8)"  "$(_tui_pad_ansi "$b_y" 8 32)" "Run Byparr container and wire Cloudflare proxy in Prowlarr" \
+            "y" "$(_tui_pad_ansi "enable" 8)"  "$(_tui_pad_ansi "$b_y" 8 32)" "Run Byparr container and wire HTTP solver proxy in Prowlarr" \
             "n" "$(_tui_pad_ansi "disable" 8)" "$(_tui_pad_ansi "$b_n" 8 32)" "Stop Byparr container")
-        pick=$(_tui_edit_select "Byparr solver> " "Byparr Cloudflare challenge solver for Prowlarr (restarts stack if changed)" "$cur" "$rows") || return "${PROMPT_CANCEL_RC:-2}"
+        pick=$(_tui_edit_select "Byparr solver> " "Byparr headless-browser HTTP proxy for Prowlarr (restarts stack if changed)" "$cur" "$rows") || return "${PROMPT_CANCEL_RC:-2}"
         byparr_enabled="$pick"
         log_success "Byparr: $byparr_enabled"
         export byparr_enabled
         return 0
     fi
     ui_intro \
-        "Optional: Byparr solves Cloudflare challenges for Prowlarr indexers (FlareSolverr drop-in)." \
-        "Enable or disable Byparr Cloudflare solver in Prowlarr (Esc=back; restarts stack if changed)."
+        "Optional: Byparr headless-browser HTTP proxy for Prowlarr indexers (FlareSolverr-compatible)." \
+        "Enable or disable Byparr HTTP solver proxy in Prowlarr (Esc=back; restarts stack if changed)."
     local default_ans="n" yn="(y/N)"
     if ui_is_edit; then
         case "${BYPARR_ENABLED:-n}" in

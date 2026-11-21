@@ -61,9 +61,9 @@ emby_hits=$(grep -rn 'X-Emby-Token' "$REPO_ROOT/bin" "$REPO_ROOT/lib" "$REPO_ROO
 assert_eq "" "$emby_hits" "no X-Emby-Token anywhere in bin/lib/scripts"
 
 test_suite "No piracy domains or copyrighted sample titles in repository"
-bad_hits=$(grep -rniE 'uindex\.org|DSNP\.WEB-DL|The Avengers|Age of Ultron|It Comes at Night|The Hobbit|Lost in Space|Iron Man' \
+bad_hits=$(grep -rniE 'uindex\.org|DSNP\.WEB-DL|The Avengers|Age of Ultron|It Comes at Night|The Hobbit|Lost in Space|Iron Man|opentrackr\.org|openbittorrent\.com' \
     "$REPO_ROOT/bin" "$REPO_ROOT/lib" "$REPO_ROOT/scripts" "$REPO_ROOT/docs" "$REPO_ROOT/tests" \
     --exclude="test_security.sh" 2>/dev/null || true)
-assert_eq "" "$bad_hits" "zero copyrighted/piracy strings in repo code, docs, or tests"
+assert_eq "" "$bad_hits" "zero copyrighted/piracy/tracker strings in repo code, docs, or tests"
 
 test_summary

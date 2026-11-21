@@ -156,7 +156,7 @@ def be(x):
 out.write_bytes(
     be(
         {
-            "announce": "udp://tracker.opentrackr.org:1337/announce",
+            "announce": "http://127.0.0.1:6969/announce",
             "info": {"name": name, "piece length": pl, "pieces": pieces, "files": fl},
         }
     )

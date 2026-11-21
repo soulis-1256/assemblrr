@@ -294,7 +294,7 @@ prowlarr_sync_byparr_proxy() {
     fi
 
     if jq_json_has_key "$result" "id"; then
-        log_step "Prowlarr: Byparr Cloudflare solver wired (${PROWLARR_BYPARR_HOST}, tag: ${PROWLARR_BYPARR_TAG})"
+        log_step "Prowlarr: Byparr HTTP solver proxy wired (${PROWLARR_BYPARR_HOST}, tag: ${PROWLARR_BYPARR_TAG})"
         if [ -n "$tag_id" ]; then
             _prowlarr_enable_disabled_indexers_with_byparr "$apikey" "$tag_id" || true
         fi

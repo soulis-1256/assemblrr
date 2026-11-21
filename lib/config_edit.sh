@@ -26,7 +26,7 @@ timezone|Container timezone
 vpn|VPN on/off, provider, and credentials (restarts stack)
 qbit-ui|qBittorrent WebUI: VueTorrent, qui, or stock (restarts stack)
 gpu|Jellyfin hardware GPU transcoding: Intel/AMD or NVIDIA (restarts stack)
-byparr|Byparr Cloudflare solver for Prowlarr (restarts stack)
+byparr|Byparr HTTP solver proxy for Prowlarr (restarts stack)
 usenet|SABnzbd Usenet downloader and NNTP provider (restarts stack)
 all|Re-run the full setup wizard
 EOF

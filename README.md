@@ -51,7 +51,7 @@ Enable during `Manual` setup or toggle anytime via `assemblrr config edit`:
 | [`compose/qui.yaml`](compose/qui.yaml) | `QBIT_UI=qui` | Fast Go+React standalone qBittorrent WebUI (`7476`, leaves stock qBit on `8081`) |
 | [`compose/gpu-intel.yaml`](compose/gpu-intel.yaml) | `GPU_TRANSCODING=amd` / `intel` | AMD VAAPI / Intel QSV (`/dev/dri`) hardware transcoding + Jellyfin auto-wiring |
 | [`compose/gpu-nvidia.yaml`](compose/gpu-nvidia.yaml) | `GPU_TRANSCODING=nvidia` | NVIDIA NVENC/NVDEC GPU reservation + Jellyfin auto-wiring *(auto-enabled when detected)* |
-| [`compose/byparr.yaml`](compose/byparr.yaml) | `BYPARR_ENABLED=y` | Byparr Cloudflare solver wired into Prowlarr (`byparr` tag) |
+| [`compose/byparr.yaml`](compose/byparr.yaml) | `BYPARR_ENABLED=y` | Byparr headless-browser HTTP proxy wired into Prowlarr (`byparr` tag) |
 | [`compose/usenet.yaml`](compose/usenet.yaml) | `USENET_ENABLED=y` | SABnzbd (`8085`) wired into Sonarr, Radarr, and Prowlarr (requires your own NNTP account) |
 
 > [!TIP]
@@ -165,7 +165,7 @@ assemblrr <command> [options]
 │   ├── vuetorrent.yaml        # Optional VueTorrent WebUI overlay
 │   ├── gpu-intel.yaml         # Optional Intel/AMD VAAPI GPU overlay
 │   ├── gpu-nvidia.yaml        # Optional NVIDIA NVENC GPU overlay
-│   ├── byparr.yaml            # Optional Byparr Cloudflare solver overlay
+│   ├── byparr.yaml            # Optional Byparr HTTP solver proxy overlay
 │   ├── usenet.yaml            # Optional SABnzbd Usenet overlay
 │   └── custom.yaml            # User-defined custom services (untouched by upgrade)
 ├── config/                    # Persistent service appdata
