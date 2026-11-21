@@ -50,4 +50,19 @@ printf '# Netscape HTTP Cookie File\n# just a comment\ngluetun\tFALSE\t/\tFALSE\
 assert_failure "rejects comment-only or unrelated cookie jar" watchdog_cookie_has_sid "$_jar"
 rm -f "$_jar"
 
+test_suite "watchdog_find_stalled_grabs identifies 0% 0-seed grabs past threshold"
+_sample_torrents='[
+  {"hash":"dead111","name":"StalledZero","state":"stalledDL","downloaded":0,"progress":0,"num_seeds":0,"dlspeed":0,"added_on":1000},
+  {"hash":"meta222","name":"MetaZero","state":"metaDL","downloaded":0,"progress":0,"num_seeds":0,"dlspeed":0,"added_on":1050},
+  {"hash":"fresh333","name":"FreshZero","state":"stalledDL","downloaded":0,"progress":0,"num_seeds":0,"dlspeed":0,"added_on":1150},
+  {"hash":"part444","name":"PartialProgress","state":"stalledDL","downloaded":4096,"progress":0.05,"num_seeds":0,"dlspeed":0,"added_on":900},
+  {"hash":"act555","name":"ActiveDownload","state":"downloading","downloaded":0,"progress":0,"num_seeds":3,"dlspeed":50000,"added_on":900}
+]'
+_stalled_out=$(watchdog_find_stalled_grabs "$_sample_torrents" 1250 180)
+assert_contains "$_stalled_out" "dead111	StalledZero	250" "flags stalledDL at 0% with 0 seeds after 250s"
+assert_contains "$_stalled_out" "meta222	MetaZero	200" "flags metaDL at 0% with 0 seeds after 200s"
+assert_not_contains "$_stalled_out" "fresh333" "skips grab younger than threshold (100s < 180s)"
+assert_not_contains "$_stalled_out" "part444" "skips torrent that already downloaded data"
+assert_not_contains "$_stalled_out" "act555" "skips active downloading torrent with seeds"
+
 test_summary

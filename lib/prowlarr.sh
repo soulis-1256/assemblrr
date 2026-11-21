@@ -15,6 +15,7 @@ readonly PROWLARR_GLUETUN_PROXY_PORT="8888"
 readonly PROWLARR_BYPARR_PROXY_NAME="assemblrr Byparr"
 readonly PROWLARR_BYPARR_HOST="http://byparr:8191/"
 readonly PROWLARR_BYPARR_TAG="byparr"
+PROWLARR_MIN_SEEDERS="${PROWLARR_MIN_SEEDERS:-5}"
 
 _prowlarr_byparr_enabled() {
     case "${BYPARR_ENABLED:-n}" in
@@ -25,6 +26,7 @@ _prowlarr_byparr_enabled() {
 
 prowlarr_set_app_profile_min_seeders() {
     local prowlarr_key="$1"
+    local min_seeders="${PROWLARR_MIN_SEEDERS:-5}"
     local profiles
     profiles=$(api_get "9696" "/api/v1/appprofile" "$prowlarr_key" || echo "")
     if [ -z "$profiles" ] || [ "$profiles" = "[]" ]; then
@@ -36,7 +38,7 @@ prowlarr_set_app_profile_min_seeders() {
         [ -z "$row" ] && continue
         profile_id=$(printf '%s' "$row" | jq -r '.id // empty')
         [ -z "$profile_id" ] && continue
-        profile_payload=$(printf '%s' "$row" | jq '.minimumSeeders = 0' 2>/dev/null || echo "")
+        profile_payload=$(printf '%s' "$row" | jq --argjson ms "$min_seeders" '.minimumSeeders = $ms' 2>/dev/null || echo "")
         [ -z "$profile_payload" ] && continue
         if api_put "9696" "/api/v1/appprofile/${profile_id}" "$prowlarr_key" "$profile_payload" >/dev/null 2>&1; then
             updated=$((updated + 1))
@@ -44,7 +46,7 @@ prowlarr_set_app_profile_min_seeders() {
     done < <(printf '%s' "$profiles" | jq -c '.[]' 2>/dev/null || true)
 
     if [ "$updated" -gt 0 ]; then
-        log_step "Prowlarr: app profile minimumSeeders → 0"
+        log_step "Prowlarr: app profile minimumSeeders → ${min_seeders}"
         return 0
     fi
     return 1
@@ -54,6 +56,7 @@ arr_set_indexer_min_seeders() {
     local service_name="$1"
     local port="$2"
     local apikey="$3"
+    local min_seeders="${PROWLARR_MIN_SEEDERS:-5}"
 
     [ -z "$apikey" ] && return 1
 
@@ -68,9 +71,9 @@ arr_set_indexer_min_seeders() {
         [ -z "$idx" ] && continue
         idx_id=$(printf '%s' "$idx" | jq -r '.id // empty')
         [ -z "$idx_id" ] && continue
-        idx_payload=$(printf '%s' "$idx" | jq '
+        idx_payload=$(printf '%s' "$idx" | jq --argjson ms "$min_seeders" '
             .fields = [.fields[] |
-                if .name == "minimumSeeders" then .value = 0
+                if .name == "minimumSeeders" then .value = $ms
                 else . end
             ]
         ' 2>/dev/null || echo "")
@@ -82,7 +85,7 @@ arr_set_indexer_min_seeders() {
     done < <(printf '%s' "$indexers" | jq -c '.[]' 2>/dev/null || true)
 
     if [ "$ok" -gt 0 ]; then
-        log_step "${service_name}: indexer minSeeders=0 (${ok})"
+        log_step "${service_name}: indexer minSeeders=${min_seeders} (${ok})"
         return 0
     fi
     return 1

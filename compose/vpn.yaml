@@ -91,11 +91,16 @@ services:
       - AUTH_PASSWORD_FILE=/run/secrets/auth_password.txt
       - TZ=${TZ}
       - WATCHDOG_INTERVAL=${WATCHDOG_INTERVAL:-30}
+      - WATCHDOG_STALLED_GRAB_SEC=${WATCHDOG_STALLED_GRAB_SEC:-180}
+      - CONFIG_DIR=/config
+      - RADARR_URL=http://radarr:7878
+      - SONARR_URL=http://sonarr:8989
       # Reach qB via Gluetun's published port on the Docker network — do not
       # share Gluetun's netns (apk / DNS / package installs must not go out the VPN).
       - QBIT_HOST=gluetun:8081
     volumes:
       - ${INSTALL_DIRECTORY}/scripts/vpn-watchdog.sh:/scripts/vpn-watchdog.sh:ro
+      - ${INSTALL_DIRECTORY}/config:/config:ro
       - ${INSTALL_DIRECTORY}/secrets:/run/secrets:ro
       - /var/run/docker.sock:/var/run/docker.sock
     command:

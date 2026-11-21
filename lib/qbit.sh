@@ -95,6 +95,8 @@ write_qbittorrent_config() {
                 printf 'WebUI\\Password_PBKDF2=%s\n' "$pbkdf2_hash"
             fi
             printf 'WebUI\\Port=8081\n'
+            printf 'WebUI\\SessionTimeout=2592000\n'
+            printf 'WebUI\\SessionsCountLimit=1000\n'
             if [ "$alt_ui" = "true" ]; then
                 printf 'WebUI\\AlternativeUIEnabled=true\n'
                 printf 'WebUI\\RootFolder=%s\n' "$alt_root"
@@ -146,6 +148,8 @@ qbit_core_prefs_json() {
                 auto_tmm_enabled:true,
                 current_network_interface:$iface,
                 alternative_webui_enabled:$alt_ui,
+                web_ui_session_timeout:2592000,
+                web_ui_sessions_count_limit:1000,
                 web_ui_username:$user,
                 web_ui_password:$pass
             } + (if $alt_ui then {alternative_webui_path:$alt_path} else {} end))'
@@ -160,7 +164,9 @@ qbit_core_prefs_json() {
                 temp_path_enabled:true,
                 auto_tmm_enabled:true,
                 current_network_interface:$iface,
-                alternative_webui_enabled:$alt_ui
+                alternative_webui_enabled:$alt_ui,
+                web_ui_session_timeout:2592000,
+                web_ui_sessions_count_limit:1000
             } + (if $alt_ui then {alternative_webui_path:$alt_path} else {} end))'
     fi
 }

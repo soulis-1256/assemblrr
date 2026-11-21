@@ -15,7 +15,11 @@ GLUETUN_CONTROL_URL="${GLUETUN_CONTROL_URL:-http://127.0.0.1:8000}"
 WATCHDOG_INTERVAL="${WATCHDOG_INTERVAL:-30}"
 HEARTBEAT_INTERVAL="${HEARTBEAT_INTERVAL:-3600}"
 WATCHDOG_COOLDOWN_SEC="${WATCHDOG_COOLDOWN_SEC:-300}"
+WATCHDOG_STALLED_GRAB_SEC="${WATCHDOG_STALLED_GRAB_SEC:-180}"
 WATCHDOG_STATE_DIR="${WATCHDOG_STATE_DIR:-/tmp}"
+CONFIG_DIR="${CONFIG_DIR:-/config}"
+RADARR_URL="${RADARR_URL:-http://radarr:7878}"
+SONARR_URL="${SONARR_URL:-http://sonarr:8989}"
 LOG_LEVEL="${LOG_LEVEL:-INFO}"
 
 log_watchdog() {
@@ -87,6 +91,81 @@ watchdog_should_restart_vpn() {
         return 1
     fi
     return 0
+}
+
+# Pure helper: find 0%-progress torrents stuck in metaDL/stalledDL with 0 connected seeds
+# for at least <threshold_sec>. Prints "<hash>\t<name>\t<age_sec>" per line.
+watchdog_find_stalled_grabs() {
+    local torrents_json="${1:-[]}"
+    local now="${2:-0}"
+    local threshold="${3:-180}"
+
+    [ "$threshold" -gt 0 ] 2>/dev/null || return 0
+    printf '%s' "$torrents_json" | jq -r \
+        --argjson now "$now" \
+        --argjson thr "$threshold" '
+        .[]? |
+        select(
+            (.state == "metaDL" or .state == "stalledDL")
+            and ((.downloaded // 0) == 0)
+            and ((.progress // 0) == 0)
+            and ((.num_seeds // 0) == 0)
+            and ((.dlspeed // 0) == 0)
+            and ((.added_on // 0) > 0)
+            and (($now - (.added_on // $now)) >= $thr)
+        ) |
+        [(.hash // ""), (.name // ""), (($now - (.added_on // $now)) | tostring)] | @tsv
+    ' 2>/dev/null || true
+}
+
+_watchdog_read_arr_key() {
+    local svc="$1"
+    local xml="${CONFIG_DIR%/}/${svc}/config.xml"
+    [ -r "$xml" ] || return 1
+    sed -n 's/.*<ApiKey>\([^<]*\)<\/ApiKey>.*/\1/p' "$xml" 2>/dev/null | head -1
+}
+
+# Check Radarr & Sonarr queues for a stalled 0% torrent hash; if managed by *arr,
+# remove + blocklist it and trigger an automatic search for the next release.
+watchdog_failover_stalled_grab() {
+    local hash="$1"
+    local name="$2"
+    local age="$3"
+    [ -n "$hash" ] || return 1
+
+    local svc svc_label svc_url apikey queue_json qid
+    for svc in radarr sonarr; do
+        if [ "$svc" = "radarr" ]; then
+            svc_label="Radarr"
+            svc_url="$RADARR_URL"
+        else
+            svc_label="Sonarr"
+            svc_url="$SONARR_URL"
+        fi
+        apikey=$(_watchdog_read_arr_key "$svc" || true)
+        [ -n "$apikey" ] || continue
+
+        queue_json=$(curl -sS --connect-timeout 3 --max-time 10 \
+            -H "X-Api-Key: $apikey" \
+            "${svc_url}/api/v3/queue?pageSize=100" 2>/dev/null || true)
+        [ -n "$queue_json" ] || continue
+
+        qid=$(printf '%s' "$queue_json" | jq -r --arg h "${hash,,}" '
+            [.records[]? | select(((.downloadId // "") | ascii_downcase) == $h) | .id][0] // empty
+        ' 2>/dev/null || true)
+        [ -n "$qid" ] || continue
+
+        local code
+        code=$(curl -sS -o /dev/null -w "%{http_code}" --connect-timeout 3 --max-time 15 \
+            -X DELETE \
+            -H "X-Api-Key: $apikey" \
+            "${svc_url}/api/v3/queue/${qid}?removeFromClient=true&blocklist=true&skipRedownload=false" 2>/dev/null || echo "000")
+        if [ "$code" = "200" ] || [ "$code" = "202" ] || [ "$code" = "204" ]; then
+            log_watchdog ACTION "Stalled 0% grab failover (${age}s, 0 seeds): blocklisted '${name}' in ${svc_label} and triggered replacement search."
+            return 0
+        fi
+    done
+    return 1
 }
 
 # Reuse a persistent session cookie jar across ticks so qBittorrent 5.3's 15-session LRU
@@ -237,30 +316,36 @@ watchdog_main() {
 
         if [ "$working_count" -gt 0 ]; then
             log_debug "Ignoring ${broken_count} stalled torrent(s): ${working_count} torrent(s) have active peers/trackers (not a global VPN failure)."
-            exit 0
-        fi
+        else
+            # Optional: check Gluetun's local control endpoint if open without blocking on auth
+            gluetun_status=$(curl -sS --connect-timeout 2 --max-time 5 "${GLUETUN_CONTROL_URL}/v1/openvpn/status" 2>/dev/null | jq -r '.status // empty' 2>/dev/null || true)
+            if [ -n "$gluetun_status" ] && [ "$gluetun_status" != "running" ]; then
+                log_watchdog DETECTED "Gluetun reported VPN status '${gluetun_status}'."
+            fi
 
-        # Optional: check Gluetun's local control endpoint if open without blocking on auth
-        gluetun_status=$(curl -sS --connect-timeout 2 --max-time 5 "${GLUETUN_CONTROL_URL}/v1/openvpn/status" 2>/dev/null | jq -r '.status // empty' 2>/dev/null || true)
-        if [ -n "$gluetun_status" ] && [ "$gluetun_status" != "running" ]; then
-            log_watchdog DETECTED "Gluetun reported VPN status '${gluetun_status}'."
+            if ! watchdog_should_restart_vpn "$broken_count" "$working_count" "$current_time" "$last_restart" "$WATCHDOG_COOLDOWN_SEC"; then
+                remaining=$((WATCHDOG_COOLDOWN_SEC - (current_time - last_restart)))
+                log_watchdog INFO "VPN restart cooldown active (${remaining}s remaining); skipping restart for ${broken_count} stalled torrent(s)."
+            else
+                log_watchdog DETECTED "VPN routing failure! Torrents with broken-network symptoms found:"
+                for torrent_name in "${DETECTED_TORRENTS[@]}"; do
+                    log_watchdog DETECTED "$torrent_name"
+                done
+                log_watchdog ACTION "Triggering Gluetun restart to fetch a new VPN IP..."
+                echo "routing_failed" > "${WATCHDOG_STATE_DIR%/}/qbit_watchdog_last_status"
+                echo "$current_time" > "${WATCHDOG_STATE_DIR%/}/qbit_watchdog_last_restart"
+                docker restart gluetun
+                exit 1
+            fi
         fi
+    fi
 
-        if ! watchdog_should_restart_vpn "$broken_count" "$working_count" "$current_time" "$last_restart" "$WATCHDOG_COOLDOWN_SEC"; then
-            remaining=$((WATCHDOG_COOLDOWN_SEC - (current_time - last_restart)))
-            log_watchdog INFO "VPN restart cooldown active (${remaining}s remaining); skipping restart for ${broken_count} stalled torrent(s)."
-            exit 0
-        fi
-
-        log_watchdog DETECTED "VPN routing failure! Torrents with broken-network symptoms found:"
-        for torrent_name in "${DETECTED_TORRENTS[@]}"; do
-            log_watchdog DETECTED "$torrent_name"
-        done
-        log_watchdog ACTION "Triggering Gluetun restart to fetch a new VPN IP..."
-        echo "routing_failed" > "${WATCHDOG_STATE_DIR%/}/qbit_watchdog_last_status"
-        echo "$current_time" > "${WATCHDOG_STATE_DIR%/}/qbit_watchdog_last_restart"
-        docker restart gluetun
-        exit 1
+    if [ "$working_count" -gt 0 ] || [ "$broken_count" -eq 0 ]; then
+        local st_hash st_name st_age
+        while IFS=$'\t' read -r st_hash st_name st_age; do
+            [ -n "$st_hash" ] || continue
+            watchdog_failover_stalled_grab "$st_hash" "$st_name" "$st_age" || true
+        done < <(watchdog_find_stalled_grabs "$torrents" "$current_time" "$WATCHDOG_STALLED_GRAB_SEC")
     fi
 
     log_debug "Watchdog check completed successfully. Monitored ${num_torrents} torrents. All healthy."
