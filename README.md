@@ -48,7 +48,7 @@ Enable during `Manual` setup or toggle anytime via `assemblrr config edit`:
 | Overlay File | Env Key | Description |
 |---|---|---|
 | [`compose/vuetorrent.yaml`](compose/vuetorrent.yaml) | `QBIT_UI=vuetorrent` | Modern VueTorrent theme inside qBittorrent (:8081) *(default)* |
-| [`compose/qui.yaml`](compose/qui.yaml) | `QBIT_UI=qui` | Fast Go+React standalone qBittorrent WebUI (`7476`, leaves stock qBit on `8081`) |
+| [`compose/qui.yaml`](compose/qui.yaml) | `QBIT_UI=qui` | Fast Go+React standalone qBittorrent WebUI (`7476`; `:8081` redirects automatically) |
 | [`compose/gpu-intel.yaml`](compose/gpu-intel.yaml) | `GPU_TRANSCODING=amd` / `intel` | AMD VAAPI / Intel QSV (`/dev/dri`) hardware transcoding + Jellyfin auto-wiring |
 | [`compose/gpu-nvidia.yaml`](compose/gpu-nvidia.yaml) | `GPU_TRANSCODING=nvidia` | NVIDIA NVENC/NVDEC GPU reservation + Jellyfin auto-wiring *(auto-enabled when detected)* |
 | [`compose/byparr.yaml`](compose/byparr.yaml) | `BYPARR_ENABLED=y` | Byparr headless-browser HTTP proxy wired into Prowlarr (`byparr` tag) |
@@ -143,7 +143,8 @@ assemblrr <command> [options]
 | **Sonarr** | `8989` | `http://localhost:8989` | TV show manager |
 | **Radarr** | `7878` | `http://localhost:7878` | Movie manager |
 | **Prowlarr** | `9696` | `http://localhost:9696` | Indexer manager |
-| **qBittorrent** | `8081` | `http://localhost:8081` | Torrent Web UI (+ VueTorrent when enabled) |
+| **qBittorrent** | `8081` | `http://localhost:8081` | Torrent Web UI (VueTorrent, Stock, or auto-redirect to `qui`) |
+| **qui** *(opt.)* | `7476` | `http://localhost:7476` | Standalone qBittorrent WebUI (`QBIT_UI=qui`) |
 | **SABnzbd** *(opt.)* | `8085` | `http://localhost:8085` | Usenet downloader (`USENET_ENABLED=y`) |
 
 ---
@@ -163,6 +164,7 @@ assemblrr <command> [options]
 │   ├── vpn.yaml               # Gluetun VPN network + watchdog overlay
 │   ├── direct-access.yaml     # Non-VPN overlay
 │   ├── vuetorrent.yaml        # Optional VueTorrent WebUI overlay
+│   ├── qui.yaml               # Optional qui standalone qBittorrent WebUI overlay
 │   ├── gpu-intel.yaml         # Optional Intel/AMD VAAPI GPU overlay
 │   ├── gpu-nvidia.yaml        # Optional NVIDIA NVENC GPU overlay
 │   ├── byparr.yaml            # Optional Byparr HTTP solver proxy overlay

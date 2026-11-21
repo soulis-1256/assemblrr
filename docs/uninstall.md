@@ -13,7 +13,7 @@ root-owned; plain `rm -rf` then fails — use the Docker removal step in Option 
 
 | Component | Default location |
 |---|---|
-| Containers | `jellyfin`, `qbittorrent`, `sonarr`, `radarr`, `prowlarr`, `bazarr`, `seerr`, `seerr-gateway`, `media-purge-watch`, `recyclarr` — plus `sabnzbd` (`usenet`), `byparr` (`byparr`), and `gluetun`/`deunhealth`/`vpn-watchdog` (`vpn`) when enabled; older installs may have `portainer`/`emby`/`plex` |
+| Containers | `jellyfin`, `qbittorrent`, `sonarr`, `radarr`, `prowlarr`, `bazarr`, `seerr`, `seerr-gateway`, `media-purge-watch`, `recyclarr` — plus `qui` (`QBIT_UI=qui`), `sabnzbd` (`usenet`), `byparr` (`byparr`), and `gluetun`/`deunhealth`/`vpn-watchdog` (`vpn`) when enabled; older installs may have `portainer`/`emby`/`plex` |
 | Docker network | `assemblrr_network` |
 | Install directory (config, secrets, compose files) | `~/assemblrr` (or the path you chose) |
 | Media directory (your movies/TV/downloads) | `~/assemblrr-media` (or the path you chose) |
@@ -93,7 +93,7 @@ you deliberately remove it in step 3.
 **1. Remove containers and the network:**
 
 ```bash
-docker rm -f jellyfin sabnzbd byparr qbittorrent sonarr radarr prowlarr bazarr \
+docker rm -f jellyfin qui sabnzbd byparr qbittorrent sonarr radarr prowlarr bazarr \
     seerr seerr-gateway media-purge-watch recyclarr portainer \
     gluetun deunhealth vpn-watchdog 2>/dev/null
 # portainer: only if an older install still has it

@@ -16,9 +16,10 @@ _m004_append_if_missing() {
 migration_should_skip() {
     local install_dir="${1:-}"
     [ -d "$install_dir/config/sabnzbd" ] || return 1
+    [ -d "$install_dir/config/qui" ] || return 1
 
     local key
-    for key in VUETORRENT_ENABLED GPU_TRANSCODING BYPARR_ENABLED USENET_ENABLED; do
+    for key in QBIT_UI VUETORRENT_ENABLED GPU_TRANSCODING BYPARR_ENABLED USENET_ENABLED; do
         if [ -f "$install_dir/.env" ] && ! grep -qE "^[[:space:]]*${key}=" "$install_dir/.env" 2>/dev/null; then
             return 1
         fi
@@ -31,13 +32,15 @@ migration_should_skip() {
 
 migration_apply() {
     local install_dir="${1:-}"
-    mkdir -p "$install_dir/config/sabnzbd"
+    mkdir -p "$install_dir/config/sabnzbd" "$install_dir/config/qui"
 
+    _m004_append_if_missing "$install_dir/.env" "QBIT_UI" "QBIT_UI=stock"
     _m004_append_if_missing "$install_dir/.env" "VUETORRENT_ENABLED" "VUETORRENT_ENABLED=n"
     _m004_append_if_missing "$install_dir/.env" "GPU_TRANSCODING" "GPU_TRANSCODING=none"
     _m004_append_if_missing "$install_dir/.env" "BYPARR_ENABLED" "BYPARR_ENABLED=n"
     _m004_append_if_missing "$install_dir/.env" "USENET_ENABLED" "USENET_ENABLED=n"
 
+    _m004_append_if_missing "$install_dir/.assemblrr-config" "QBIT_UI" 'QBIT_UI="stock"'
     _m004_append_if_missing "$install_dir/.assemblrr-config" "VUETORRENT_ENABLED" 'VUETORRENT_ENABLED="n"'
     _m004_append_if_missing "$install_dir/.assemblrr-config" "GPU_TRANSCODING" 'GPU_TRANSCODING="none"'
     _m004_append_if_missing "$install_dir/.assemblrr-config" "BYPARR_ENABLED" 'BYPARR_ENABLED="n"'

@@ -8,8 +8,8 @@ assemblrr keeps its stack modular under `compose/`:
 
 - **Always required:** `compose/base.yaml` + **one** network mode (`compose/vpn.yaml` or `compose/direct-access.yaml`)
 - **Optional feature overlays:**
-  - `compose/vuetorrent.yaml` (`VUETORRENT_ENABLED=y`)
-  - `compose/gpu-intel.yaml` (`GPU_TRANSCODING=intel`) or `compose/gpu-nvidia.yaml` (`GPU_TRANSCODING=nvidia`)
+  - `compose/vuetorrent.yaml` (`QBIT_UI=vuetorrent`) or `compose/qui.yaml` (`QBIT_UI=qui`)
+  - `compose/gpu-intel.yaml` (`GPU_TRANSCODING=amd|intel`) or `compose/gpu-nvidia.yaml` (`GPU_TRANSCODING=nvidia`)
   - `compose/byparr.yaml` (`BYPARR_ENABLED=y`)
   - `compose/usenet.yaml` (`USENET_ENABLED=y`)
 - **Custom services:** `compose/custom.yaml` (always appended last; see [`compose/examples/custom.yaml.example`](../compose/examples/custom.yaml.example) for a `komodo-periphery` service block on `.33`)
