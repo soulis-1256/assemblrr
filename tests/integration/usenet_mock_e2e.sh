@@ -28,7 +28,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-mkdir -p "$tmp/config" "$tmp/data/usenet/incomplete" "$tmp/data/usenet/complete/movies" "$tmp/data/usenet/complete/tv"
+mkdir -p "$tmp/config/sabnzbd" "$tmp/data/usenet/incomplete" "$tmp/data/usenet/complete/movies" "$tmp/data/usenet/complete/tv"
 
 python3 "$REPO_ROOT/tests/fixtures/mock_nntp.py" --host 0.0.0.0 --port 0 --user mockuser --password mockpass --port-file "$tmp/nntp.port" &
 nntp_pid=$!
@@ -45,7 +45,7 @@ echo "Started mock NNTP :${nntp_port} and mock Newznab :${newznab_port}"
 
 cid=$(docker run -d --network host \
     -e "PUID=$(id -u)" -e "PGID=$(id -g)" -e "TZ=UTC" \
-    -v "$tmp/config:/config" \
+    -v "$tmp/config/sabnzbd:/config" \
     -v "$tmp/data:/data" \
     lscr.io/linuxserver/sabnzbd:5.1.3)
 
@@ -55,6 +55,9 @@ source "$REPO_ROOT/lib/core.sh"
 source "$REPO_ROOT/lib/api.sh"
 # shellcheck source=/dev/null
 source "$REPO_ROOT/lib/usenet.sh"
+
+log_step() { echo " ✓ $1"; }
+log_step_fail() { echo " ✗ $1" >&2; }
 
 INSTALL_DIR="$tmp"
 USENET_ENABLED="y"
@@ -94,7 +97,7 @@ for _ in $(seq 1 30); do
 done
 [ "$ok" -eq 1 ] || { echo "Mock NZB did not complete in SABnzbd" >&2; exit 1; }
 
-found=$(find "$tmp/data/usenet/complete" -name "assemblrr-sample.txt" 2>/dev/null | head -1 || true)
+found=$(find "$tmp/data/usenet/complete" -type f \( -name "assemblrr-sample.txt" -o -name "sample.txt" \) 2>/dev/null | head -1 || true)
 [ -n "$found" ] || { echo "Decoded file missing under $tmp/data/usenet/complete" >&2; exit 1; }
 grep -qx "assemblrr mock usenet payload ok" "$found"
-echo "STATUS: OK (SABnzbd downloaded & yEnc-decoded mock NZB from mock_nntp.py)"
+echo "STATUS: OK (SABnzbd downloaded & yEnc-decoded mock NZB from mock_nntp.py -> $found)"

@@ -8,7 +8,7 @@ if [ -n "${_ASSEMBLRR_USENET_SOURCED:-}" ]; then
 fi
 readonly _ASSEMBLRR_USENET_SOURCED=1
 
-SABNZBD_PORT="${SABNZBD_PORT:-8080}"
+SABNZBD_PORT="${SABNZBD_PORT:-8085}"
 
 sabnzbd_enabled() {
     case "${USENET_ENABLED:-n}" in
@@ -87,14 +87,14 @@ priority = 0
 [[movies]]
 name = movies
 order = 1
-dir = movies
+dir = /data/usenet/complete/movies
 pp = 3
 script = Default
 priority = -100
 [[tv]]
 name = tv
 order = 2
-dir = tv
+dir = /data/usenet/complete/tv
 pp = 3
 script = Default
 priority = -100
@@ -122,7 +122,12 @@ _sab_set_category() {
     local apikey="$1"
     local name="$2"
     local dir="$3"
-    http_request GET "http://${API_HOST}:${SABNZBD_PORT}/api?mode=set_config&section=categories&name=${name}&dir=${dir}&pp=3&output=json&apikey=${apikey}"
+    local enc_dir
+    case "$dir" in
+        /*) enc_dir=$(urlencode "$dir") ;;
+        *)  enc_dir=$(urlencode "/data/usenet/complete/${dir}") ;;
+    esac
+    http_request GET "http://${API_HOST}:${SABNZBD_PORT}/api?mode=set_config&section=categories&name=${name}&dir=${enc_dir}&pp=3&output=json&apikey=${apikey}"
 }
 
 _sab_set_server() {
@@ -132,12 +137,13 @@ _sab_set_server() {
     local ssl="$4"
     local user="$5"
     local pass="$6"
+    local conn="${7:-8}"
     local enc_host enc_user enc_pass
     enc_host=$(urlencode "$host")
     enc_user=$(urlencode "$user")
     enc_pass=$(urlencode "$pass")
     http_request GET \
-        "http://${API_HOST}:${SABNZBD_PORT}/api?mode=set_config&section=servers&name=${enc_host}&host=${enc_host}&port=${port}&ssl=${ssl}&username=${enc_user}&password=${enc_pass}&connections=8&enable=1&output=json&apikey=${apikey}"
+        "http://${API_HOST}:${SABNZBD_PORT}/api?mode=set_config&section=servers&name=${enc_host}&host=${enc_host}&port=${port}&ssl=${ssl}&username=${enc_user}&password=${enc_pass}&connections=${conn}&enable=1&output=json&apikey=${apikey}"
 }
 
 configure_sabnzbd() {
@@ -163,16 +169,26 @@ configure_sabnzbd() {
     _sab_set_category "$sab_key" "movies" "movies" || true
     _sab_set_category "$sab_key" "tv" "tv" || true
 
-    # Optional Usenet NNTP server credentials stored in secrets/usenet_*.txt
-    local nntp_host="" nntp_port="563" nntp_ssl="1" nntp_user="" nntp_pass=""
-    [ -s "$INSTALL_DIR/secrets/usenet_host.txt" ] && nntp_host=$(tr -d '\r\n' < "$INSTALL_DIR/secrets/usenet_host.txt")
+    # Usenet NNTP server settings from .assemblrr-config env vars or secrets/usenet_*.txt
+    local nntp_host="${USENET_HOST:-}"
+    local nntp_port="${USENET_PORT:-563}"
+    local nntp_ssl="${USENET_SSL:-1}"
+    local nntp_user="${USENET_USERNAME:-}"
+    local nntp_pass="${USENET_PASSWORD:-}"
+    local nntp_conn="${USENET_CONNECTIONS:-8}"
+    [ -z "$nntp_host" ] && [ -s "$INSTALL_DIR/secrets/usenet_host.txt" ] && nntp_host=$(tr -d '\r\n' < "$INSTALL_DIR/secrets/usenet_host.txt")
     [ -s "$INSTALL_DIR/secrets/usenet_port.txt" ] && nntp_port=$(tr -d '\r\n' < "$INSTALL_DIR/secrets/usenet_port.txt")
     [ -s "$INSTALL_DIR/secrets/usenet_ssl.txt" ] && nntp_ssl=$(tr -d '\r\n' < "$INSTALL_DIR/secrets/usenet_ssl.txt")
-    [ -s "$INSTALL_DIR/secrets/usenet_user.txt" ] && nntp_user=$(tr -d '\r\n' < "$INSTALL_DIR/secrets/usenet_user.txt")
-    [ -s "$INSTALL_DIR/secrets/usenet_password.txt" ] && nntp_pass=$(tr -d '\r\n' < "$INSTALL_DIR/secrets/usenet_password.txt")
+    [ -z "$nntp_user" ] && [ -s "$INSTALL_DIR/secrets/usenet_user.txt" ] && nntp_user=$(tr -d '\r\n' < "$INSTALL_DIR/secrets/usenet_user.txt")
+    [ -z "$nntp_pass" ] && [ -s "$INSTALL_DIR/secrets/usenet_password.txt" ] && nntp_pass=$(tr -d '\r\n' < "$INSTALL_DIR/secrets/usenet_password.txt")
+
+    case "${nntp_ssl,,}" in
+        1|y|yes|true) nntp_ssl="1" ;;
+        *)            nntp_ssl="0" ;;
+    esac
 
     if [ -n "$nntp_host" ]; then
-        if _sab_set_server "$sab_key" "$nntp_host" "$nntp_port" "$nntp_ssl" "$nntp_user" "$nntp_pass"; then
+        if _sab_set_server "$sab_key" "$nntp_host" "$nntp_port" "$nntp_ssl" "$nntp_user" "$nntp_pass" "$nntp_conn"; then
             log_step "SABnzbd: wired NNTP server (${nntp_host}:${nntp_port})"
         else
             log_step_fail "SABnzbd: failed to configure NNTP server (${nntp_host})"
