@@ -165,6 +165,8 @@ _config_edit_load() {
         # shellcheck disable=SC2329
         log_step() { printf ' %b✓%b %s\n' "${GREEN:-}" "${NC:-}" "$1"; printf ' ✓ %s\n' "$1" >> "$CONFIGURE_LOG"; _configure_ok=$((_configure_ok + 1)); _configure_total=$((_configure_total + 1)); }
         # shellcheck disable=SC2329
+        log_step_warn() { printf ' %b⚠%b %s\n' "${YELLOW:-}" "${NC:-}" "$1"; printf ' ⚠ %s\n' "$1" >> "$CONFIGURE_LOG"; _configure_ok=$((_configure_ok + 1)); _configure_total=$((_configure_total + 1)); }
+        # shellcheck disable=SC2329
         log_step_fail() { printf ' %b✗%b %s\n' "${RED:-}" "${NC:-}" "$1"; printf ' ✗ %s\n' "$1" >> "$CONFIGURE_LOG"; _configure_fail=$((_configure_fail + 1)); _configure_total=$((_configure_total + 1)); }
     fi
 

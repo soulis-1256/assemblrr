@@ -51,6 +51,12 @@ log_step() {
     _configure_ok=$((_configure_ok + 1))
     _configure_total=$((_configure_total + 1))
 }
+log_step_warn() {
+    printf ' %b⚠%b %s\n' "${YELLOW:-}" "${NC:-}" "$1"
+    printf ' ⚠ %s\n' "$1" >> "${CONFIGURE_LOG:-/dev/null}"
+    _configure_ok=$((_configure_ok + 1))
+    _configure_total=$((_configure_total + 1))
+}
 log_step_fail() {
     printf ' %b✗%b %s\n' "${RED:-}" "${NC:-}" "$1" >&2
     printf ' ✗ %s\n' "$1" >> "${CONFIGURE_LOG:-/dev/null}"
@@ -168,9 +174,6 @@ main() {
 
     if [ -n "$PROWLARR_API_KEY" ]; then
         run_critical configure_prowlarr "$PROWLARR_API_KEY" "$RADARR_API_KEY" "$SONARR_API_KEY"
-        if [ "${BYPARR_ENABLED:-n}" = "y" ] || [ "${BYPARR_ENABLED:-n}" = "Y" ]; then
-            run_optional prowlarr_sync_byparr_proxy "$PROWLARR_API_KEY"
-        fi
     fi
 
     run_critical configure_jellyfin

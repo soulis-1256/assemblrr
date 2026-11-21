@@ -292,10 +292,48 @@ prowlarr_sync_byparr_proxy() {
 
     if jq_json_has_key "$result" "id"; then
         log_step "Prowlarr: Byparr Cloudflare solver wired (${PROWLARR_BYPARR_HOST}, tag: ${PROWLARR_BYPARR_TAG})"
+        if [ -n "$tag_id" ]; then
+            _prowlarr_enable_disabled_indexers_with_byparr "$apikey" "$tag_id" || true
+        fi
         return 0
     fi
     log_step_fail "Prowlarr: failed to wire Byparr proxy"
     return 1
+}
+
+_prowlarr_step_warn() {
+    if type log_step_warn >/dev/null 2>&1; then
+        log_step_warn "$1"
+    else
+        log_warning "$1"
+    fi
+}
+
+_prowlarr_enable_disabled_indexers_with_byparr() {
+    local apikey="$1"
+    local tag_id="$2"
+    [ -n "$apikey" ] && [ -n "$tag_id" ] || return 0
+
+    local indexers
+    indexers=$(api_get "9696" "/api/v1/indexer" "$apikey" || echo "[]")
+    [ -n "$indexers" ] && [ "$indexers" != "[]" ] || return 0
+
+    local row idx_id idx_name updated_payload res
+    while IFS= read -r row; do
+        [ -z "$row" ] && continue
+        idx_id=$(printf '%s' "$row" | jq -r '.id // empty')
+        idx_name=$(printf '%s' "$row" | jq -r '.name // empty')
+        [ -n "$idx_id" ] || continue
+        updated_payload=$(printf '%s' "$row" | jq -c --argjson tid "$tag_id" '
+            .enable = true |
+            .tags = ((.tags // []) + [$tid] | unique)
+        ' 2>/dev/null || echo "")
+        [ -n "$updated_payload" ] || continue
+        res=$(api_put_force "9696" "/api/v1/indexer/${idx_id}" "$apikey" "$updated_payload" || echo "")
+        if jq_json_has_key "$res" "id"; then
+            log_step "Prowlarr: enabled ${idx_name} indexer via Byparr"
+        fi
+    done < <(printf '%s' "$indexers" | jq -c '.[] | select(.enable == false)' 2>/dev/null || true)
 }
 
 apply_selected_indexers() {
@@ -312,6 +350,11 @@ apply_selected_indexers() {
     if [ -n "${SELECTED_INDEXERS+x}" ] && [ "${#SELECTED_INDEXERS[@]}" -gt 0 ]; then
         selected_indexers=("${SELECTED_INDEXERS[@]}")
         echo "Applying ${#selected_indexers[@]} selected Prowlarr indexer(s)" >&2
+    fi
+
+    local byparr_tag_id=""
+    if _prowlarr_byparr_enabled; then
+        byparr_tag_id=$(_prowlarr_ensure_tag "$apikey" "$PROWLARR_BYPARR_TAG" || true)
     fi
 
     local existing_indexers existing_names indexer_name
@@ -344,17 +387,31 @@ apply_selected_indexers() {
         idx_result=$(api_post_force "9696" "/api/v1/indexer" "$apikey" "$indexer_payload" || echo "")
         if jq_json_has_key "$idx_result" "id"; then
             log_step "Prowlarr: added ${indexer_name} indexer"
-        else
-            local err_msg disabled_payload
-            err_msg=$(printf '%s' "$idx_result" | jq -r 'if type == "array" then .[0].errorMessage // empty else .errorMessage // empty end' 2>/dev/null || echo "")
-            disabled_payload=$(printf '%s' "$indexer_payload" | jq -c '.enable = false' 2>/dev/null || echo "")
-            idx_result=$(api_post_force "9696" "/api/v1/indexer" "$apikey" "$disabled_payload" || echo "")
-            if jq_json_has_key "$idx_result" "id"; then
-                log_step "Prowlarr: added ${indexer_name} indexer, but could not enable it"
-                [ -n "$err_msg" ] && log_step "Prowlarr: ${err_msg}"
-            else
-                log_step_fail "Prowlarr: failed to add ${indexer_name} indexer"
+            continue
+        fi
+
+        if [ -n "$byparr_tag_id" ]; then
+            local tagged_payload
+            tagged_payload=$(printf '%s' "$indexer_payload" | jq -c --argjson tid "$byparr_tag_id" '.tags = ((.tags // []) + [$tid] | unique)' 2>/dev/null || echo "")
+            if [ -n "$tagged_payload" ]; then
+                idx_result=$(api_post_force "9696" "/api/v1/indexer" "$apikey" "$tagged_payload" || echo "")
+                if jq_json_has_key "$idx_result" "id"; then
+                    log_step "Prowlarr: added ${indexer_name} indexer (via Byparr)"
+                    continue
+                fi
+                indexer_payload="$tagged_payload"
             fi
+        fi
+
+        local err_msg disabled_payload
+        err_msg=$(printf '%s' "$idx_result" | jq -r 'if type == "array" then .[0].errorMessage // empty else .errorMessage // empty end' 2>/dev/null || echo "")
+        disabled_payload=$(printf '%s' "$indexer_payload" | jq -c '.enable = false' 2>/dev/null || echo "")
+        idx_result=$(api_post_force "9696" "/api/v1/indexer" "$apikey" "$disabled_payload" || echo "")
+        if jq_json_has_key "$idx_result" "id"; then
+            _prowlarr_step_warn "Prowlarr: added ${indexer_name} indexer, but could not enable it"
+            [ -n "$err_msg" ] && _prowlarr_step_warn "Prowlarr: ${err_msg}"
+        else
+            log_step_fail "Prowlarr: failed to add ${indexer_name} indexer"
         fi
     done
     if [ "${#selected_indexers[@]}" -gt 0 ]; then
