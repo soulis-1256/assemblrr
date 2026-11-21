@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install lint and test dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends jq gettext-base shellcheck python3
+
+      - name: Check bash syntax & shellcheck & Python compile
+        env:
+          CI: "true"
+        run: bash tests/run.sh lint
+
+      - name: Run unit tests (shell + Python unittest)
+        run: make test-unit
+
+      - name: Validate Docker Compose overlays
+        run: make test-compose

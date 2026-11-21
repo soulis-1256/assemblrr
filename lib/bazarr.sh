@@ -1,15 +1,19 @@
 #!/bin/bash
-# assemblrr Bazarr configuration — sourced by config.sh
-# Provides: configure_bazarr
-# Requires: lib/core.sh, lib/api.sh, INSTALL_DIR, API_HOST, RADARR_API_KEY, SONARR_API_KEY
+# SPDX-License-Identifier: GPL-3.0-or-later
+# assemblrr Bazarr configuration — sourced by config.sh / config_edit.sh
+# Requires: lib/core.sh, lib/api.sh, lib/languages.sh
 
-set -euo pipefail
+if [ -n "${_ASSEMBLRR_BAZARR_SOURCED:-}" ]; then
+    return 0
+fi
+readonly _ASSEMBLRR_BAZARR_SOURCED=1
+
+_bazarr_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/languages.sh
+[ -f "$_bazarr_dir/languages.sh" ] && source "$_bazarr_dir/languages.sh"
 
 BAZARR_PORT=6767
 
-# --- helpers ---
-
-# Resolve Bazarr config file (v1.x uses config.yaml; older used config.ini)
 _bazarr_config_file() {
     local candidates=(
         "$INSTALL_DIR/config/bazarr/config/config.yaml"
@@ -27,13 +31,11 @@ _bazarr_config_file() {
     return 1
 }
 
-# Extract auth.apikey from yaml or ini
 _bazarr_extract_apikey() {
     local cfg="$1"
     local key=""
     case "$cfg" in
         *.yaml|*.yml)
-            # Prefer yq if present; else awk under the auth: section
             if command -v yq >/dev/null 2>&1; then
                 key=$(yq -r '.auth.apikey // empty' "$cfg" 2>/dev/null || true)
             fi
@@ -58,9 +60,7 @@ _bazarr_extract_apikey() {
 }
 
 read_bazarr_api_key() {
-    local max_wait=180
-    local wait_time=0
-    local cfg key
+    local max_wait=180 wait_time=0 cfg key
 
     while [ $wait_time -lt $max_wait ]; do
         if cfg=$(_bazarr_config_file 2>/dev/null); then
@@ -80,78 +80,34 @@ read_bazarr_api_key() {
     return 1
 }
 
+_bazarr_api_ready() {
+    local apikey="$1"
+    http_request GET "http://${API_HOST}:${BAZARR_PORT}/api/system/status" -H "X-API-KEY: ${apikey}"
+}
+
 wait_for_bazarr() {
     local apikey="$1"
     local max_wait="${API_READY_TIMEOUT_SECONDS:-120}"
-    local wait_time=0
-    local code
-
-    while [ $wait_time -lt $max_wait ]; do
-        code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 3 \
-            "http://${API_HOST}:${BAZARR_PORT}/api/system/status?apikey=${apikey}" 2>/dev/null || echo "000")
-        if [ "$code" = "200" ]; then
-            [ "$wait_time" -gt 0 ] && echo >&2
-            return 0
-        fi
-        wait_inline "Waiting for Bazarr API" "$wait_time"
-        sleep 3
-        wait_time=$((wait_time + 3))
-    done
-    echo >&2
+    if wait_until "Waiting for Bazarr API" "$max_wait" 3 _bazarr_api_ready "$apikey"; then
+        return 0
+    fi
     log_step_fail "Bazarr: API not ready after ${max_wait}s"
     return 1
 }
 
-# POST multipart form settings to Bazarr (args are curl -F fragments after apikey)
+# POST multipart settings safely using --form-string (no @/< file-upload injection).
 _bazarr_post_form() {
     local apikey="$1"
     shift
-    # Remaining args: -F "key=value" ...
-    curl -s -o /tmp/bazarr-settings-body.txt -w "%{http_code}" --connect-timeout 15 \
-        -X POST \
-        "http://${API_HOST}:${BAZARR_PORT}/api/system/settings?apikey=${apikey}" \
-        "$@" 2>/dev/null || echo "000"
+    http_request POST "http://${API_HOST}:${BAZARR_PORT}/api/system/settings" \
+        -H "X-API-KEY: ${apikey}" "$@" || true
+    printf '%s' "$HTTP_STATUS"
 }
 
-# Map setup / ISO 639-1 or 639-2 codes → Bazarr language filter code2 (ISO 639-1)
 _bazarr_lang_code2() {
-    local code="${1:-en}"
-    code=${code%%$'\t'*}
-    code=${code// /}
-    case "$code" in
-        ""|"none"|"None") echo "en"; return ;;
-        # Already 2-letter
-        [a-z][a-z]) echo "$code"; return ;;
-        # Common ISO 639-2/B (and some T) → 639-1 (setup has stored "eng" etc.)
-        eng) echo "en" ;;
-        gre|ell) echo "el" ;;
-        deu|ger) echo "de" ;;
-        fra|fre) echo "fr" ;;
-        spa) echo "es" ;;
-        ita) echo "it" ;;
-        por) echo "pt" ;;
-        nld|dut) echo "nl" ;;
-        rus) echo "ru" ;;
-        jpn) echo "ja" ;;
-        zho|chi) echo "zh" ;;
-        kor) echo "ko" ;;
-        ara) echo "ar" ;;
-        tur) echo "tr" ;;
-        pol) echo "pl" ;;
-        swe) echo "sv" ;;
-        nor) echo "no" ;;
-        dan) echo "da" ;;
-        fin) echo "fi" ;;
-        heb) echo "he" ;;
-        hin) echo "hi" ;;
-        *)
-            # Unknown 3-letter: keep as-is (Bazarr may reject; better than inventing)
-            echo "$code"
-            ;;
-    esac
+    iso639_to_code2 "${1:-en}"
 }
 
-# Unique ISO 639-1 codes, preferred first. Args are stored picker codes (eng, ell, en, …).
 _bazarr_code2_list() {
     local -a out=()
     local c mapped x seen
@@ -171,9 +127,7 @@ _bazarr_code2_list() {
 }
 
 # TRaSH 90/80 assumes hash-rich English catalogs. Non-English OpenSubtitles.com
-# hits typically miss hash and source (WEB-DL vs community BluRay) and score ~55-74,
-# so a 90/80 floor skips them. Subsync still retimes anything below 96/86.
-# Prints: "<series> <movie>"
+# hits score lower (~55-74); drop min scores to 70/50 when non-English languages exist.
 _bazarr_min_scores() {
     local series=90 movie=80 c mapped
     for c in "$@"; do
@@ -187,28 +141,6 @@ _bazarr_min_scores() {
     echo "$series $movie"
 }
 
-# Append a provider if it is not already in the providers array.
-_bazarr_providers_add() {
-    local name="$1" p
-    for p in "${providers[@]+"${providers[@]}"}"; do
-        [ "$p" = "$name" ] && return 0
-    done
-    providers+=("$name")
-}
-
-# Providers that actually carry a language. Only when the picker did not
-# confirm a set (same rule as auto-adding OpenSubtitles.com).
-_bazarr_add_language_providers() {
-    local code
-    [ "${FZF_SELECT_STATUS:-}" = "confirmed" ] && return 0
-    for code in "$@"; do
-        case "$code" in
-            el) _bazarr_providers_add greeksubs ;;
-        esac
-    done
-}
-
-# Default profile JSON: every language in the list, no cutoff (download all of them).
 _bazarr_languages_profile_json() {
     local langs_json
     langs_json=$(_bazarr_code2_list "$@" | jq -R . | jq -sc .)
@@ -233,21 +165,21 @@ _bazarr_languages_profile_json() {
     ]'
 }
 
-# Fetch Jellyfin movie/TV library names + ids for Bazarr refresh (optional)
+# Fetch Jellyfin movie/TV library names + ids using standard Jellyfin 12 auth header.
 _bazarr_jellyfin_libraries() {
     local jf_key="$1"
-    local folders
-    folders=$(curl -s --connect-timeout 5 \
-        -H "X-Emby-Token: ${jf_key}" \
-        "http://${API_HOST}:8096/Library/VirtualFolders" 2>/dev/null || echo "[]")
+    local folders="[]"
+    if http_request GET "http://${API_HOST}:8096/Library/VirtualFolders" \
+        -H "Authorization: MediaBrowser Client=\"assemblrr\", Device=\"assemblrr\", DeviceId=\"assemblrr-cli\", Version=\"1.0\", Token=\"${jf_key}\""; then
+        folders="$HTTP_BODY"
+    fi
 
-    # Export via globals used by caller
     BAZARR_JF_MOVIE_NAMES=()
     BAZARR_JF_MOVIE_IDS=()
     BAZARR_JF_SERIES_NAMES=()
     BAZARR_JF_SERIES_IDS=()
 
-    local line name id ctype
+    local name id ctype
     while IFS=$'\t' read -r name id ctype; do
         [ -z "$name" ] && continue
         case "$ctype" in
@@ -260,19 +192,16 @@ _bazarr_jellyfin_libraries() {
                 BAZARR_JF_SERIES_IDS+=("$id")
                 ;;
         esac
-    done < <(echo "$folders" | jq -r '.[] | select(.CollectionType=="movies" or .CollectionType=="tvshows") | "\(.Name)\t\(.ItemId // .Guid // "")\t\(.CollectionType)"' 2>/dev/null || true)
+    done < <(printf '%s' "$folders" | jq -r '.[] | select(.CollectionType=="movies" or .CollectionType=="tvshows") | "\(.Name)\t\(.ItemId // .Guid // "")\t\(.CollectionType)"' 2>/dev/null || true)
 }
 
 configure_bazarr() {
-    local bazarr_key=""
-    local os_user="" os_pass=""
-    local form_args=()
-    local http_code
+    local bazarr_key="" os_user="" os_pass=""
+    local form_args=() http_code
     local providers=()
     local profiles_json
     local has_sonarr=0 has_radarr=0
-    local jf_key=""
-    local jellyfin_refresh=0
+    local jf_key="" jellyfin_refresh=0
 
     if ! bazarr_key=$(read_bazarr_api_key); then
         return 1
@@ -282,11 +211,9 @@ configure_bazarr() {
     fi
 
     local -a stored_langs=() lang_code2s=()
-    if type _subtitle_stored_lang_codes >/dev/null 2>&1; then
-        while IFS= read -r lang_code2; do
-            [ -n "$lang_code2" ] && stored_langs+=("$lang_code2")
-        done < <(_subtitle_stored_lang_codes)
-    fi
+    while IFS= read -r lang_code2; do
+        [ -n "$lang_code2" ] && stored_langs+=("$lang_code2")
+    done < <(_subtitle_stored_lang_codes)
     if [ ${#stored_langs[@]} -eq 0 ]; then
         stored_langs=("${SUBTITLE_LANGUAGE:-en}")
     fi
@@ -294,26 +221,19 @@ configure_bazarr() {
         [ -n "$lang_code2" ] && lang_code2s+=("$lang_code2")
     done < <(_bazarr_code2_list "${stored_langs[@]}")
 
-    if [ -n "${SONARR_API_KEY:-}" ]; then
-        has_sonarr=1
-    fi
-    if [ -n "${RADARR_API_KEY:-}" ]; then
-        has_radarr=1
-    fi
+    [ -n "${SONARR_API_KEY:-}" ] && has_sonarr=1
+    [ -n "${RADARR_API_KEY:-}" ] && has_radarr=1
 
     if [ "$has_sonarr" -eq 0 ] && [ "$has_radarr" -eq 0 ]; then
         log_step_fail "Bazarr: neither Sonarr nor Radarr API keys available — skipping"
         return 1
     fi
 
-    # Optional OpenSubtitles.com credentials from secrets/
     if [ -s "$INSTALL_DIR/secrets/opensubtitles_username.txt" ] && [ -s "$INSTALL_DIR/secrets/opensubtitles_password.txt" ]; then
         os_user=$(cat "$INSTALL_DIR/secrets/opensubtitles_username.txt" 2>/dev/null || echo "")
         os_pass=$(cat "$INSTALL_DIR/secrets/opensubtitles_password.txt" 2>/dev/null || echo "")
     fi
 
-    # Providers: picker confirm = desired set (may be empty). Esc / no picker
-    # leaves Bazarr's current enabled list alone.
     providers=()
     if [ "${FZF_SELECT_STATUS:-}" = "confirmed" ]; then
         if [ "${#SELECTED_SUBTITLE_PROVIDERS[@]}" -gt 0 ]; then
@@ -331,10 +251,10 @@ configure_bazarr() {
             [ "$has_os" -eq 0 ] && providers+=(opensubtitlescom)
         fi
         if [ "${#providers[@]}" -eq 0 ]; then
-            local current_p
-            current_p=$(curl -s --connect-timeout 8 \
-                "http://${API_HOST}:${BAZARR_PORT}/api/system/settings?apikey=${bazarr_key}" 2>/dev/null \
-                | jq -r '.general.enabled_providers[]? // empty' 2>/dev/null || true)
+            local current_p=""
+            if http_request GET "http://${API_HOST}:${BAZARR_PORT}/api/system/settings" -H "X-API-KEY: ${bazarr_key}"; then
+                current_p=$(printf '%s' "$HTTP_BODY" | jq -r '.general.enabled_providers[]? // empty' 2>/dev/null || true)
+            fi
             if [ -n "$current_p" ]; then
                 while IFS= read -r p; do
                     [ -n "$p" ] && providers+=("$p")
@@ -346,135 +266,119 @@ configure_bazarr() {
         fi
     fi
 
-    _bazarr_add_language_providers "${lang_code2s[@]}"
-
     local min_series=90 min_movie=80
     read -r min_series min_movie < <(_bazarr_min_scores "${stored_langs[@]}")
 
-    # --- Core integrations + TRaSH-style scoring ---
     form_args=(
-        -F "settings-general-use_sonarr=$([ "$has_sonarr" -eq 1 ] && echo true || echo false)"
-        -F "settings-general-use_radarr=$([ "$has_radarr" -eq 1 ] && echo true || echo false)"
-        -F "settings-general-minimum_score=${min_series}"
-        -F "settings-general-minimum_score_movie=${min_movie}"
-        -F "settings-general-subfolder=current"
-        -F "settings-general-upgrade_subs=true"
-        -F "settings-general-days_to_upgrade_subs=7"
-        -F "settings-general-use_embedded_subs=true"
-        -F "settings-general-serie_default_enabled=true"
-        -F "settings-general-serie_default_profile=1"
-        -F "settings-general-movie_default_enabled=true"
-        -F "settings-general-movie_default_profile=1"
-        -F "settings-subsync-use_subsync=true"
-        -F "settings-subsync-use_subsync_threshold=true"
-        -F "settings-subsync-subsync_threshold=96"
-        -F "settings-subsync-use_subsync_movie_threshold=true"
-        -F "settings-subsync-subsync_movie_threshold=86"
+        --form-string "settings-general-use_sonarr=$([ "$has_sonarr" -eq 1 ] && echo true || echo false)"
+        --form-string "settings-general-use_radarr=$([ "$has_radarr" -eq 1 ] && echo true || echo false)"
+        --form-string "settings-general-minimum_score=${min_series}"
+        --form-string "settings-general-minimum_score_movie=${min_movie}"
+        --form-string "settings-general-subfolder=current"
+        --form-string "settings-general-upgrade_subs=true"
+        --form-string "settings-general-days_to_upgrade_subs=7"
+        --form-string "settings-general-use_embedded_subs=true"
+        --form-string "settings-general-serie_default_enabled=true"
+        --form-string "settings-general-serie_default_profile=1"
+        --form-string "settings-general-movie_default_enabled=true"
+        --form-string "settings-general-movie_default_profile=1"
+        --form-string "settings-subsync-use_subsync=true"
+        --form-string "settings-subsync-use_subsync_threshold=true"
+        --form-string "settings-subsync-subsync_threshold=96"
+        --form-string "settings-subsync-use_subsync_movie_threshold=true"
+        --form-string "settings-subsync-subsync_movie_threshold=86"
     )
 
     local p
     for p in "${providers[@]+"${providers[@]}"}"; do
-        form_args+=(-F "settings-general-enabled_providers=${p}")
+        form_args+=(--form-string "settings-general-enabled_providers=${p}")
     done
 
     if [ "$has_sonarr" -eq 1 ]; then
         form_args+=(
-            -F "settings-sonarr-ip=sonarr"
-            -F "settings-sonarr-port=8989"
-            -F "settings-sonarr-base_url=/"
-            -F "settings-sonarr-ssl=false"
-            -F "settings-sonarr-apikey=${SONARR_API_KEY}"
-            -F "settings-sonarr-only_monitored=true"
+            --form-string "settings-sonarr-ip=sonarr"
+            --form-string "settings-sonarr-port=8989"
+            --form-string "settings-sonarr-base_url=/"
+            --form-string "settings-sonarr-ssl=false"
+            --form-string "settings-sonarr-apikey=${SONARR_API_KEY}"
+            --form-string "settings-sonarr-only_monitored=true"
         )
     fi
 
     if [ "$has_radarr" -eq 1 ]; then
         form_args+=(
-            -F "settings-radarr-ip=radarr"
-            -F "settings-radarr-port=7878"
-            -F "settings-radarr-base_url=/"
-            -F "settings-radarr-ssl=false"
-            -F "settings-radarr-apikey=${RADARR_API_KEY}"
-            -F "settings-radarr-only_monitored=true"
+            --form-string "settings-radarr-ip=radarr"
+            --form-string "settings-radarr-port=7878"
+            --form-string "settings-radarr-base_url=/"
+            --form-string "settings-radarr-ssl=false"
+            --form-string "settings-radarr-apikey=${RADARR_API_KEY}"
+            --form-string "settings-radarr-only_monitored=true"
         )
     fi
 
     if [ -n "$os_user" ] && [ -n "$os_pass" ]; then
         form_args+=(
-            -F "settings-opensubtitlescom-username=${os_user}"
-            -F "settings-opensubtitlescom-password=${os_pass}"
-            -F "settings-opensubtitlescom-use_hash=true"
-            -F "settings-opensubtitlescom-include_ai_translated=false"
-            -F "settings-opensubtitlescom-include_machine_translated=false"
+            --form-string "settings-opensubtitlescom-username=${os_user}"
+            --form-string "settings-opensubtitlescom-password=${os_pass}"
+            --form-string "settings-opensubtitlescom-use_hash=true"
+            --form-string "settings-opensubtitlescom-include_ai_translated=false"
+            --form-string "settings-opensubtitlescom-include_machine_translated=false"
         )
     fi
 
-    # First wire only: Bazarr hashes the password on save, so later wires
-    # must not resend it (that would MD5 the hash). Auth edit uses bazarr_set_auth.
     local auth_type=""
-    auth_type=$(curl -s --connect-timeout 8 \
-        "http://${API_HOST}:${BAZARR_PORT}/api/system/settings?apikey=${bazarr_key}" 2>/dev/null \
-        | jq -r '.auth.type // empty' 2>/dev/null || true)
+    if http_request GET "http://${API_HOST}:${BAZARR_PORT}/api/system/settings" -H "X-API-KEY: ${bazarr_key}"; then
+        auth_type=$(printf '%s' "$HTTP_BODY" | jq -r '.auth.type // empty' 2>/dev/null || true)
+    fi
     if { [ -z "$auth_type" ] || [ "$auth_type" = "null" ] || [ "$auth_type" = "None" ]; } \
         && [ -n "${AUTH_USERNAME:-}" ] && [ -n "${AUTH_PASSWORD:-}" ]; then
         form_args+=(
-            -F "settings-auth-type=form"
-            -F "settings-auth-username=${AUTH_USERNAME}"
-            -F "settings-auth-password=${AUTH_PASSWORD}"
+            --form-string "settings-auth-type=form"
+            --form-string "settings-auth-username=${AUTH_USERNAME}"
+            --form-string "settings-auth-password=${AUTH_PASSWORD}"
         )
     fi
 
-    # Jellyfin refresh after subtitle downloads
-    if [ "${MEDIA_SERVICE:-}" = "jellyfin" ]; then
+    if [ "${MEDIA_SERVICE:-jellyfin}" = "jellyfin" ]; then
         jf_key=$(cat "$INSTALL_DIR/secrets/jellyfin_api_key.txt" 2>/dev/null || echo "")
         if [ -n "$jf_key" ]; then
             _bazarr_jellyfin_libraries "$jf_key"
             form_args+=(
-                -F "settings-general-use_jellyfin=true"
-                -F "settings-jellyfin-url=http://jellyfin:8096"
-                -F "settings-jellyfin-apikey=${jf_key}"
-                -F "settings-jellyfin-update_movie_library=true"
-                -F "settings-jellyfin-update_series_library=true"
-                -F "settings-jellyfin-refresh_method=immediate"
+                --form-string "settings-general-use_jellyfin=true"
+                --form-string "settings-jellyfin-url=http://jellyfin:8096"
+                --form-string "settings-jellyfin-apikey=${jf_key}"
+                --form-string "settings-jellyfin-update_movie_library=true"
+                --form-string "settings-jellyfin-update_series_library=true"
+                --form-string "settings-jellyfin-refresh_method=immediate"
             )
             local n
-            if [ "${#BAZARR_JF_MOVIE_NAMES[@]}" -gt 0 ]; then
-                for n in "${BAZARR_JF_MOVIE_NAMES[@]}"; do
-                    [ -n "$n" ] && form_args+=(-F "settings-jellyfin-movie_library=${n}")
-                done
-            fi
-            if [ "${#BAZARR_JF_MOVIE_IDS[@]}" -gt 0 ]; then
-                for n in "${BAZARR_JF_MOVIE_IDS[@]}"; do
-                    [ -n "$n" ] && form_args+=(-F "settings-jellyfin-movie_library_ids=${n}")
-                done
-            fi
-            if [ "${#BAZARR_JF_SERIES_NAMES[@]}" -gt 0 ]; then
-                for n in "${BAZARR_JF_SERIES_NAMES[@]}"; do
-                    [ -n "$n" ] && form_args+=(-F "settings-jellyfin-series_library=${n}")
-                done
-            fi
-            if [ "${#BAZARR_JF_SERIES_IDS[@]}" -gt 0 ]; then
-                for n in "${BAZARR_JF_SERIES_IDS[@]}"; do
-                    [ -n "$n" ] && form_args+=(-F "settings-jellyfin-series_library_ids=${n}")
-                done
-            fi
+            for n in "${BAZARR_JF_MOVIE_NAMES[@]+"${BAZARR_JF_MOVIE_NAMES[@]}"}"; do
+                [ -n "$n" ] && form_args+=(--form-string "settings-jellyfin-movie_library=${n}")
+            done
+            for n in "${BAZARR_JF_MOVIE_IDS[@]+"${BAZARR_JF_MOVIE_IDS[@]}"}"; do
+                [ -n "$n" ] && form_args+=(--form-string "settings-jellyfin-movie_library_ids=${n}")
+            done
+            for n in "${BAZARR_JF_SERIES_NAMES[@]+"${BAZARR_JF_SERIES_NAMES[@]}"}"; do
+                [ -n "$n" ] && form_args+=(--form-string "settings-jellyfin-series_library=${n}")
+            done
+            for n in "${BAZARR_JF_SERIES_IDS[@]+"${BAZARR_JF_SERIES_IDS[@]}"}"; do
+                [ -n "$n" ] && form_args+=(--form-string "settings-jellyfin-series_library_ids=${n}")
+            done
             jellyfin_refresh=1
         else
             _cfg_log_info "Bazarr: Jellyfin API key not found — skipping JF refresh integration"
         fi
     fi
 
-    # Language filter + profile (id 1 = Default). First language is preferred
-    # (listed first); cutoff stays null so Bazarr still downloads the extras.
     profiles_json=$(_bazarr_languages_profile_json "${stored_langs[@]}")
     local enabled
     for enabled in "${lang_code2s[@]}"; do
-        form_args+=(-F "languages-enabled=${enabled}")
+        form_args+=(--form-string "languages-enabled=${enabled}")
     done
     if [ "${#lang_code2s[@]}" -gt 1 ]; then
-        form_args+=(-F "settings-general-single_language=false")
+        form_args+=(--form-string "settings-general-single_language=false")
     fi
-    form_args+=(-F "languages-profiles=${profiles_json}")
+    form_args+=(--form-string "languages-profiles=${profiles_json}")
 
     http_code=$(_bazarr_post_form "$bazarr_key" "${form_args[@]}")
     if [ "$http_code" = "204" ] || [ "$http_code" = "200" ]; then
@@ -488,39 +392,47 @@ configure_bazarr() {
             log_step "Bazarr: Jellyfin refresh enabled"
         fi
     else
-        local body=""
-        body=$(cat /tmp/bazarr-settings-body.txt 2>/dev/null | head -c 200 || true)
+        local body="${HTTP_BODY:0:200}"
         log_step_fail "Bazarr: settings POST failed (HTTP ${http_code}${body:+: $body})"
         return 1
     fi
 
-    # Persist key for operators / future tooling
-    echo -n "$bazarr_key" > "$INSTALL_DIR/secrets/bazarr_api_key.txt"
-    chmod 600 "$INSTALL_DIR/secrets/bazarr_api_key.txt" 2>/dev/null || true
+    write_secret_file "$INSTALL_DIR/secrets/bazarr_api_key.txt" "$bazarr_key"
 
-    # Kick library sync, then search wanted now (don't wait for the 6h interval).
     if [ "$has_sonarr" -eq 1 ]; then
-        curl -s -o /dev/null --connect-timeout 5 -X POST \
-            -F "taskid=update_series" \
-            "http://${API_HOST}:${BAZARR_PORT}/api/system/tasks?apikey=${bazarr_key}" 2>/dev/null || true
-        curl -s -o /dev/null --connect-timeout 5 -X POST \
-            -F "taskid=wanted_search_missing_subtitles_series" \
-            "http://${API_HOST}:${BAZARR_PORT}/api/system/tasks?apikey=${bazarr_key}" 2>/dev/null || true
+        http_request POST "http://${API_HOST}:${BAZARR_PORT}/api/system/tasks" -H "X-API-KEY: ${bazarr_key}" \
+            --form-string "taskid=update_series" || true
+        http_request POST "http://${API_HOST}:${BAZARR_PORT}/api/system/tasks" -H "X-API-KEY: ${bazarr_key}" \
+            --form-string "taskid=wanted_search_missing_subtitles_series" || true
     fi
     if [ "$has_radarr" -eq 1 ]; then
-        curl -s -o /dev/null --connect-timeout 5 -X POST \
-            -F "taskid=update_movies" \
-            "http://${API_HOST}:${BAZARR_PORT}/api/system/tasks?apikey=${bazarr_key}" 2>/dev/null || true
-        curl -s -o /dev/null --connect-timeout 5 -X POST \
-            -F "taskid=wanted_search_missing_subtitles_movies" \
-            "http://${API_HOST}:${BAZARR_PORT}/api/system/tasks?apikey=${bazarr_key}" 2>/dev/null || true
+        http_request POST "http://${API_HOST}:${BAZARR_PORT}/api/system/tasks" -H "X-API-KEY: ${bazarr_key}" \
+            --form-string "taskid=update_movies" || true
+        http_request POST "http://${API_HOST}:${BAZARR_PORT}/api/system/tasks" -H "X-API-KEY: ${bazarr_key}" \
+            --form-string "taskid=wanted_search_missing_subtitles_movies" || true
     fi
 
     return 0
 }
 
-# Set Bazarr form login. Always sends a fresh password (Bazarr MD5s it).
-# Do not call this from the regular wire loop — only from auth edit.
+trigger_bazarr_library_sync() {
+    local cfg="" bazarr_key=""
+    if cfg=$(_bazarr_config_file 2>/dev/null); then
+        bazarr_key=$(_bazarr_extract_apikey "$cfg")
+    fi
+    if [ -z "$bazarr_key" ] && [ -f "$INSTALL_DIR/secrets/bazarr_api_key.txt" ]; then
+        bazarr_key=$(cat "$INSTALL_DIR/secrets/bazarr_api_key.txt" 2>/dev/null || echo "")
+    fi
+    [ -n "$bazarr_key" ] || return 0
+
+    http_request POST "http://${API_HOST}:${BAZARR_PORT}/api/system/tasks" -H "X-API-KEY: ${bazarr_key}" \
+        --form-string "taskid=update_movies" || true
+    http_request POST "http://${API_HOST}:${BAZARR_PORT}/api/system/tasks" -H "X-API-KEY: ${bazarr_key}" \
+        --form-string "taskid=update_series" || true
+    log_step "Bazarr: triggered library sync with Sonarr/Radarr"
+    return 0
+}
+
 bazarr_set_auth() {
     local bazarr_key=""
     if [ -z "${AUTH_USERNAME:-}" ] || [ -z "${AUTH_PASSWORD:-}" ]; then
@@ -536,15 +448,14 @@ bazarr_set_auth() {
 
     local http_code
     http_code=$(_bazarr_post_form "$bazarr_key" \
-        -F "settings-auth-type=form" \
-        -F "settings-auth-username=${AUTH_USERNAME}" \
-        -F "settings-auth-password=${AUTH_PASSWORD}")
+        --form-string "settings-auth-type=form" \
+        --form-string "settings-auth-username=${AUTH_USERNAME}" \
+        --form-string "settings-auth-password=${AUTH_PASSWORD}")
     if [ "$http_code" = "204" ] || [ "$http_code" = "200" ]; then
         log_step "Bazarr: set login (${AUTH_USERNAME})"
         return 0
     fi
-    local body=""
-    body=$(cat /tmp/bazarr-settings-body.txt 2>/dev/null | head -c 200 || true)
+    local body="${HTTP_BODY:0:200}"
     log_step_fail "Bazarr: failed to set login (HTTP ${http_code}${body:+: $body})"
     return 1
 }

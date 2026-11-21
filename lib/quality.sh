@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # One quality choice for Radarr, Sonarr, and Seerr.
 # Canonical: QUALITY_TIER=uhd|hd|any
 #            QUALITY_SOURCE=web|bluray  (movies only; TV is always WEB)

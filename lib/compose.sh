@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # assemblrr Docker Compose builder — sourced by entry points that manage containers
 # Requires: lib/core.sh for compose_up_stack (wait_while, run_docker, log_warning)
 
@@ -7,12 +8,10 @@ if [ -n "${_ASSEMBLRR_COMPOSE_SOURCED:-}" ]; then
 fi
 readonly _ASSEMBLRR_COMPOSE_SOURCED=1
 
-# Builds the docker compose arguments array (COMPOSE_ARGS) based on VPN mode.
+# Builds the docker compose arguments array (COMPOSE_ARGS) based on VPN & feature flags.
 # Usage: build_compose_args "$install_dir" "$vpn_enabled"
-#   $1 = install directory (e.g. /home/user/assemblrr)
-#   $2 = vpn enabled flag ("y" or "n")
-# After calling, COMPOSE_ARGS contains -f flags and --project-directory.
-# Caller should add "--profile" and "docker compose" prefix as needed.
+# Reads optional env flags: VUETORRENT_ENABLED, GPU_TRANSCODING, BYPARR_ENABLED, USENET_ENABLED.
+# custom.yaml is always appended last so user overrides win.
 build_compose_args() {
     local _install_dir="$1"
     local _vpn_enabled="${2:-n}"
@@ -26,7 +25,34 @@ build_compose_args() {
         COMPOSE_ARGS+=("-f" "$_install_dir/compose/direct-access.yaml")
     fi
 
-    # Check for custom overlay
+    if [ "${VUETORRENT_ENABLED:-n}" = "y" ] || [ "${VUETORRENT_ENABLED:-n}" = "Y" ]; then
+        if [ -f "$_install_dir/compose/vuetorrent.yaml" ]; then
+            COMPOSE_ARGS+=("-f" "$_install_dir/compose/vuetorrent.yaml")
+        fi
+    fi
+
+    case "${GPU_TRANSCODING:-none}" in
+        intel|INTEL|amd|AMD|vaapi|VAAPI)
+            [ -f "$_install_dir/compose/gpu-intel.yaml" ] && COMPOSE_ARGS+=("-f" "$_install_dir/compose/gpu-intel.yaml")
+            ;;
+        nvidia|NVIDIA)
+            [ -f "$_install_dir/compose/gpu-nvidia.yaml" ] && COMPOSE_ARGS+=("-f" "$_install_dir/compose/gpu-nvidia.yaml")
+            ;;
+    esac
+
+    if [ "${BYPARR_ENABLED:-n}" = "y" ] || [ "${BYPARR_ENABLED:-n}" = "Y" ]; then
+        if [ -f "$_install_dir/compose/byparr.yaml" ]; then
+            COMPOSE_ARGS+=("-f" "$_install_dir/compose/byparr.yaml")
+        fi
+    fi
+
+    if [ "${USENET_ENABLED:-n}" = "y" ] || [ "${USENET_ENABLED:-n}" = "Y" ]; then
+        if [ -f "$_install_dir/compose/usenet.yaml" ]; then
+            COMPOSE_ARGS+=("-f" "$_install_dir/compose/usenet.yaml")
+        fi
+    fi
+
+    # User custom overlay always last so overrides win cleanly
     if [ -f "$_install_dir/compose/custom.yaml" ]; then
         COMPOSE_ARGS+=("-f" "$_install_dir/compose/custom.yaml")
     fi
@@ -34,20 +60,22 @@ build_compose_args() {
 
 # Bring the stack up. Image pulls and sidecar Dockerfile builds (apk, layers)
 # stay off the terminal. Failures print a tail of the captured log.
-# Usage: compose_up_stack <profile> [extra docker compose args...]
-# Requires COMPOSE_ARGS from build_compose_args.
+# Usage: compose_up_stack [profile] [extra docker compose args...]
 compose_up_stack() {
     local profile="${1:-}"
-    if [ -z "$profile" ]; then
-        return 1
+    local -a profile_args=()
+    if [ -n "$profile" ]; then
+        shift
+        if [ "$profile" != "default" ]; then
+            profile_args=(--profile "$profile")
+        fi
     fi
-    shift
     if [ "${#COMPOSE_ARGS[@]}" -eq 0 ]; then
         return 1
     fi
 
     if ! wait_while "Starting services" \
-        run_docker compose "${COMPOSE_ARGS[@]}" --profile "$profile" up -d --remove-orphans "$@"; then
+        run_docker compose "${COMPOSE_ARGS[@]}" "${profile_args[@]}" up -d --remove-orphans "$@"; then
         log_warning "Failed to start services"
         if [ -n "${WAIT_WHILE_OUTPUT:-}" ]; then
             echo "$WAIT_WHILE_OUTPUT" | tail -n 40

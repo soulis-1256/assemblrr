@@ -1,20 +1,8 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# assemblrr Linux Bootstrap Script
+# Clones the repository (branch, tag, or commit SHA) and launches bin/setup.sh
 set -euo pipefail
-
-# assemblrr Bootstrap Script
-# Clones the repository and launches setup.sh
-#
-# Usage (bash/zsh):
-#   bash <(curl -fsSL https://raw.githubusercontent.com/soulis-1256/assemblrr/main/platform/linux/bootstrap.sh)
-#   bash <(curl -fsSL ...) --ref dev
-#   ASSEMBLRR_REF=dev bash <(curl -fsSL ...)
-# Usage (fish):
-#   bash (curl -fsSL ... | psub)
-#   bash (curl -fsSL ... | psub) --ref dev
-#
-# Ref selection (first match wins among flags; env is the default):
-#   --ref REF | --branch REF | ASSEMBLRR_REF (default: main)
-# Remaining args are passed to bin/setup.sh.
 
 REPO="https://github.com/soulis-1256/assemblrr"
 REF="${ASSEMBLRR_REF:-main}"
@@ -24,7 +12,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --ref|--branch)
             if [ -z "${2:-}" ]; then
-                echo "error: $1 requires a value (branch, tag, or commit-ish)" >&2
+                echo "error: $1 requires a value (branch, tag, or commit SHA)" >&2
                 exit 1
             fi
             REF="$2"
@@ -50,10 +38,17 @@ cleanup() { rm -rf "$TMPDIR"; }
 trap cleanup EXIT
 
 echo "Cloning assemblrr @ ${REF}..."
-if ! git clone --depth=1 --branch "$REF" "$REPO" "$TMPDIR"; then
-    echo "error: failed to clone ${REPO} @ ${REF}" >&2
-    exit 1
+if ! git clone --depth=1 --branch "$REF" "$REPO" "$TMPDIR" 2>/dev/null; then
+    rm -rf "$TMPDIR"
+    mkdir -p "$TMPDIR"
+    if ! git clone --depth=1 "$REPO" "$TMPDIR" \
+        || ! git -C "$TMPDIR" fetch --depth=1 origin "$REF" 2>/dev/null \
+        || ! git -C "$TMPDIR" checkout -q FETCH_HEAD 2>/dev/null; then
+        echo "error: failed to clone/checkout ${REPO} @ ${REF}" >&2
+        exit 1
+    fi
 fi
 
+export ASSEMBLRR_INSTALL_REF="$REF"
 cd "$TMPDIR"
 bash bin/setup.sh "${setup_args[@]}"

@@ -21,6 +21,10 @@ assert_contains "$ids" "providers" "lists providers"
 assert_contains "$ids" "language" "lists language"
 assert_contains "$ids" "profile" "lists profile"
 assert_contains "$ids" "vpn" "lists vpn"
+assert_contains "$ids" "vuetorrent" "lists vuetorrent"
+assert_contains "$ids" "gpu" "lists gpu"
+assert_contains "$ids" "byparr" "lists byparr"
+assert_contains "$ids" "usenet" "lists usenet"
 assert_contains "$ids" "all" "lists all (full wizard)"
 
 test_suite "config_edit_resolve"
@@ -157,5 +161,18 @@ assert_contains "$(sed -n '/^configure_seerr()/,/^seerr_verify_login()/p' "$REPO
     '--arg pass' "seerr setup payload jq-escapes password"
 assert_contains "$(sed -n '/^configure_jellyfin_libraries()/,/^}/p' "$REPO_ROOT/lib/jellyfin.sh")" \
     'jq -nc --arg u' "jellyfin library auth jq-escapes password"
+
+test_suite "config_edit regressions: _config_edit_all, non-fzf stdout, kv escaping & mode"
+assert_contains "$(sed -n '/^_config_edit_all()/,/^}/p' "$REPO_ROOT/lib/config_edit.sh")" \
+    '--reconfigure' "_config_edit_all passes --reconfigure"
+sec_f="$tmp/sec.conf"
+: > "$sec_f"
+chmod 600 "$sec_f"
+config_set_kv "$sec_f" "VAL" 'a"b' 1
+assert_contains "$(cat "$sec_f")" 'VAL="a\"b"' "escapes embedded quotes cleanly"
+perm=$(stat -c '%a' "$sec_f" 2>/dev/null || stat -f '%Lp' "$sec_f")
+assert_eq "600" "$perm" "preserves 0600 permissions after atomic update"
+picked=$(_config_edit_pick <<< "1" 2>/dev/null)
+assert_eq "indexers" "$picked" "non-fzf _config_edit_pick emits only the section id on stdout"
 
 test_summary

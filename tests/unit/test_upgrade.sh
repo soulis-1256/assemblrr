@@ -55,21 +55,15 @@ assert_eq "70 50" "$(_bazarr_min_scores ell)" "greek alone is lenient"
 assert_eq "70 50" "$(_bazarr_min_scores eng ell)" "english+greek is lenient"
 assert_eq "70 50" "$(_bazarr_min_scores de)" "german is lenient"
 
-test_suite "_bazarr_add_language_providers greeksubs"
-providers=()
-FZF_SELECT_STATUS=""
-_bazarr_add_language_providers el en
-assert_eq "greeksubs" "${providers[*]}" "adds greeksubs for el"
-providers=(opensubtitlescom)
-_bazarr_add_language_providers el
-assert_eq "opensubtitlescom greeksubs" "${providers[*]}" "keeps existing and appends"
-providers=(greeksubs)
-_bazarr_add_language_providers el
-assert_eq "greeksubs" "${providers[*]}" "does not duplicate"
-providers=()
-FZF_SELECT_STATUS="confirmed"
-_bazarr_add_language_providers el
-assert_eq "" "${providers[*]-}" "respects confirmed picker"
+test_suite "iso639_to_code2 covers full subtitle map & bazarr stays neutral"
+assert_eq "cs" "$(_bazarr_lang_code2 ces)" "ces -> cs"
+assert_eq "uk" "$(_bazarr_lang_code2 ukr)" "ukr -> uk"
+assert_eq "ro" "$(_bazarr_lang_code2 ron)" "ron -> ro"
+assert_eq "hu" "$(_bazarr_lang_code2 hun)" "hun -> hu"
+assert_eq "ja" "$(_bazarr_lang_code2 jpn)" "jpn -> ja"
+assert_not_contains "$(cat "$REPO_ROOT/lib/bazarr.sh")" "greeksubs" "bazarr does not auto-inject greeksubs"
+assert_contains "$(sed -n '/^_bazarr_post_form()/,/^}/p' "$REPO_ROOT/lib/bazarr.sh")" "http_request" "bazarr uses http_request"
+assert_not_contains "$(sed -n '/^configure_bazarr()/,/^}/p' "$REPO_ROOT/lib/bazarr.sh")" ' -F ' "bazarr uses --form-string, never curl -F"
 
 test_suite "migration 001 skip when custom.yaml has bazarr"
 tmp="" tmp2=""
@@ -200,5 +194,45 @@ assert_contains "$dev" "-name '*.py'" "bootstrap-dev.ps1 strips Python"
 assert_contains "$dev" "-name '*.Dockerfile'" "bootstrap-dev.ps1 strips sidecar Dockerfiles"
 assert_not_contains "$win" "sed -i 's/\\r\$//' /tmp/\$AppName/.env.example /tmp/\$AppName/bin/*.sh" \
     "bootstrap.ps1 no longer uses the stale glob list"
+assert_not_contains "$dev" ".local/bin/lib" "bootstrap-dev.ps1 does not copy stale ~/.local/bin/lib"
+assert_contains "$dev" "apply_managed_files" "bootstrap-dev.ps1 syncs via managed_files.sh"
+
+test_suite "migration 004 backfills feature flags & creates sabnzbd dir"
+tmp5=$(mktemp -d)
+printf 'TZ=UTC\n' > "$tmp5/.env"
+printf 'TZ="UTC"\nMEDIA_SERVICE="emby"\n' > "$tmp5/.assemblrr-config"
+unset -f migration_should_skip migration_apply 2>/dev/null || true
+# shellcheck source=/dev/null
+source "$REPO_ROOT/migrations/004_jellyfin_12_and_stack_revival.sh"
+if migration_should_skip "$tmp5"; then
+    _TEST_FAILURES=$((_TEST_FAILURES + 1))
+    echo "  FAIL: 004 should not skip when new keys missing"
+else
+    _TEST_PASSES=$((_TEST_PASSES + 1))
+    echo "  PASS: 004 detects missing keys & sabnzbd dir"
+fi
+migration_apply "$tmp5" 2>/dev/null
+assert_true "004 created config/sabnzbd" "[ -d '$tmp5/config/sabnzbd' ]"
+assert_contains "$(cat "$tmp5/.env")" "USENET_ENABLED=n" "004 backfills .env USENET_ENABLED"
+assert_contains "$(cat "$tmp5/.assemblrr-config")" 'BYPARR_ENABLED="n"' "004 backfills config BYPARR_ENABLED"
+if migration_should_skip "$tmp5"; then
+    _TEST_PASSES=$((_TEST_PASSES + 1))
+    echo "  PASS: 004 skips once applied"
+else
+    _TEST_FAILURES=$((_TEST_FAILURES + 1))
+    echo "  FAIL: 004 should skip after apply"
+fi
+rm -rf "$tmp4" "$tmp5"
+
+test_suite "managed files include modular libs & feature overlays"
+for req in lib/log.sh lib/usenet.sh lib/recyclarr.sh lib/languages.sh compose/vuetorrent.yaml compose/gpu-intel.yaml compose/gpu-nvidia.yaml compose/byparr.yaml compose/usenet.yaml docs/komodo.md NOTICE; do
+    assert_true "has $req" "echo \"\$list\" | grep -q '${req}|${req}'"
+done
+
+test_suite "upgrade engine rollback & channel support"
+up_src=$(cat "$REPO_ROOT/lib/upgrade.sh")
+assert_contains "$up_src" "_restore_managed_rollback" "upgrade rolls back on invalid compose"
+assert_contains "$up_src" "ASSEMBLRR_UPGRADE_REEXEC" "upgrade re-execs updated cli"
+assert_contains "$up_src" ".assemblrr-channel" "upgrade supports .assemblrr-channel"
 
 test_summary

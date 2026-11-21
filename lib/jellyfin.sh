@@ -1,48 +1,57 @@
 #!/bin/bash
-# assemblrr Jellyfin configuration — sourced by config.sh
-# Provides: configure_jellyfin, configure_jellyfin_xml_fallback,
-#           configure_jellyfin_libraries, configure_jellyfin_notifications
-# Requires: lib/core.sh (logging), lib/api.sh (api_get/post helpers),
-#           config.sh (_cfg_log_info, log_step, log_step_fail, AUTH_USERNAME, etc.)
+# SPDX-License-Identifier: GPL-3.0-or-later
+# assemblrr Jellyfin 12+ configuration — sourced by config.sh / config_edit.sh
+# Uses standard `Authorization: MediaBrowser` headers (Jellyfin 12 removed legacy X-Emby-* headers).
+# Requires: lib/core.sh, lib/api.sh, lib/languages.sh
 
-set -euo pipefail
+if [ -n "${_ASSEMBLRR_JELLYFIN_SOURCED:-}" ]; then
+    return 0
+fi
+readonly _ASSEMBLRR_JELLYFIN_SOURCED=1
 
-# --- Jellyfin configuration ---
+_jellyfin_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/languages.sh
+[ -f "$_jellyfin_dir/languages.sh" ] && source "$_jellyfin_dir/languages.sh"
+
+_jf_auth_header() {
+    local token="${1:-}"
+    if [ -n "$token" ]; then
+        printf 'Authorization: MediaBrowser Client="assemblrr", Device="assemblrr", DeviceId="assemblrr-cli", Version="1.0", Token="%s"' "$token"
+    else
+        printf 'Authorization: MediaBrowser Client="assemblrr", Device="setup-script", DeviceId="assemblrr-setup", Version="1.0"'
+    fi
+}
+
+_jf_is_up() {
+    http_request GET "http://${API_HOST}:8096/System/Info/Public"
+}
+
+_jf_first_user_ready() {
+    http_request GET "http://${API_HOST}:8096/Startup/FirstUser" || return 1
+    [ -n "$(printf '%s' "$HTTP_BODY" | jq -r '.Name // ""' 2>/dev/null || echo "")" ]
+}
+
+_jf_health_up() {
+    http_request GET "http://${API_HOST}:8096/health"
+}
 
 configure_jellyfin() {
     local jellyfin_port=8096
     local max_wait=120
-    local wait_time=0
 
-    # Step 1: Wait for Jellyfin to be responsive
     echo >&2
-    while [ $wait_time -lt $max_wait ]; do
-        local http_code
-        http_code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 3 \
-            "http://${API_HOST}:${jellyfin_port}/System/Info/Public" 2>/dev/null || echo "000")
-        if [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]; then
-            break
-        fi
-        wait_inline "Waiting for Jellyfin to start" "$wait_time"
-        sleep 3
-        wait_time=$((wait_time + 3))
-    done
-    echo >&2
-
-    if [ $wait_time -ge $max_wait ]; then
+    if ! wait_until "Waiting for Jellyfin to start" "$max_wait" 3 _jf_is_up; then
         log_step_fail "Jellyfin: not responsive after ${max_wait}s"
         return 1
     fi
+    echo >&2
 
-    # Step 2: Check if startup wizard is still pending
-    local public_info
-    public_info=$(curl -sf --connect-timeout 5 \
-        "http://${API_HOST}:${jellyfin_port}/System/Info/Public" 2>/dev/null || echo "")
+    local public_info wizard_complete=""
+    http_request GET "http://${API_HOST}:${jellyfin_port}/System/Info/Public" || true
+    public_info="$HTTP_BODY"
 
     if [ -n "$public_info" ]; then
-        local wizard_complete
-        wizard_complete=$(echo "$public_info" | jq -r '.StartupWizardCompleted // ""' 2>/dev/null || echo "")
-
+        wizard_complete=$(printf '%s' "$public_info" | jq -r '.StartupWizardCompleted // ""' 2>/dev/null || echo "")
         if [ "$wizard_complete" = "True" ] || [ "$wizard_complete" = "true" ]; then
             log_step "Jellyfin: startup wizard already completed"
             echo "Configuring Jellyfin libraries" >&2
@@ -53,93 +62,49 @@ configure_jellyfin() {
         fi
     fi
 
-    # Step 3: Wait for the default startup user to be initialized
-    # Jellyfin creates a placeholder user on first boot; /Startup/User POST
-    # will return 500 if we hit it before the default user exists in the DB
     _cfg_log_info "Jellyfin: attempting startup wizard bypass via API..."
     echo >&2
-    local first_user_wait=0
-    while [ $first_user_wait -lt 60 ]; do
-        local first_user_resp
-        first_user_resp=$(curl -sf --connect-timeout 3 \
-            "http://${API_HOST}:${jellyfin_port}/Startup/FirstUser" 2>/dev/null || echo "")
-        if [ -n "$first_user_resp" ]; then
-            local first_user_name
-            first_user_name=$(echo "$first_user_resp" | jq -r '.Name // ""' 2>/dev/null || echo "")
-            if [ -n "$first_user_name" ]; then
-                break
-            fi
-        fi
-        wait_inline "Waiting for Jellyfin startup user to initialize" "$first_user_wait"
-        sleep 3
-        first_user_wait=$((first_user_wait + 3))
-    done
-    echo >&2
-
-    if [ $first_user_wait -ge 60 ]; then
+    if ! wait_until "Waiting for Jellyfin startup user to initialize" 60 3 _jf_first_user_ready; then
         log_step_fail "Jellyfin: startup user not initialized after 60s"
         configure_jellyfin_xml_fallback
         return $?
     fi
+    echo >&2
 
-    # Step 4: Set startup configuration (locale)
-    local locale_code
-    locale_code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 -X POST \
+    if http_request POST "http://${API_HOST}:${jellyfin_port}/Startup/Configuration" \
         -H "Content-Type: application/json" \
-        -d '{"UICulture":"en-US","MetadataCountryCode":"US","PreferredMetadataLanguage":"en"}' \
-        "http://${API_HOST}:${jellyfin_port}/Startup/Configuration" 2>/dev/null || echo "000")
-
-    if [ "$locale_code" -ge 200 ] && [ "$locale_code" -lt 300 ]; then
+        -d '{"UICulture":"en-US","MetadataCountryCode":"US","PreferredMetadataLanguage":"en"}'; then
         log_step "Jellyfin: set startup locale (en-US)"
     else
-        log_step_fail "Jellyfin: failed to set startup locale (HTTP $locale_code)"
+        log_step_fail "Jellyfin: failed to set startup locale (HTTP ${HTTP_STATUS})"
     fi
 
-    # Step 5: Set admin user credentials via Startup API
-    local escaped_username escaped_password
-    escaped_username=$(printf '%s' "$AUTH_USERNAME" | jq -Rs . 2>/dev/null)
-    escaped_password=$(printf '%s' "$AUTH_PASSWORD" | jq -Rs . 2>/dev/null)
-
-    # Fallback if jq fails
-    escaped_username=${escaped_username:-"\"$AUTH_USERNAME\""}
-    escaped_password=${escaped_password:-"\"$AUTH_PASSWORD\""}
-
-    local user_payload="{\"Name\":${escaped_username},\"Password\":${escaped_password},\"EnableAutoLogin\":false}"
-    local user_code
-    user_code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 -X POST \
+    local user_payload
+    user_payload=$(jq -nc --arg n "$AUTH_USERNAME" --arg p "$AUTH_PASSWORD" \
+        '{Name:$n,Password:$p,EnableAutoLogin:false}')
+    if http_request POST "http://${API_HOST}:${jellyfin_port}/Startup/User" \
         -H "Content-Type: application/json" \
-        -d "$user_payload" \
-        "http://${API_HOST}:${jellyfin_port}/Startup/User" 2>/dev/null || echo "000")
-
-    if [ "$user_code" -ge 200 ] && [ "$user_code" -lt 300 ]; then
+        -d "$user_payload"; then
         log_step "Jellyfin: set admin user credentials ($AUTH_USERNAME)"
     else
-        log_step_fail "Jellyfin: failed to set admin user via API (HTTP $user_code)"
+        log_step_fail "Jellyfin: failed to set admin user via API (HTTP ${HTTP_STATUS})"
         configure_jellyfin_xml_fallback
         return $?
     fi
 
-    # Step 6: Complete the startup wizard
-    local complete_code
-    complete_code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 -X POST \
-        -H "Content-Type: application/json" \
-        "http://${API_HOST}:${jellyfin_port}/Startup/Complete" 2>/dev/null || echo "000")
-
-    if [ "$complete_code" -ge 200 ] && [ "$complete_code" -lt 300 ]; then
+    if http_request POST "http://${API_HOST}:${jellyfin_port}/Startup/Complete" \
+        -H "Content-Type: application/json"; then
         log_step "Jellyfin: startup wizard completed via API"
     else
-        log_step_fail "Jellyfin: failed to complete startup wizard (HTTP $complete_code)"
+        log_step_fail "Jellyfin: failed to complete startup wizard (HTTP ${HTTP_STATUS})"
         configure_jellyfin_xml_fallback
         return $?
     fi
 
-    # Step 7: Verify wizard is complete
     sleep 3
-    local verify_info
-    verify_info=$(curl -sf --connect-timeout 5 \
-        "http://${API_HOST}:${jellyfin_port}/System/Info/Public" 2>/dev/null || echo "")
+    http_request GET "http://${API_HOST}:${jellyfin_port}/System/Info/Public" || true
     local wizard_status
-    wizard_status=$(echo "$verify_info" | jq -r '.StartupWizardCompleted // ""' 2>/dev/null || echo "")
+    wizard_status=$(printf '%s' "$HTTP_BODY" | jq -r '.StartupWizardCompleted // ""' 2>/dev/null || echo "")
 
     if [ "$wizard_status" = "True" ] || [ "$wizard_status" = "true" ]; then
         log_step "Jellyfin: startup wizard bypass verified"
@@ -149,7 +114,6 @@ configure_jellyfin() {
         return $?
     fi
 
-    # Step 8: Add media libraries
     echo "Configuring Jellyfin libraries" >&2
     local lib_rc=0
     configure_jellyfin_libraries || lib_rc=$?
@@ -159,15 +123,11 @@ configure_jellyfin() {
 
 configure_jellyfin_xml_fallback() {
     local system_xml="$INSTALL_DIR/config/jellyfin/system.xml"
-    local max_wait=60
-    local wait_time=0
+    local max_wait=60 wait_time=0
 
-    # Wait for system.xml to appear
     echo >&2
     while [ $wait_time -lt $max_wait ]; do
-        if [ -f "$system_xml" ]; then
-            break
-        fi
+        [ -f "$system_xml" ] && break
         wait_inline "Waiting for Jellyfin system.xml" "$wait_time"
         sleep 3
         wait_time=$((wait_time + 3))
@@ -179,7 +139,6 @@ configure_jellyfin_xml_fallback() {
         return 1
     fi
 
-    # Mark wizard as complete
     if grep -q '<IsStartupWizardCompleted>false</IsStartupWizardCompleted>' "$system_xml" 2>/dev/null; then
         sed -i 's/<IsStartupWizardCompleted>false<\/IsStartupWizardCompleted>/<IsStartupWizardCompleted>true<\/IsStartupWizardCompleted>/g' "$system_xml"
         log_step "Jellyfin: marked startup wizard as complete in system.xml"
@@ -187,207 +146,372 @@ configure_jellyfin_xml_fallback() {
         sed -i 's/<IsStartupWizardCompleted>[^<]*<\/IsStartupWizardCompleted>/<IsStartupWizardCompleted>true<\/IsStartupWizardCompleted>/g' "$system_xml"
         log_step "Jellyfin: updated IsStartupWizardCompleted in system.xml"
     else
-        # Tag doesn't exist — add it before the closing tag
         sed -i 's/<\/ServerConfiguration>/  <IsStartupWizardCompleted>true<\/IsStartupWizardCompleted>\n<\/ServerConfiguration>/' "$system_xml"
         log_step "Jellyfin: added IsStartupWizardCompleted to system.xml"
     fi
 
-    # Restart Jellyfin to apply changes
-    docker restart jellyfin 2>/dev/null || true
+    run_docker restart jellyfin 2>/dev/null || true
     log_step "Jellyfin: restarted to apply system.xml changes"
 
-    # Wait for Jellyfin to come back online
     echo >&2
-    local back_wait=0
-    while [ $back_wait -lt 60 ]; do
-        if curl -sf --connect-timeout 3 "http://${API_HOST}:8096/health" >/dev/null 2>&1; then
-            break
-        fi
-        wait_inline "Waiting for Jellyfin to come back online" "$back_wait"
-        sleep 3
-        back_wait=$((back_wait + 3))
-    done
+    wait_until "Waiting for Jellyfin to come back online" 60 3 _jf_health_up || true
     echo >&2
 }
 
 configure_jellyfin_libraries() {
     local jellyfin_port=8096
+    local auth_payload auth_response access_token user_id
 
-    # Authenticate to get access token
-    local auth_response
-    local auth_payload
     auth_payload=$(jq -nc --arg u "$AUTH_USERNAME" --arg p "$AUTH_PASSWORD" '{Username:$u,Pw:$p}')
-    auth_response=$(curl -sf --connect-timeout 10 -X POST \
+    if ! http_request POST "http://${API_HOST}:${jellyfin_port}/Users/AuthenticateByName" \
         -H "Content-Type: application/json" \
-        -H 'X-Emby-Authorization: MediaBrowser Client="assemblrr", Version="1.0", Device="setup-script", DeviceId="assemblrr-setup"' \
-        -d "$auth_payload" \
-        "http://${API_HOST}:${jellyfin_port}/Users/AuthenticateByName" 2>/dev/null || echo "")
-
-    if [ -z "$auth_response" ]; then
-        log_step_fail "Jellyfin: failed to authenticate for library setup"
+        -H "$(_jf_auth_header)" \
+        -d "$auth_payload"; then
+        log_step_fail "Jellyfin: failed to authenticate for library setup (HTTP ${HTTP_STATUS})"
         return 1
     fi
+    auth_response="$HTTP_BODY"
 
-    local access_token
-    access_token=$(echo "$auth_response" | jq -r '.AccessToken // ""' 2>/dev/null || echo "")
-
+    access_token=$(printf '%s' "$auth_response" | jq -r '.AccessToken // ""' 2>/dev/null || echo "")
     if [ -z "$access_token" ]; then
         log_step_fail "Jellyfin: failed to get access token"
         return 1
     fi
+    user_id=$(printf '%s' "$auth_response" | jq -r '.User.Id // ""' 2>/dev/null || echo "")
 
-    local user_id
-    user_id=$(echo "$auth_response" | jq -r '.User.Id // ""' 2>/dev/null || echo "")
+    local auth_hdr
+    auth_hdr=$(_jf_auth_header "$access_token")
 
-    # Define media libraries to add
     local -a lib_names=("Movies" "TV Shows")
     local -a lib_types=("movies" "tvshows")
     local -a lib_paths=("/data/media/movies" "/data/media/tv")
 
-    # Only add Music if the host media/music folder exists
     if [ -n "${MEDIA_DIRECTORY:-}" ] && [ -d "${MEDIA_DIRECTORY}/media/music" ]; then
         lib_names+=("Music")
         lib_types+=("music")
         lib_paths+=("/data/media/music")
     fi
 
-    # Fetch existing libraries to avoid duplicates
-    local existing_libs
-    existing_libs=$(curl -sf --connect-timeout 5 \
-        -H "X-Emby-Token: ${access_token}" \
-        "http://${API_HOST}:${jellyfin_port}/Library/VirtualFolders" 2>/dev/null || echo "[]")
-
-    # Remove duplicate libraries (same path, different name — e.g. "Movies2")
-    local dupe_ids
-    dupe_ids=$(echo "$existing_libs" | jq -r '.[] | . as $lib | .Locations[]? as $loc | {"/data/media/movies": "Movies", "/data/media/tv": "TV Shows", "/data/media/music": "Music"}[$loc] as $expected | select($expected and $lib.Name != $expected) | "\(.ItemId)|\(.Name)"' 2>/dev/null || echo "")
-
-    if [ -n "$dupe_ids" ]; then
-        while IFS='|' read -r dupe_id dupe_name; do
-            curl -sf -o /dev/null -w "" -X DELETE \
-                -H "X-Emby-Token: ${access_token}" \
-                "http://${API_HOST}:${jellyfin_port}/Items/${dupe_id}" 2>/dev/null
-            log_step "Jellyfin: removed duplicate library '${dupe_name}'"
-        done <<< "$dupe_ids"
-        # Re-fetch after deletions
-        existing_libs=$(curl -sf --connect-timeout 5 \
-            -H "X-Emby-Token: ${access_token}" \
-            "http://${API_HOST}:${jellyfin_port}/Library/VirtualFolders" 2>/dev/null || echo "[]")
+    local existing_libs="[]"
+    if http_request GET "http://${API_HOST}:${jellyfin_port}/Library/VirtualFolders" -H "$auth_hdr"; then
+        existing_libs="$HTTP_BODY"
     fi
 
-    local critical_errors=0
+    local dupe_ids
+    dupe_ids=$(printf '%s' "$existing_libs" | jq -r '.[] | . as $lib | .Locations[]? as $loc | {"/data/media/movies": "Movies", "/data/media/tv": "TV Shows", "/data/media/music": "Music"}[$loc] as $expected | select($expected and $lib.Name != $expected) | "\(.ItemId)|\(.Name)"' 2>/dev/null || echo "")
+
+    if [ -n "$dupe_ids" ]; then
+        local dupe_id dupe_name
+        while IFS='|' read -r dupe_id dupe_name; do
+            [ -n "$dupe_id" ] || continue
+            http_request DELETE "http://${API_HOST}:${jellyfin_port}/Items/${dupe_id}" -H "$auth_hdr" || true
+            log_step "Jellyfin: removed duplicate library '${dupe_name}'"
+        done <<< "$dupe_ids"
+        if http_request GET "http://${API_HOST}:${jellyfin_port}/Library/VirtualFolders" -H "$auth_hdr"; then
+            existing_libs="$HTTP_BODY"
+        fi
+    fi
+
+    local critical_errors=0 i
     for i in "${!lib_names[@]}"; do
         local lib_name="${lib_names[$i]}"
         local lib_type="${lib_types[$i]}"
         local lib_path="${lib_paths[$i]}"
 
-        # Check if a library with this name and path already exists
         local lib_exists
-        lib_exists=$(echo "$existing_libs" | jq --arg ln "$lib_name" --arg lp "$lib_path" -r 'if [.[] | select(.Name == $ln and (.Locations // [] | index($lp)))][0] then "yes" else "no" end' 2>/dev/null || echo "no")
+        lib_exists=$(printf '%s' "$existing_libs" | jq --arg ln "$lib_name" --arg lp "$lib_path" -r 'if [.[] | select(.Name == $ln and (.Locations // [] | index($lp)))][0] then "yes" else "no" end' 2>/dev/null || echo "no")
 
         if [ "$lib_exists" = "yes" ]; then
             log_step "Jellyfin: ${lib_name} library already exists (${lib_path})"
             continue
         fi
 
-        # URL-encode the name and path for query params
         local enc_name enc_path
-        enc_name=$(jq -rn --arg n "$lib_name" '$n | @uri' 2>/dev/null || echo "${lib_name}")
+        enc_name=$(urlencode "$lib_name")
         enc_path=$(jq -rn --arg p "$lib_path" '($p | @uri) | gsub("%2F"; "/")' 2>/dev/null || echo "${lib_path}")
 
-        local add_code
-        add_code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 -X POST \
-            -H "Content-Type: application/json" \
-            -H "X-Emby-Token: ${access_token}" \
+        if http_request POST \
             "http://${API_HOST}:${jellyfin_port}/Library/VirtualFolders?name=${enc_name}&collectionType=${lib_type}&paths=${enc_path}&refreshProgress=0" \
-            2>/dev/null || echo "000")
-
-        if [ "$add_code" -ge 200 ] && [ "$add_code" -lt 300 ]; then
+            -H "Content-Type: application/json" \
+            -H "$auth_hdr"; then
             log_step "Jellyfin: added ${lib_name} library (${lib_path})"
         else
-            log_step_fail "Jellyfin: failed to add ${lib_name} library (HTTP $add_code)"
+            log_step_fail "Jellyfin: failed to add ${lib_name} library (HTTP ${HTTP_STATUS})"
             if [ "$lib_type" = "movies" ] || [ "$lib_type" = "tvshows" ]; then
                 critical_errors=$((critical_errors + 1))
             fi
         fi
     done
 
-    # Set subtitle preference: always show subtitles in user's preferred language
-    # Jellyfin's SubtitleLanguagePreference uses ISO 639-2/T three-letter codes
-    # (e.g. "eng", "fra", "deu") — NOT locale codes like "en-US" and NOT two-letter
-    # codes like "en".  The UI dropdown matches these codes to display language names.
-    # We must also GET the full user config first and POST it back modified,
-    # otherwise Jellyfin wipes all other user settings.
+    # Set subtitle preference: always show subtitles in preferred ISO 639-2/T language.
     if [ -n "$user_id" ]; then
         local sub_lang="${SUBTITLE_LANGUAGE:-en}"
         sub_lang="${sub_lang%%,*}"
         sub_lang=${sub_lang// /}
 
-        # Convert ISO 639-1 (two-letter) to ISO 639-2/T (three-letter) code
-        # Jellyfin uses ISO 639-2/T (e.g., "eng" not "en"), so we must convert.
-        # If Jellyfin starts accepting 639-1 directly, this mapping can be removed.
         local jf_lang
-        jf_lang=$(jq -rn --arg sl "$sub_lang" '($sl | ascii_downcase) | if length == 3 then . else ({"aa":"aar","ab":"abk","af":"afr","ak":"aka","am":"amh","an":"arg","ar":"ara","as":"asm","av":"ava","ay":"aym","az":"aze","ba":"bak","be":"bel","bg":"bul","bh":"bih","bi":"bis","bm":"bam","bn":"ben","bo":"bod","br":"bre","bs":"bos","ca":"cat","ce":"che","ch":"cha","co":"cos","cr":"cre","cs":"ces","cu":"chu","cv":"chv","cy":"cym","da":"dan","de":"deu","dv":"div","dz":"dzo","ee":"ewe","el":"ell","en":"eng","eo":"epo","es":"spa","et":"est","eu":"eus","fa":"fas","ff":"ful","fi":"fin","fj":"fij","fo":"fao","fr":"fra","fy":"fry","ga":"gle","gd":"gla","gl":"glg","gn":"grn","gu":"guj","gv":"glv","ha":"hau","he":"heb","hi":"hin","ho":"hmo","hr":"hrv","ht":"hat","hu":"hun","hy":"hye","hz":"her","ia":"ina","id":"ind","ie":"ile","ig":"ibo","ii":"iii","ik":"ipk","io":"ido","is":"isl","it":"ita","iu":"iku","ja":"jpn","jv":"jav","ka":"kat","kg":"kon","ki":"kik","kj":"kua","kk":"kaz","kl":"kal","km":"khm","kn":"kan","ko":"kor","kr":"kau","ks":"kas","ku":"kur","kv":"kom","kw":"cor","ky":"kir","la":"lat","lb":"ltz","lg":"lug","li":"lim","ln":"lin","lo":"lao","lt":"lit","lu":"lub","lv":"lav","mg":"mlg","mh":"mah","mi":"mri","mk":"mkd","ml":"mal","mn":"mon","mr":"mar","ms":"msa","mt":"mlt","my":"mya","na":"nau","nb":"nob","nd":"nde","ne":"nep","ng":"ndo","nl":"nld","nn":"nno","no":"nor","nr":"nbl","nv":"nav","ny":"nya","oc":"oci","oj":"oji","om":"orm","or":"ori","os":"oss","pa":"pan","pi":"pli","pl":"pol","ps":"pus","pt":"por","qu":"que","rm":"roh","rn":"run","ro":"ron","ru":"rus","rw":"kin","sa":"san","sc":"srd","sd":"snd","se":"sme","sg":"sag","si":"sin","sk":"slk","sl":"slv","sm":"smo","sn":"sna","so":"som","sq":"sqi","sr":"srp","ss":"ssw","st":"sot","su":"sun","sv":"swe","sw":"swa","ta":"tam","te":"tel","tg":"tgk","th":"tha","ti":"tir","tk":"tuk","tl":"tgl","tn":"tsn","to":"ton","tr":"tur","ts":"tso","tt":"tat","tw":"twi","ty":"tah","ug":"uig","uk":"ukr","ur":"urd","uz":"uzb","ve":"ven","vi":"vie","vo":"vol","wa":"wln","wo":"wol","xh":"xho","yi":"yid","yo":"yor","za":"zha","zh":"zho","zu":"zul"}[.] // .) end' 2>/dev/null || echo "$sub_lang")
+        jf_lang=$(iso639_to_code3 "$sub_lang")
 
-        # GET current config, patch subtitle fields, POST back
-        # Note: GET /Users/{id}/Configuration returns 405; must GET /Users/{id} instead
-        # and extract the Configuration object, then POST it to /Users/{id}/Configuration
-        local user_obj
-        user_obj=$(curl -s -H "X-Emby-Token: ${access_token}" \
-            "http://${API_HOST}:${jellyfin_port}/Users/${user_id}" 2>/dev/null)
-
-        local patched_cfg
-        patched_cfg=$(echo "$user_obj" | jq --arg lang "$jf_lang" '.Configuration.SubtitleMode = "Always" | .Configuration.SubtitleLanguagePreference = $lang | .Configuration' 2>/dev/null)
-
-        local sub_pref_code
-        sub_pref_code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 -X POST \
-            -H "Content-Type: application/json" \
-            -H "X-Emby-Token: ${access_token}" \
-            -d "$patched_cfg" \
-            "http://${API_HOST}:${jellyfin_port}/Users/${user_id}/Configuration" \
-            2>/dev/null || echo "000")
-
-        if [ "$sub_pref_code" -ge 200 ] && [ "$sub_pref_code" -lt 300 ]; then
-            log_step "Jellyfin: set subtitle preference (Always, ${jf_lang})"
-        else
-            log_step_fail "Jellyfin: failed to set subtitle preference (HTTP $sub_pref_code)"
+        if http_request GET "http://${API_HOST}:${jellyfin_port}/Users/${user_id}" -H "$auth_hdr" && [ -n "$HTTP_BODY" ]; then
+            local patched_cfg
+            patched_cfg=$(printf '%s' "$HTTP_BODY" | jq --arg lang "$jf_lang" '.Configuration.SubtitleMode = "Always" | .Configuration.SubtitleLanguagePreference = $lang | .Configuration' 2>/dev/null || echo "")
+            if [ -n "$patched_cfg" ] && [ "$patched_cfg" != "null" ]; then
+                if http_request POST "http://${API_HOST}:${jellyfin_port}/Users/${user_id}/Configuration" \
+                    -H "Content-Type: application/json" \
+                    -H "$auth_hdr" \
+                    -d "$patched_cfg"; then
+                    log_step "Jellyfin: set subtitle preference (Always, ${jf_lang})"
+                else
+                    log_step_fail "Jellyfin: failed to set subtitle preference (HTTP ${HTTP_STATUS})"
+                fi
+            fi
         fi
     fi
 
-    # Create an API key for Radarr/Sonarr notification connections
-    # POST /Auth/Keys?app=assemblrr returns 204 with no body, so we must
-    # create it first, then GET /Auth/Keys to retrieve the actual key value.
-    mkdir -p "$INSTALL_DIR/secrets"
+    # Reuse existing "assemblrr" API key if present; otherwise create one.
+    local jf_api_key=""
+    if http_request GET "http://${API_HOST}:${jellyfin_port}/Auth/Keys" -H "$auth_hdr"; then
+        jf_api_key=$(printf '%s' "$HTTP_BODY" | jq -r '.Items[]? | select(.AppName == "assemblrr") | .AccessToken // ""' 2>/dev/null | head -1 || echo "")
+    fi
 
-    local key_create_code
-    key_create_code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 -X POST \
-        -H "X-Emby-Token: ${access_token}" \
-        "http://${API_HOST}:${jellyfin_port}/Auth/Keys?app=assemblrr" 2>/dev/null || echo "000")
-
-    if [ "$key_create_code" = "204" ] || [ "$key_create_code" = "200" ]; then
-        local keys_response
-        keys_response=$(curl -s --connect-timeout 5 \
-            -H "X-Emby-Token: ${access_token}" \
-            "http://${API_HOST}:${jellyfin_port}/Auth/Keys" 2>/dev/null || echo "")
-
-        local jf_api_key
-        jf_api_key=$(echo "$keys_response" | jq -r '.Items[] | select(.AppName == "assemblrr") | .AccessToken // ""' 2>/dev/null | head -1 || echo "")
-
-        if [ -n "$jf_api_key" ]; then
-            echo -n "$jf_api_key" > "$INSTALL_DIR/secrets/jellyfin_api_key.txt"
-            chmod 600 "$INSTALL_DIR/secrets/jellyfin_api_key.txt"
-            log_step "Jellyfin: created API key for Radarr/Sonarr connections"
+    if [ -z "$jf_api_key" ]; then
+        if http_request POST "http://${API_HOST}:${jellyfin_port}/Auth/Keys?app=assemblrr" -H "$auth_hdr"; then
+            if http_request GET "http://${API_HOST}:${jellyfin_port}/Auth/Keys" -H "$auth_hdr"; then
+                jf_api_key=$(printf '%s' "$HTTP_BODY" | jq -r '.Items[]? | select(.AppName == "assemblrr") | .AccessToken // ""' 2>/dev/null | head -1 || echo "")
+            fi
         else
-            log_step_fail "Jellyfin: API key created but failed to retrieve value"
+            log_step_fail "Jellyfin: failed to create API key (HTTP ${HTTP_STATUS})"
         fi
+    fi
+
+    if [ -n "$jf_api_key" ]; then
+        write_secret_file "$INSTALL_DIR/secrets/jellyfin_api_key.txt" "$jf_api_key"
+        log_step "Jellyfin: API key ready for Radarr/Sonarr connections"
     else
-        log_step_fail "Jellyfin: failed to create API key (HTTP $key_create_code)"
+        log_step_fail "Jellyfin: API key missing after creation"
+    fi
+
+    if [ "${GPU_TRANSCODING:-none}" != "none" ]; then
+        configure_jellyfin_transcoding "$access_token" "$jellyfin_port" || true
     fi
 
     [ "$critical_errors" -eq 0 ]
 }
 
-# Change an existing Jellyfin/Emby user's password (and name if it changed).
-# Usage: jellyfin_change_credentials <old_user> <old_pass> <new_user> <new_pass> [port] [label]
+# Parse `vainfo --display drm` output into hardware decode/encode capabilities JSON.
+# Outputs compact JSON {"decode":[...],"hevc10":bool,"vp9_10":bool,"hevc_enc":bool,"av1_enc":bool}; returns 1 if none found.
+jellyfin_parse_vainfo_caps() {
+    local vainfo_text="${1:-}"
+    [ -n "$vainfo_text" ] || return 1
+
+    local parsed
+    parsed=$(printf '%s\n' "$vainfo_text" | awk -F: '
+        function trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
+        NF >= 2 {
+            p = trim($1); e = trim($2)
+            if (e == "VAEntrypointVLD") {
+                if (p ~ /^VAProfileH264/) dec["h264"] = 1
+                else if (p == "VAProfileHEVCMain") dec["hevc"] = 1
+                else if (p ~ /^VAProfileMPEG2/) dec["mpeg2video"] = 1
+                else if (p ~ /^VAProfileVC1/) dec["vc1"] = 1
+                else if (p ~ /^VAProfileVP8/) dec["vp8"] = 1
+                else if (p == "VAProfileVP9Profile0") dec["vp9"] = 1
+                else if (p == "VAProfileAV1Profile0") dec["av1"] = 1
+                else if (p == "VAProfileHEVCMain10") { hevc10 = 1; dec["hevc"] = 1 }
+                else if (p == "VAProfileVP9Profile2") { vp9_10 = 1; dec["vp9"] = 1 }
+            } else if (e ~ /^VAEntrypointEnc/) {
+                if (p == "VAProfileHEVCMain" || p == "VAProfileHEVCMain10") hevc_enc = 1
+                else if (p == "VAProfileAV1Profile0") av1_enc = 1
+            }
+        }
+        END {
+            order[1]="h264"; order[2]="hevc"; order[3]="mpeg2video"; order[4]="vc1"; order[5]="vp8"; order[6]="vp9"; order[7]="av1"
+            out = ""
+            count = 0
+            for (i = 1; i <= 7; i++) {
+                c = order[i]
+                if (dec[c]) {
+                    if (out != "") out = out ","
+                    out = out "\"" c "\""
+                    count++
+                }
+            }
+            if (count == 0) exit 1
+            printf "{\"decode\":[%s],\"hevc10\":%s,\"vp9_10\":%s,\"hevc_enc\":%s,\"av1_enc\":%s}\n",
+                out, (hevc10 ? "true" : "false"), (vp9_10 ? "true" : "false"),
+                (hevc_enc ? "true" : "false"), (av1_enc ? "true" : "false")
+        }
+    ' 2>/dev/null || echo "")
+
+    [ -n "$parsed" ] || return 1
+    printf '%s\n' "$parsed"
+}
+
+# Build an updated /System/Configuration/encoding JSON payload for hardware transcoding.
+# Mode: amd | vaapi | intel | qsv | nvidia | nvenc | none; optional caps_json overrides codecs.
+jellyfin_build_encoding_patch_json() {
+    local current_json="${1:-"{}"}"
+    local gpu_mode="${2:-none}"
+    local render_dev="${3:-/dev/dri/renderD128}"
+    local caps_json="${4:-}"
+    gpu_mode="${gpu_mode,,}"
+
+    [ -n "$current_json" ] || current_json="{}"
+
+    local use_caps=0
+    if [ -n "$caps_json" ] && printf '%s' "$caps_json" | jq -e '(.decode // []) | length > 0' >/dev/null 2>&1; then
+        use_caps=1
+    fi
+
+    case "$gpu_mode" in
+        amd|vaapi)
+            if [ "$use_caps" -eq 1 ]; then
+                printf '%s' "$current_json" | jq -c --arg dev "$render_dev" --argjson caps "$caps_json" '
+                    .HardwareAccelerationType = "vaapi" |
+                    .VaapiDevice = $dev |
+                    .EnableHardwareEncoding = true |
+                    .HardwareDecodingCodecs = $caps.decode |
+                    .EnableDecodingColorDepth10Hevc = $caps.hevc10 |
+                    .EnableDecodingColorDepth10Vp9 = $caps.vp9_10 |
+                    .AllowHevcEncoding = $caps.hevc_enc |
+                    .AllowAv1Encoding = $caps.av1_enc
+                '
+            else
+                printf '%s' "$current_json" | jq -c --arg dev "$render_dev" '
+                    .HardwareAccelerationType = "vaapi" |
+                    .VaapiDevice = $dev |
+                    .EnableHardwareEncoding = true |
+                    .HardwareDecodingCodecs = ["h264", "hevc", "vp9", "av1"] |
+                    .EnableDecodingColorDepth10Hevc = true |
+                    .EnableDecodingColorDepth10Vp9 = true |
+                    .AllowHevcEncoding = true |
+                    .AllowAv1Encoding = false
+                '
+            fi
+            ;;
+        intel|qsv)
+            if [ "$use_caps" -eq 1 ]; then
+                printf '%s' "$current_json" | jq -c --arg dev "$render_dev" --argjson caps "$caps_json" '
+                    .HardwareAccelerationType = "qsv" |
+                    .QsvDevice = $dev |
+                    .VaapiDevice = $dev |
+                    .EnableHardwareEncoding = true |
+                    .HardwareDecodingCodecs = $caps.decode |
+                    .EnableDecodingColorDepth10Hevc = $caps.hevc10 |
+                    .EnableDecodingColorDepth10Vp9 = $caps.vp9_10 |
+                    .AllowHevcEncoding = $caps.hevc_enc |
+                    .AllowAv1Encoding = $caps.av1_enc
+                '
+            else
+                printf '%s' "$current_json" | jq -c --arg dev "$render_dev" '
+                    .HardwareAccelerationType = "qsv" |
+                    .QsvDevice = $dev |
+                    .VaapiDevice = $dev |
+                    .EnableHardwareEncoding = true |
+                    .HardwareDecodingCodecs = ["h264", "hevc", "vp9", "av1"] |
+                    .EnableDecodingColorDepth10Hevc = true |
+                    .EnableDecodingColorDepth10Vp9 = true |
+                    .AllowHevcEncoding = true |
+                    .AllowAv1Encoding = false
+                '
+            fi
+            ;;
+        nvidia|nvenc)
+            printf '%s' "$current_json" | jq -c '
+                .HardwareAccelerationType = "nvenc" |
+                .EnableHardwareEncoding = true |
+                .HardwareDecodingCodecs = ["h264", "hevc", "vp9", "av1"] |
+                .EnableDecodingColorDepth10Hevc = true |
+                .EnableDecodingColorDepth10Vp9 = true |
+                .AllowHevcEncoding = true
+            '
+            ;;
+        *)
+            printf '%s' "$current_json" | jq -c '
+                .HardwareAccelerationType = "none" |
+                .EnableHardwareEncoding = false
+            '
+            ;;
+    esac
+}
+
+# Configure Jellyfin hardware transcoding via /System/Configuration/encoding.
+configure_jellyfin_transcoding() {
+    local token="${1:-}"
+    local jellyfin_port="${2:-8096}"
+    local gpu_mode="${GPU_TRANSCODING:-none}"
+    gpu_mode="${gpu_mode,,}"
+
+    if [ -z "$token" ] && [ -s "${INSTALL_DIR:-}/secrets/jellyfin_api_key.txt" ]; then
+        token=$(cat "$INSTALL_DIR/secrets/jellyfin_api_key.txt" 2>/dev/null || echo "")
+    fi
+    if [ -z "$token" ]; then
+        log_step_fail "Jellyfin: missing API token for hardware transcoding configuration"
+        return 1
+    fi
+
+    local render_dev="/dev/dri/renderD128"
+    if [ ! -c "$render_dev" ]; then
+        local cand
+        for cand in /dev/dri/renderD*; do
+            if [ -c "$cand" ]; then
+                render_dev="$cand"
+                break
+            fi
+        done
+    fi
+
+    local caps_json="" vainfo_out=""
+    case "$gpu_mode" in
+        amd|vaapi|intel|qsv)
+            if command -v docker >/dev/null 2>&1 || declare -F run_docker >/dev/null 2>&1; then
+                vainfo_out=$(run_docker exec jellyfin /usr/lib/jellyfin-ffmpeg/vainfo --display drm --device "$render_dev" 2>/dev/null || true)
+                caps_json=$(jellyfin_parse_vainfo_caps "$vainfo_out" 2>/dev/null || true)
+            fi
+            ;;
+    esac
+
+    local auth_hdr
+    auth_hdr=$(_jf_auth_header "$token")
+    if ! http_request GET "http://${API_HOST}:${jellyfin_port}/System/Configuration/encoding" -H "$auth_hdr" || [ -z "$HTTP_BODY" ]; then
+        log_step_fail "Jellyfin: failed to read encoding configuration (HTTP ${HTTP_STATUS})"
+        return 1
+    fi
+
+    local patched_cfg
+    patched_cfg=$(jellyfin_build_encoding_patch_json "$HTTP_BODY" "$gpu_mode" "$render_dev" "$caps_json" 2>/dev/null || echo "")
+    if [ -z "$patched_cfg" ] || [ "$patched_cfg" = "null" ]; then
+        log_step_fail "Jellyfin: failed to build encoding configuration payload"
+        return 1
+    fi
+
+    local caps_summary=""
+    if [ -n "$caps_json" ]; then
+        local dec_csv enc_csv=""
+        dec_csv=$(printf '%s' "$caps_json" | jq -r '.decode | join(",")' 2>/dev/null || echo "")
+        [ "$(printf '%s' "$caps_json" | jq -r '.hevc_enc' 2>/dev/null)" = "true" ] && enc_csv="hevc"
+        [ "$(printf '%s' "$caps_json" | jq -r '.av1_enc' 2>/dev/null)" = "true" ] && enc_csv="${enc_csv:+${enc_csv},}av1"
+        caps_summary="; decode: ${dec_csv:-default}"
+        [ -n "$enc_csv" ] && caps_summary+="; enc: ${enc_csv}"
+    fi
+
+    if http_request POST "http://${API_HOST}:${jellyfin_port}/System/Configuration/encoding" \
+        -H "Content-Type: application/json" \
+        -H "$auth_hdr" \
+        -d "$patched_cfg"; then
+        case "$gpu_mode" in
+            amd|vaapi) log_step "Jellyfin: hardware transcoding configured (AMD VAAPI via ${render_dev}${caps_summary})" ;;
+            intel|qsv) log_step "Jellyfin: hardware transcoding configured (Intel QSV via ${render_dev}${caps_summary})" ;;
+            nvidia|nvenc) log_step "Jellyfin: hardware transcoding configured (NVIDIA NVENC)" ;;
+            *) log_step "Jellyfin: hardware transcoding disabled (CPU software)" ;;
+        esac
+        return 0
+    fi
+
+    log_step_fail "Jellyfin: failed to apply hardware transcoding (HTTP ${HTTP_STATUS})"
+    return 1
+}
+
 jellyfin_change_credentials() {
     local old_user="$1"
     local old_pass="$2"
@@ -395,17 +519,16 @@ jellyfin_change_credentials() {
     local new_pass="$4"
     local jellyfin_port="${5:-8096}"
     local label="${6:-Jellyfin}"
-    local auth_header='X-Emby-Authorization: MediaBrowser Client="assemblrr", Version="1.0", Device="config-edit", DeviceId="assemblrr-auth"'
 
     if [ -z "$new_user" ] || [ -z "$new_pass" ]; then
         log_step_fail "${label}: new credentials missing"
         return 1
     fi
 
-    local public_info wizard_complete
-    public_info=$(curl -sf --connect-timeout 5 \
-        "http://${API_HOST}:${jellyfin_port}/System/Info/Public" 2>/dev/null || echo "")
-    wizard_complete=$(echo "$public_info" | jq -r '.StartupWizardCompleted // ""' 2>/dev/null || echo "")
+    local wizard_complete=""
+    if http_request GET "http://${API_HOST}:${jellyfin_port}/System/Info/Public"; then
+        wizard_complete=$(printf '%s' "$HTTP_BODY" | jq -r '.StartupWizardCompleted // ""' 2>/dev/null || echo "")
+    fi
     if [ "$wizard_complete" != "True" ] && [ "$wizard_complete" != "true" ]; then
         if [ "$label" = "Jellyfin" ] && type configure_jellyfin >/dev/null 2>&1; then
             configure_jellyfin
@@ -415,29 +538,23 @@ jellyfin_change_credentials() {
         return 1
     fi
 
-    local auth_payload auth_response
+    local auth_hdr_anon auth_payload auth_response=""
+    auth_hdr_anon=$(_jf_auth_header)
     auth_payload=$(jq -nc --arg u "$old_user" --arg p "$old_pass" '{Username:$u,Pw:$p}')
-    auth_response=$(curl -sf --connect-timeout 10 -X POST \
-        -H "Content-Type: application/json" \
-        -H "$auth_header" \
-        -d "$auth_payload" \
-        "http://${API_HOST}:${jellyfin_port}/Users/AuthenticateByName" 2>/dev/null || echo "")
-
-    if [ -z "$auth_response" ]; then
+    if http_request POST "http://${API_HOST}:${jellyfin_port}/Users/AuthenticateByName" \
+        -H "Content-Type: application/json" -H "$auth_hdr_anon" -d "$auth_payload"; then
+        auth_response="$HTTP_BODY"
+    else
         auth_payload=$(jq -nc --arg u "$new_user" --arg p "$new_pass" '{Username:$u,Pw:$p}')
-        auth_response=$(curl -sf --connect-timeout 10 -X POST \
-            -H "Content-Type: application/json" \
-            -H "$auth_header" \
-            -d "$auth_payload" \
-            "http://${API_HOST}:${jellyfin_port}/Users/AuthenticateByName" 2>/dev/null || echo "")
-        if [ -n "$auth_response" ]; then
+        if http_request POST "http://${API_HOST}:${jellyfin_port}/Users/AuthenticateByName" \
+            -H "Content-Type: application/json" -H "$auth_hdr_anon" -d "$auth_payload"; then
+            auth_response="$HTTP_BODY"
             local already_name
-            already_name=$(echo "$auth_response" | jq -r '.User.Name // ""' 2>/dev/null || echo "")
+            already_name=$(printf '%s' "$auth_response" | jq -r '.User.Name // ""' 2>/dev/null || echo "")
             if [ "$already_name" = "$new_user" ]; then
                 log_step "${label}: already using the new password"
                 return 0
             fi
-            # New password already works — only the display name still needs updating.
             old_pass="$new_pass"
         else
             log_step_fail "${label}: could not log in with the old password"
@@ -446,48 +563,41 @@ jellyfin_change_credentials() {
     fi
 
     local access_token user_id
-    access_token=$(echo "$auth_response" | jq -r '.AccessToken // ""' 2>/dev/null || echo "")
-    user_id=$(echo "$auth_response" | jq -r '.User.Id // ""' 2>/dev/null || echo "")
+    access_token=$(printf '%s' "$auth_response" | jq -r '.AccessToken // ""' 2>/dev/null || echo "")
+    user_id=$(printf '%s' "$auth_response" | jq -r '.User.Id // ""' 2>/dev/null || echo "")
     if [ -z "$access_token" ] || [ -z "$user_id" ]; then
         log_step_fail "${label}: login response missing token"
         return 1
     fi
 
+    local auth_hdr
+    auth_hdr=$(_jf_auth_header "$access_token")
+
     if [ "$old_pass" != "$new_pass" ]; then
-        local pw_payload pw_code
+        local pw_payload
         pw_payload=$(jq -nc --arg cur "$old_pass" --arg new "$new_pass" '{CurrentPw:$cur,NewPw:$new}')
-        pw_code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 8 -X POST \
-            -H "Content-Type: application/json" \
-            -H "X-Emby-Token: ${access_token}" \
-            -d "$pw_payload" \
-            "http://${API_HOST}:${jellyfin_port}/Users/${user_id}/Password" 2>/dev/null || echo "000")
-        if [ "$pw_code" -lt 200 ] || [ "$pw_code" -ge 300 ]; then
-            log_step_fail "${label}: failed to set password (HTTP $pw_code)"
+        if ! http_request POST "http://${API_HOST}:${jellyfin_port}/Users/${user_id}/Password" \
+            -H "Content-Type: application/json" -H "$auth_hdr" -d "$pw_payload"; then
+            log_step_fail "${label}: failed to set password (HTTP ${HTTP_STATUS})"
             return 1
         fi
     fi
 
     if [ "$old_user" != "$new_user" ]; then
-        local enc_name name_code
-        enc_name=$(jq -rn --arg n "$new_user" '$n | @uri' 2>/dev/null || echo "$new_user")
-        name_code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 8 -X POST \
-            -H "X-Emby-Token: ${access_token}" \
-            "http://${API_HOST}:${jellyfin_port}/Users/${user_id}/Name?name=${enc_name}" \
-            2>/dev/null || echo "000")
-        if [ "$name_code" -lt 200 ] || [ "$name_code" -ge 300 ]; then
-            local user_obj patched
-            user_obj=$(curl -s --connect-timeout 8 \
-                -H "X-Emby-Token: ${access_token}" \
-                "http://${API_HOST}:${jellyfin_port}/Users/${user_id}" 2>/dev/null || echo "")
-            patched=$(echo "$user_obj" | jq --arg n "$new_user" '.Name = $n' 2>/dev/null || echo "")
-            name_code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 8 -X POST \
-                -H "Content-Type: application/json" \
-                -H "X-Emby-Token: ${access_token}" \
-                -d "$patched" \
-                "http://${API_HOST}:${jellyfin_port}/Users/${user_id}" 2>/dev/null || echo "000")
+        local enc_name name_ok=0
+        enc_name=$(urlencode "$new_user")
+        if http_request POST "http://${API_HOST}:${jellyfin_port}/Users/${user_id}/Name?name=${enc_name}" -H "$auth_hdr"; then
+            name_ok=1
+        elif http_request GET "http://${API_HOST}:${jellyfin_port}/Users/${user_id}" -H "$auth_hdr" && [ -n "$HTTP_BODY" ]; then
+            local patched
+            patched=$(printf '%s' "$HTTP_BODY" | jq --arg n "$new_user" '.Name = $n' 2>/dev/null || echo "")
+            if [ -n "$patched" ] && http_request POST "http://${API_HOST}:${jellyfin_port}/Users/${user_id}" \
+                -H "Content-Type: application/json" -H "$auth_hdr" -d "$patched"; then
+                name_ok=1
+            fi
         fi
-        if [ "$name_code" -lt 200 ] || [ "$name_code" -ge 300 ]; then
-            log_step_fail "${label}: password updated, username change failed (HTTP $name_code)"
+        if [ "$name_ok" -ne 1 ]; then
+            log_step_fail "${label}: password updated, username change failed (HTTP ${HTTP_STATUS})"
             return 1
         fi
     fi
@@ -495,8 +605,6 @@ jellyfin_change_credentials() {
     log_step "${label}: set login (${new_user})"
     return 0
 }
-
-# --- Jellyfin notification connections (Radarr/Sonarr → Jellyfin) ---
 
 configure_jellyfin_notifications() {
     local jf_api_key
@@ -506,14 +614,6 @@ configure_jellyfin_notifications() {
         log_step_fail "Jellyfin notifications: API key not found — skipping"
         return 1
     fi
-
-    # NOTE: The MediaBrowser/Emby notification type calls /Library/Media/Updated which
-    # only refreshes EXISTING items in Jellyfin's DB — it cannot discover NEW files.
-    # CustomScript → jellyfin-refresh.sh POSTs /Library/Refresh (full scan).
-    # A second POST cancels the in-progress scan; Jellyfin 10.11 can then leave a
-    # new series with 0 children in the UI. Sonarr fires onImportComplete (once per
-    # release, not per file). Radarr has no onImportComplete, so onDownload is one movie.
-    # The script also skips if a scan is already running and heals empty series.
 
     local errors=0
     if ! add_jellyfin_refresh_notif "Radarr" "7878" "$RADARR_API_KEY"; then
@@ -525,25 +625,19 @@ configure_jellyfin_notifications() {
     [ "$errors" -eq 0 ]
 }
 
-# Add a CustomScript notification to an *arr app that triggers Jellyfin library refresh.
-# Usage: add_jellyfin_refresh_notif <app_name> <port> <api_key>
 add_jellyfin_refresh_notif() {
     local app_name="$1"
     local port="$2"
     local apikey="$3"
 
-    if [ -z "$apikey" ]; then
-        return 0
-    fi
+    [ -z "$apikey" ] && return 0
 
     local notifications existing_id schema payload result
-    notifications=$(api_get "$port" "/api/v3/notification" "$apikey")
-    existing_id=$(echo "$notifications" | jq -r '.[] | select(.implementation == "CustomScript" and .name == "Jellyfin Refresh") | .id // ""' 2>/dev/null | head -1 || echo "")
+    notifications=$(api_get "$port" "/api/v3/notification" "$apikey" || echo "[]")
+    existing_id=$(printf '%s' "$notifications" | jq -r '.[] | select(.implementation == "CustomScript" and .name == "Jellyfin Refresh") | .id // ""' 2>/dev/null | head -1 || echo "")
 
-    schema=$(api_get "$port" "/api/v3/notification/schema" "$apikey")
-    # Sonarr 4: onImportComplete fires once per release (season pack). Radarr has
-    # no onImportComplete — keep onDownload (one event per movie).
-    payload=$(echo "$schema" | jq '
+    schema=$(api_get "$port" "/api/v3/notification/schema" "$apikey" || echo "[]")
+    payload=$(printf '%s' "$schema" | jq '
         [.[] | select(.implementation == "CustomScript")][0] |
         .fields = [.fields[] | if .name == "path" then .value = "/scripts/jellyfin-refresh.sh" else . end] |
         .onUpgrade = true | .name = "Jellyfin Refresh" | .tags = [] |
@@ -559,29 +653,26 @@ add_jellyfin_refresh_notif() {
         return 1
     fi
 
-    # Ensure the mounted script is executable. Radarr/Sonarr try to start the
-    # process when saving a CustomScript (even with forceSave) and reject the
-    # notification with "Permission denied" if the bit is missing.
     if [ -f "$INSTALL_DIR/scripts/jellyfin-refresh.sh" ]; then
         chmod +x "$INSTALL_DIR/scripts/jellyfin-refresh.sh" 2>/dev/null || true
     fi
 
     if [ -n "$existing_id" ]; then
-        payload=$(echo "$payload" | jq --argjson id "$existing_id" '.id = $id' 2>/dev/null || echo "$payload")
-        result=$(api_put "$port" "/api/v3/notification/${existing_id}" "$apikey" "$payload")
+        payload=$(printf '%s' "$payload" | jq --argjson id "$existing_id" '.id = $id' 2>/dev/null || echo "$payload")
+        result=$(api_put "$port" "/api/v3/notification/${existing_id}" "$apikey" "$payload" || echo "")
         if jq_json_has_key "$result" "id"; then
             log_step "${app_name}: updated Jellyfin Refresh script (scan on import complete)"
             return 0
         fi
     fi
 
-    result=$(api_post_force "$port" "/api/v3/notification" "$apikey" "$payload")
+    result=$(api_post_force "$port" "/api/v3/notification" "$apikey" "$payload" || echo "")
     if jq_json_has_key "$result" "id"; then
         log_step "${app_name}: added Jellyfin Refresh script (scan on import complete)"
         return 0
     fi
     local err_msg
-    err_msg=$(echo "$result" | jq -r 'if type == "array" then .[0].errorMessage // empty else .errorMessage // empty end' 2>/dev/null || echo "")
+    err_msg=$(printf '%s' "$result" | jq -r 'if type == "array" then .[0].errorMessage // empty else .errorMessage // empty end' 2>/dev/null || echo "")
     if [ -n "$err_msg" ]; then
         log_step_fail "${app_name}: failed to add Jellyfin Refresh script (${err_msg})"
     else

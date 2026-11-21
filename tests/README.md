@@ -30,6 +30,7 @@ Install dir resolution: `ASSEMBLRR_DIR`, `ASSEMBLRR_CONFIG`, then `~/assemblrr`.
 |--------|----------------|
 | `watchdog_stall.sh` | Stalls qBittorrent connections; checks `vpn-watchdog` |
 | `media_purge_e2e.sh` | Full delete cascade for Big Buck Bunny (TMDB 10378) via **Radarr**, **Seerr** (file + request/gateway), and **Jellyfin** APIs |
+| `usenet_mock_e2e.sh` | Offline SABnzbd E2E verification against free local `mock_nntp.py` + `mock_newznab.py` servers (zero subscriptions) |
 
 ### media_purge_e2e
 
@@ -42,7 +43,13 @@ Requires a running stack with purge wiring (`media-purge-watch` up, `seerr-gatew
 5. **Jellyfin** `DELETE /Items/:id` → filesystem delete → `media-purge-watch` → full purge.
 6. Asserts Radarr row, `media/`, `torrents/`, and qB torrent are all gone (other titles untouched).
 
-Offline unit for the gateway (no Docker stack): `./tests/unit/test_seerr_gateway.sh` or `python3 scripts/seerr-gateway.py --self-test`.
+Offline unit suites for the gateway (no Docker stack):
+
+```bash
+./tests/unit/test_seerr_gateway.sh
+python3 -m unittest discover -s tests/unit -p 'test_*.py' -v
+./tests/unit/test_usenet.sh
+```
 
 See also: `docs/seerr-delete-request.md` (behavior + how to retire when Seerr does this natively).
 

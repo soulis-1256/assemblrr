@@ -129,15 +129,15 @@ assert_contains "$hd_web" "assemblrr 1080p WEB" "1080p WEB pack scores itself"
 assert_contains "$uhd_web" "assemblrr 4K WEB" "4K WEB pack scores itself"
 
 test_suite "configure_recyclarr syncs every movie pack"
-recyc=$(sed -n '/^configure_recyclarr()/,/^}/p' "$REPO_ROOT/lib/seerr.sh")
+recyc=$(sed -n '/^configure_recyclarr()/,/^}/p' "$REPO_ROOT/lib/recyclarr.sh")
 assert_not_contains "$recyc" "grep -vE" "does not drop HD or WEB movie packs"
 assert_contains "$(cat "$REPO_ROOT/templates/recyclarr/recyclarr.yml")" "radarr-1080p-bluray.yml" "root still includes 1080p Bluray + WEB"
 assert_contains "$(cat "$REPO_ROOT/templates/recyclarr/recyclarr.yml")" "radarr-1080p-web.yml" "root still includes 1080p WEB"
 
 test_suite "sonarr and seerr follow the same flag"
-assert_contains "$(sed -n '/^lookup_sonarr_profile()/,/^}/p' "$REPO_ROOT/lib/arr.sh")" \
+assert_contains "$(sed -n '/^lookup_sonarr_profile()/,/^}/p' "$REPO_ROOT/lib/arr_quality.sh")" \
     "lookup_arr_quality_profile" "sonarr uses shared lookup"
-assert_not_contains "$(cat "$REPO_ROOT/lib/arr.sh")" \
+assert_not_contains "$(cat "$REPO_ROOT/lib/arr_quality.sh")" \
     "movies 4K choice does not change this" "old TV hardcode is gone"
 sonarr_connect=$(grep -n 'seerr_connect_service "sonarr"' -A2 "$REPO_ROOT/lib/seerr.sh")
 assert_not_contains "$sonarr_connect" '"false"' "seerr sonarr is4k is not hardcoded false"

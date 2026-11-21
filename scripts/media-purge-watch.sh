@@ -1,9 +1,10 @@
-#!/bin/bash
-# inotify on /data/media → media-purge when a library *video* is deleted.
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# inotify on /data/media -> media-purge when a library *video* is deleted.
 # Ignores *arr write-tests, sidecars, and upgrade races (new file not yet written).
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PURGE="${SCRIPT_DIR}/media-purge.sh"
 MEDIA_ROOT="${MEDIA_ROOT:-/data}"
 WATCH_ROOT="${WATCH_ROOT:-${MEDIA_ROOT}/media}"
@@ -11,6 +12,10 @@ WATCH_ROOT="${WATCH_ROOT:-${MEDIA_ROOT}/media}"
 DEBOUNCE_SEC="${DEBOUNCE_SEC:-8}"
 # Second look: Radarr/Sonarr upgrades delete the old file before writing the new one.
 UPGRADE_GRACE_SEC="${UPGRADE_GRACE_SEC:-20}"
+# Only treat recent upgrade deletes as active upgrade races.
+UPGRADE_WINDOW_SEC="${UPGRADE_WINDOW_SEC:-600}"
+# Cooldown per title/season key so bulk multi-file deletes do not sleep 28s * N.
+EVENT_DEDUP_SEC="${EVENT_DEDUP_SEC:-30}"
 
 export API_HOST="${API_HOST:-127.0.0.1}"
 export RADARR_URL="${RADARR_URL:-http://radarr:7878}"
@@ -54,6 +59,16 @@ purge_watch_is_video() {
     case "$ext" in
         mkv|mp4|avi|m4v|ts|m2ts|webm|mov|wmv|mpg|mpeg) return 0 ;;
         *) return 1 ;;
+    esac
+}
+
+# Classify library path as "movie" or "tv" (empty if outside library roots).
+purge_watch_library_kind() {
+    local p="${1:-}"
+    case "$p" in
+        */media/movies|*/media/movies/*) echo "movie" ;;
+        */media/tv|*/media/tv/*) echo "tv" ;;
+        *) echo "" ;;
     esac
 }
 
@@ -112,7 +127,8 @@ purge_watch_folder_has_video() {
     find "$folder" -type f \( \
         -iname '*.mkv' -o -iname '*.mp4' -o -iname '*.avi' -o \
         -iname '*.m4v' -o -iname '*.ts' -o -iname '*.m2ts' -o \
-        -iname '*.webm' -o -iname '*.mov' \
+        -iname '*.webm' -o -iname '*.mov' -o -iname '*.wmv' -o \
+        -iname '*.mpg' -o -iname '*.mpeg' \
     \) 2>/dev/null | grep -q .
 }
 
@@ -135,13 +151,25 @@ purge_watch_arr_key() {
 }
 
 # History JSON: hold if a recent file-delete was an *arr upgrade.
+# Optional args: $2 = now_epoch (default: current time), $3 = window_sec (default: UPGRADE_WINDOW_SEC)
 purge_watch_json_has_upgrade_delete() {
-    printf '%s' "${1:-}" | jq -e '
+    local json="${1:-}"
+    local now_ts="${2:-$(date +%s)}"
+    local win_sec="${3:-${UPGRADE_WINDOW_SEC:-600}}"
+    printf '%s' "$json" | jq -e \
+        --argjson now "$now_ts" --argjson win "$win_sec" '
         def recs: if type == "array" then . elif has("records") then .records else [] end;
+        def recent($rec):
+          ($rec.date // "") as $d
+          | if ($d | length) == 0 then true
+            else
+              ($d | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601? // null) as $ts
+              | ($ts != null and $ts >= ($now - $win) and $ts <= ($now + 120))
+            end;
         recs[]
         | ((.eventType // "") | ascii_downcase) as $e
         | ((.data.reason // "") | ascii_downcase) as $r
-        | select(($e == "moviefiledeleted" or $e == "episodefiledeleted") and $r == "upgrade")
+        | select(($e == "moviefiledeleted" or $e == "episodefiledeleted") and $r == "upgrade" and recent(.))
     ' >/dev/null 2>&1
 }
 
@@ -163,12 +191,22 @@ purge_watch_arr_get() {
 }
 
 # 0 = do not purge (upgrade/import still in flight, or *arr unreachable).
+# Args: <arr_path> [season] [kind: movie|tv]
 purge_watch_arr_hold() {
     local arr_path="$1"
     local season="${2:-}"
+    local kind="${3:-}"
     local key json id hist queue
 
-    if [ -n "$season" ]; then
+    if [ -z "$kind" ]; then
+        if [ -n "$season" ] || [ "$(purge_watch_library_kind "$arr_path")" = "tv" ]; then
+            kind="tv"
+        else
+            kind="movie"
+        fi
+    fi
+
+    if [ "$kind" = "tv" ]; then
         key=$(purge_watch_arr_key sonarr || true)
         [ -n "$key" ] || return 0
         json=$(purge_watch_arr_get "${SONARR_URL:-http://sonarr:8989}" "$key" "/api/v3/series")
@@ -202,8 +240,6 @@ if [ "${PURGE_WATCH_SOURCE_ONLY:-0}" = "1" ]; then
     return 0 2>/dev/null || exit 0
 fi
 
-[ -x "$PURGE" ] || chmod +x "$PURGE" 2>/dev/null || true
-
 if [ "${MEDIA_PURGE_WATCH:-1}" = "0" ] || [ "${MEDIA_PURGE_WATCH:-1}" = "false" ] || [ "${MEDIA_PURGE_WATCH:-1}" = "off" ]; then
     log "disabled (MEDIA_PURGE_WATCH=${MEDIA_PURGE_WATCH}); idling"
     exec sleep infinity
@@ -221,24 +257,31 @@ fi
 
 log "watching ${WATCH_ROOT} (qB=${QBITTORRENT_URL})"
 
-LAST_PURGE_PATH=""
-LAST_PURGE_TS=0
+declare -A _PURGE_WATCH_LAST_HANDLED=()
+
+_run_purge() {
+    if [ -x "$PURGE" ]; then
+        "$PURGE" "$@"
+    else
+        bash "$PURGE" "$@"
+    fi
+}
 
 handle_event() {
     local path="$1"
-    local folder
+    local folder kind
     folder=$(purge_watch_library_folder "$path")
     [ -n "$folder" ] || return 0
+    kind=$(purge_watch_library_kind "$path")
 
-    local now
+    local now season dedup_key last_ts
     now=$(date +%s)
-
-    local season
     season=$(purge_watch_season_number "$path")
-    # Dedup per season so S01 then S02 in the same window both run.
-    local dedup_key="$folder"
+    # Dedup per season (or title) so multi-episode / multi-show bulk deletes do not re-sleep 28s per file.
+    dedup_key="$folder"
     [ -n "$season" ] && dedup_key="${folder}/s${season}"
-    if [ "$dedup_key" = "$LAST_PURGE_PATH" ] && [ $((now - LAST_PURGE_TS)) -lt 15 ]; then
+    last_ts="${_PURGE_WATCH_LAST_HANDLED[$dedup_key]:-0}"
+    if [ "$last_ts" -gt 0 ] && [ $((now - last_ts)) -lt "$EVENT_DEDUP_SEC" ]; then
         return 0
     fi
 
@@ -256,40 +299,44 @@ handle_event() {
         local sfolder
         sfolder=$(purge_watch_season_folder "$folder" "$season" || true)
         if [ -n "$sfolder" ] && purge_watch_folder_busy "$sfolder"; then
+            _PURGE_WATCH_LAST_HANDLED["$dedup_key"]=$(date +%s)
             return 0
         fi
         sleep "$UPGRADE_GRACE_SEC"
         sfolder=$(purge_watch_season_folder "$folder" "$season" || true)
         if [ -n "$sfolder" ] && purge_watch_folder_busy "$sfolder"; then
+            _PURGE_WATCH_LAST_HANDLED["$dedup_key"]=$(date +%s)
             return 0
         fi
-        if purge_watch_arr_hold "$arr_path" "$season"; then
+        if purge_watch_arr_hold "$arr_path" "$season" "$kind"; then
             log "hold $arr_path season ${season} (queue or upgrade in *arr)"
+            _PURGE_WATCH_LAST_HANDLED["$dedup_key"]=$(date +%s)
             return 0
         fi
-        LAST_PURGE_PATH="$dedup_key"
-        LAST_PURGE_TS=$(date +%s)
+        _PURGE_WATCH_LAST_HANDLED["$dedup_key"]=$(date +%s)
         log "purge $arr_path season ${season}"
-        "$PURGE" --path "$arr_path" --seasons "$season" || log "purge failed for $arr_path season ${season}"
+        _run_purge --path "$arr_path" --seasons "$season" || log "purge failed for $arr_path season ${season}"
         return 0
     fi
 
     if purge_watch_folder_busy "$folder"; then
+        _PURGE_WATCH_LAST_HANDLED["$dedup_key"]=$(date +%s)
         return 0
     fi
     sleep "$UPGRADE_GRACE_SEC"
     if purge_watch_folder_busy "$folder"; then
+        _PURGE_WATCH_LAST_HANDLED["$dedup_key"]=$(date +%s)
         return 0
     fi
-    if purge_watch_arr_hold "$arr_path" ""; then
+    if purge_watch_arr_hold "$arr_path" "" "$kind"; then
         log "hold $arr_path (queue or upgrade in *arr)"
+        _PURGE_WATCH_LAST_HANDLED["$dedup_key"]=$(date +%s)
         return 0
     fi
 
-    LAST_PURGE_PATH="$dedup_key"
-    LAST_PURGE_TS=$(date +%s)
+    _PURGE_WATCH_LAST_HANDLED["$dedup_key"]=$(date +%s)
     log "purge $arr_path"
-    "$PURGE" --path "$arr_path" || log "purge failed for $arr_path"
+    _run_purge --path "$arr_path" || log "purge failed for $arr_path"
 }
 
 mkdir -p "$WATCH_ROOT/movies" "$WATCH_ROOT/tv" 2>/dev/null || true
@@ -314,7 +361,7 @@ inotifywait -m -r \
         continue
     fi
     # Title folder removed or moved to the recycle bin (MOVED_FROM).
-    # Sonarr "delete files" often renames media/tv/Show → media/.recycle/...
+    # Sonarr "delete files" often renames media/tv/Show -> media/.recycle/...
     if purge_watch_is_title_folder "$full"; then
         case ",${events}," in
             *,DELETE_SELF,*|*,MOVED_FROM,*|*,DELETE,*)

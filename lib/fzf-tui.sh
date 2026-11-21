@@ -1,51 +1,42 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # fzf-based TUI for selections (Prowlarr indexers, Bazarr providers, languages, paths)
-# Provides reusable fzf selection patterns for assemblrr.
 # Sets SELECTED_INDEXERS / SELECTED_SUBTITLE_PROVIDERS / SELECTED_SUBTITLE_LANGUAGES arrays.
-# Usage: source lib/fzf-tui.sh; configure_indexers "$api_key"
+# Does not set -euo pipefail when sourced.
 
-set -euo pipefail
+if [ -n "${_ASSEMBLRR_FZF_TUI_SOURCED:-}" ]; then
+    return 0
+fi
+readonly _ASSEMBLRR_FZF_TUI_SOURCED=1
 
 _fzf_tui_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 [ -f "$_fzf_tui_dir/ui.sh" ] && source "$_fzf_tui_dir/ui.sh"
+# shellcheck source=/dev/null
+[ -f "$_fzf_tui_dir/languages.sh" ] && source "$_fzf_tui_dir/languages.sh"
 
 SELECTED_INDEXERS=()
 SELECTED_SUBTITLE_PROVIDERS=()
 SELECTED_SUBTITLE_LANGUAGES=()
 
-# Stored picker codes, preferred first. SUBTITLE_LANGUAGES="eng,ell" wins;
-# otherwise SUBTITLE_LANGUAGE (legacy single value).
-_subtitle_stored_lang_codes() {
-    local raw="${SUBTITLE_LANGUAGES:-${SUBTITLE_LANGUAGE:-}}"
-    raw=${raw// /}
-    [ -z "$raw" ] && return 0
-    echo "$raw" | tr ',' '\n' | awk 'NF && !seen[$0]++'
-}
-
-# $1 = preferred code; remaining args = the full set (may include preferred).
-# Prints comma-separated, preferred first, unique.
-_subtitle_join_preferred_first() {
-    local preferred="${1:-}"
-    shift || true
-    local -a out=()
-    local c
-    [ -n "$preferred" ] && out+=("$preferred")
-    for c in "$@"; do
-        [ -z "$c" ] && continue
-        [ "$c" = "$preferred" ] && continue
-        out+=("$c")
-    done
-    (IFS=,; echo "${out[*]}")
-}
-
-# --- TTY detection (reused across functions) ---
 _fzf_has_tty() {
     [ -t 0 ] && [ -t 2 ]
 }
 
 _fzf_can_render() {
     command -v fzf &>/dev/null && echo "test" | timeout 1 fzf --height=5 --no-mouse --filter="test" &>/dev/null
+}
+
+# True when installed fzf >= major.minor (handles older distro fzf like 0.29 on Ubuntu 22.04).
+_fzf_version_ge() {
+    local req_maj="${1:-0}" req_min="${2:-0}" ver maj min
+    ver=$(fzf --version 2>/dev/null | awk '{print $1}' | sed 's/[^0-9.].*//')
+    maj="${ver%%.*}"
+    min="${ver#*.}"; min="${min%%.*}"
+    [[ "$maj" =~ ^[0-9]+$ ]] || maj=0
+    [[ "$min" =~ ^[0-9]+$ ]] || min=0
+    [ "$maj" -gt "$req_maj" ] && return 0
+    [ "$maj" -eq "$req_maj" ] && [ "$min" -ge "$req_min" ]
 }
 
 # TSV: key<TAB>title<TAB>detail<TAB>install<TAB>media
@@ -120,21 +111,19 @@ EOF
             --height=60% \
             --reverse \
             --border \
-            --scrollbar='│' \
             2>/dev/null) || true
         rm -f "$gen"
         echo "$selected"
         return 0
     fi
 
-    local i=0 line
+    local i=0 title detail
     echo "$data" | while IFS=$'\t' read -r _ title detail _; do
         i=$((i + 1))
         printf '  %d) %s\n      %s\n' "$i" "$title" "$detail" >&2
     done
-    echo "Enter number (default: 1 = home): " >&2
     local input=""
-    read -r input || true
+    read_prompt "Enter number (default: 1 = home): " input
     input="${input:-1}"
     if [[ "$input" =~ ^[0-9]+$ ]]; then
         echo "$data" | awk -F '\t' -v n="$input" 'NR==n {print}'
@@ -146,11 +135,11 @@ _prompt_parent_usage() {
     local def_install="$2"
     local app="${APP_NAME:-assemblrr}"
     local choice=""
-    echo
-    echo "Use ${parent} for:"
-    echo "  1) Media only (recommended) — config stays in ${def_install}"
-    echo "  2) Everything — ${parent}/${app} + ${parent}/${app}-media"
-    read -p "Choose [1]: " choice
+    echo >&2
+    echo "Use ${parent} for:" >&2
+    echo "  1) Media only (recommended) — config stays in ${def_install}" >&2
+    echo "  2) Everything — ${parent}/${app} + ${parent}/${app}-media" >&2
+    read_prompt "Choose [1]: " choice
     choice="${choice:-1}"
     case "$choice" in
         2)
@@ -176,9 +165,9 @@ _browse_parent_folder() {
         for r in "${HOME:-/}" "${roots[@]}"; do
             [ -d "$r" ] || continue
             if [ "$r" = "/mnt/c" ]; then
-                find "$r" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -80
+                find "$r" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sed -n '1,80p' || true
             else
-                find "$r" -mindepth 1 -maxdepth 2 -type d 2>/dev/null | head -200
+                find "$r" -mindepth 1 -maxdepth 2 -type d 2>/dev/null | sed -n '1,200p' || true
             fi
         done
     } | sort -u > "$list"
@@ -190,8 +179,7 @@ _browse_parent_folder() {
             --height=60% --reverse --border \
             < "$list" 2>/dev/null) || true
     else
-        echo "Enter a parent folder path (blank to cancel): " >&2
-        read -r selected || true
+        read_prompt "Enter a parent folder path (blank to cancel): " selected
     fi
     rm -f "$list"
     echo "$selected"
@@ -200,10 +188,10 @@ _browse_parent_folder() {
 _prompt_typed_paths() {
     local def_install="$1"
     local def_media="$2"
-    read -p "Installation directory? [${def_install}]: " install_directory
+    read_prompt "Installation directory? [${def_install}]: " install_directory
     install_directory=${install_directory:-$def_install}
     install_directory=$(expand_path "$install_directory")
-    read -p "Media directory? [${def_media}]: " media_directory
+    read_prompt "Media directory? [${def_media}]: " media_directory
     media_directory=${media_directory:-$def_media}
     media_directory=$(expand_path "$media_directory")
 }
@@ -212,7 +200,7 @@ _prompt_typed_paths() {
 pick_storage_paths() {
     local def_install="${APP_DEFAULT_INSTALL_DIR:-$HOME/${APP_NAME:-assemblrr}}"
     local def_media="${APP_DEFAULT_MEDIA_DIR:-$HOME/${APP_NAME:-assemblrr}-media}"
-    local data row key parent
+    local row key parent
 
     if [ "${ASSEMBLRR_NONINTERACTIVE:-0}" = "1" ]; then
         install_directory="$def_install"
@@ -229,12 +217,7 @@ pick_storage_paths() {
         fi
         key=$(printf '%s\n' "$row" | cut -f1)
         case "$key" in
-            home)
-                install_directory=$(printf '%s\n' "$row" | cut -f4)
-                media_directory=$(printf '%s\n' "$row" | cut -f5)
-                return 0
-                ;;
-            all:*|media:*)
+            home|all:*|media:*)
                 install_directory=$(printf '%s\n' "$row" | cut -f4)
                 media_directory=$(printf '%s\n' "$row" | cut -f5)
                 return 0
@@ -266,8 +249,6 @@ pick_storage_paths() {
 }
 
 # Single-select from TSV rows (first column is the value).
-# Args: $1 = data, $2 = prompt, $3 = header, $4 = default (Esc / empty / no TTY)
-# Puts the default row first so fzf highlights it.
 fzf_single_select_data() {
     local data="$1"
     local prompt="${2:-Select> }"
@@ -289,11 +270,10 @@ fzf_single_select_data() {
         fi
     fi
 
-    if ! _fzf_has_tty; then
+    if ! _fzf_can_render || ! _fzf_has_tty; then
         echo "$data" | head -25 >&2
-        echo "Enter selection (default: ${default:-first}): " >&2
         local input=""
-        read -r input || true
+        read_prompt "Enter selection (default: ${default:-first}): " input
         if [ -z "$input" ]; then
             if [ -n "$default" ]; then
                 echo "$default"
@@ -315,7 +295,6 @@ fzf_single_select_data() {
         --header="$header" \
         --delimiter=$'\t' \
         --with-nth=1..2 \
-        --scrollbar='│' \
         2>/dev/null | cut -f1) || true
 
     if [ -z "$selected" ]; then
@@ -327,7 +306,6 @@ fzf_single_select_data() {
 
 # Format Prowlarr schema JSON + existing-name JSON array into TSV menu rows:
 #   name<TAB>badges<TAB>description
-# Badges: [already enabled], [P] private (schema enable=false).
 format_prowlarr_indexer_menu() {
     local schema="$1"
     local existing_json="${2:-[]}"
@@ -345,44 +323,44 @@ format_prowlarr_indexer_menu() {
     ' 2>/dev/null || true
 }
 
-# fzf --bind start:… string that pre-selects rows whose first TSV field is in $2
-# (newline-separated names). Empty if nothing matches.
+# Single-pass awk builder for fzf --bind start:... pre-selection.
 fzf_preselect_start_bind() {
     local data="$1"
     local names="$2"
     [ -n "$data" ] && [ -n "$names" ] || return 0
-    local i=0 name binds=""
-    while IFS=$'\t' read -r name _; do
-        i=$((i + 1))
-        [ -n "$name" ] || continue
-        if printf '%s\n' "$names" | grep -q -F -x "$name"; then
-            if [ -n "$binds" ]; then
-                binds="${binds}+pos(${i})+select"
-            else
-                binds="pos(${i})+select"
-            fi
-        fi
-    done <<< "$data"
-    [ -n "$binds" ] && echo "start:${binds}"
+    awk -v names="$names" '
+        BEGIN {
+            n = split(names, arr, /\n/)
+            for (k = 1; k <= n; k++) {
+                if (arr[k] != "") want[arr[k]] = 1
+            }
+            binds = ""
+        }
+        {
+            split($0, f, "\t")
+            if (f[1] != "" && (f[1] in want)) {
+                tok = "pos(" NR ")+select"
+                binds = (binds == "" ? tok : binds "+" tok)
+            }
+        }
+        END {
+            if (binds != "") print "start:" binds
+        }
+    ' <<< "$data"
 }
 
 # --- Generic multi-select fzf ---
 # Args: $1 = tab-separated list lines
-#       $2 = prompt (optional)
-#       $3 = header (optional)
-#       $4 = result array name (optional; default SELECTED_INDEXERS)
-#       $5 = noun for log messages (optional; default "item")
-#       $6 = newline-separated names to pre-select (optional)
-# Sets FZF_SELECT_STATUS=confirmed|cancelled.
-# Return 0 on confirm (array may be empty), 1 on cancel (Esc).
-# Appends selected first-column values into the named array.
+#       $2 = prompt, $3 = header, $4 = result array var, $5 = noun, $6 = preselect names, $7 = optional preview col
+# Keybindings: Tab = toggle, Enter = confirm, Esc = cancel.
 fzf_multi_select() {
     local data="$1"
     local prompt="${2:-Select items> }"
-    local header="${3:-Enter/TAB=toggle  Ctrl-O=confirm  Esc=cancel}"
+    local header="${3:-TAB=toggle  Enter=confirm  Esc=cancel}"
     local result_var="${4:-SELECTED_INDEXERS}"
     local noun="${5:-item}"
     local preselect_names="${6:-}"
+    local show_preview="${7:-0}"
     local has_tty=false
     local -n _fzf_result_ref="$result_var"
     FZF_SELECT_STATUS="cancelled"
@@ -400,18 +378,23 @@ fzf_multi_select() {
             --prompt="$prompt"
             --delimiter=$'\t'
             --with-nth=1..2
-            --bind='enter:toggle'
             --bind='tab:toggle'
-            --bind='ctrl-o:accept'
+            --bind='enter:accept'
             --header="$header"
             --height=80%
             --layout=reverse
             --border
         )
-        local start_bind
-        start_bind=$(fzf_preselect_start_bind "$data" "$preselect_names")
-        if [ -n "$start_bind" ]; then
-            fzf_args+=(--sync --bind="$start_bind")
+        if [ "$show_preview" = "1" ] && _fzf_version_ge 0 29; then
+            fzf_args+=(--preview='echo {3}' --preview-window='down,3,wrap')
+        fi
+        # start:pos(...) requires fzf >= 0.36; skip cleanly on older distros (e.g. Ubuntu 22.04 0.29)
+        if _fzf_version_ge 0 36; then
+            local start_bind
+            start_bind=$(fzf_preselect_start_bind "$data" "$preselect_names")
+            if [ -n "$start_bind" ]; then
+                fzf_args+=(--sync --bind="$start_bind")
+            fi
         fi
         selected=$(echo "$data" | fzf "${fzf_args[@]}" 2>/dev/null) || fzf_rc=$?
         if [ "$fzf_rc" -ne 0 ]; then
@@ -421,6 +404,7 @@ fzf_multi_select() {
         selected=$(printf '%s\n' "$selected" | cut -f1)
         FZF_SELECT_STATUS="confirmed"
         if [ -n "$selected" ]; then
+            local idx
             while IFS= read -r idx; do
                 [ -n "$idx" ] && _fzf_result_ref+=("$idx")
             done <<< "$selected"
@@ -429,11 +413,10 @@ fzf_multi_select() {
         return 0
     fi
 
-    echo "No interactive terminal available — listing available ${noun}s." >&2
+    echo "No interactive fzf terminal available — listing available ${noun}s." >&2
     echo "$data" | cut -f1 | head -40 | sed 's/^/  /' >&2
-    echo "Enter ${noun} names separated by spaces (or blank to cancel):" >&2
-    local input_line=""
-    read -r input_line || true
+    local input_line="" idx
+    read_prompt "Enter ${noun} names separated by spaces (or blank to cancel): " input_line
     if [ -z "${input_line:-}" ]; then
         FZF_SELECT_STATUS="cancelled"
         return 1
@@ -448,6 +431,7 @@ fzf_multi_select() {
 # --- Prowlarr Indexer Selection ---
 configure_indexers() {
     local provided_key="$1"
+    local host="${API_HOST:-127.0.0.1}"
     FZF_SELECT_STATUS="cancelled"
     if [ "${ASSEMBLRR_NONINTERACTIVE:-0}" = "1" ]; then
         log_info "Skipping Prowlarr indexer picker (non-interactive)."
@@ -458,7 +442,6 @@ configure_indexers() {
         "Add or remove Prowlarr indexers. Esc keeps the current set."
     log_info "Only enable sources you are authorized to use."
 
-    # Try to fetch indexer list from a running Prowlarr instance
     local prowlarr_key="${provided_key:-}"
     local indexer_data=""
 
@@ -471,14 +454,14 @@ configure_indexers() {
     if [ -n "$prowlarr_key" ]; then
         indexer_data=$(curl -s --connect-timeout 3 \
             -H "X-Api-Key: $prowlarr_key" \
-            "http://localhost:9696/api/v1/indexer/schema" 2>/dev/null || true)
+            "http://${host}:9696/api/v1/indexer/schema" 2>/dev/null || true)
     fi
 
     if [ -n "$indexer_data" ] && echo "$indexer_data" | jq -e 'type == "array"' >/dev/null 2>&1; then
         local existing_indexers existing_json formatted preselect_names
         existing_indexers=$(curl -s --connect-timeout 3 \
             -H "X-Api-Key: $prowlarr_key" \
-            "http://localhost:9696/api/v1/indexer" 2>/dev/null || true)
+            "http://${host}:9696/api/v1/indexer" 2>/dev/null || true)
         existing_json=$(echo "${existing_indexers:-}" | jq -c '[.[].name // empty]' 2>/dev/null || echo '[]')
         [ -n "$existing_json" ] || existing_json='[]'
         formatted=$(format_prowlarr_indexer_menu "$indexer_data" "$existing_json")
@@ -486,17 +469,18 @@ configure_indexers() {
         local prompt header
         if ui_is_edit; then
             prompt="Prowlarr indexers> "
-            header="Enter/TAB=toggle  Ctrl-O=save  Esc=cancel  [P]=private"
+            header="TAB=toggle  Enter=save  Esc=cancel  [P]=private"
         else
             prompt="Prowlarr indexers (optional)> "
-            header="Enter/TAB=toggle  Ctrl-O=confirm  Esc=skip  [P]=private"
+            header="TAB=toggle  Enter=confirm  Esc=skip  [P]=private"
         fi
         fzf_multi_select "$formatted" \
             "$prompt" \
             "$header" \
             SELECTED_INDEXERS \
             "indexer" \
-            "$preselect_names" || true
+            "$preselect_names" \
+            1 || true
         ui_picker_done "indexers"
     else
         if ui_is_edit; then
@@ -508,8 +492,6 @@ configure_indexers() {
     fi
 }
 
-# List subtitle provider keys from the running Bazarr container (Bazarr's catalog, not ours).
-# Skips internal modules only (mixins/utils/helpers), not branded providers.
 _list_bazarr_providers_from_container() {
     local dirs=(
         /app/bazarr/bin/custom_libs/subliminal_patch/providers
@@ -533,8 +515,8 @@ _list_bazarr_providers_from_container() {
     return 1
 }
 
-# --- Bazarr subtitle provider selection (live from container, same idea as Prowlarr) ---
 configure_subtitle_providers() {
+    local host="${API_HOST:-127.0.0.1}"
     SELECTED_SUBTITLE_PROVIDERS=()
     FZF_SELECT_STATUS="cancelled"
     if [ "${ASSEMBLRR_NONINTERACTIVE:-0}" = "1" ]; then
@@ -567,7 +549,7 @@ configure_subtitle_providers() {
     local prompt header preselect_names=""
     if ui_is_edit; then
         prompt="Bazarr providers> "
-        header="Enter/TAB=toggle  Ctrl-O=save  Esc=cancel"
+        header="TAB=toggle  Enter=save  Esc=cancel"
         if type _bazarr_config_file >/dev/null 2>&1 && type _bazarr_extract_apikey >/dev/null 2>&1; then
             local bcfg bkey
             bcfg=$(_bazarr_config_file 2>/dev/null || true)
@@ -576,13 +558,14 @@ configure_subtitle_providers() {
             fi
             if [ -n "${bkey:-}" ]; then
                 preselect_names=$(curl -s --connect-timeout 5 \
-                    "http://${API_HOST:-127.0.0.1}:${BAZARR_PORT:-6767}/api/system/settings?apikey=${bkey}" \
+                    -H "X-API-KEY: ${bkey}" \
+                    "http://${host}:${BAZARR_PORT:-6767}/api/system/settings" \
                     2>/dev/null | jq -r '.general.enabled_providers[]? // empty' 2>/dev/null || true)
             fi
         fi
     else
         prompt="Bazarr providers (optional)> "
-        header="Enter/TAB=toggle  Ctrl-O=confirm  Esc=skip"
+        header="TAB=toggle  Enter=confirm  Esc=skip"
     fi
     fzf_multi_select "$formatted" \
         "$prompt" \

@@ -1,6 +1,7 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # assemblrr service catalog — UI URLs and display labels for status
-# Requires: MEDIA_SERVICE, VPN_ENABLED optional (from install config)
+# Requires: MEDIA_SERVICE, VPN_ENABLED, USENET_ENABLED, BYPARR_ENABLED optional
 
 if [ -n "${_ASSEMBLRR_SERVICES_SOURCED:-}" ]; then
     return 0
@@ -11,49 +12,30 @@ readonly _ASSEMBLRR_SERVICES_SOURCED=1
 #   compose_service|Display Name|port|path|kind
 # kind: ui = browser URL, internal = no public UI
 list_service_catalog() {
-    local media="${MEDIA_SERVICE:-jellyfin}"
-    local media_port=8096
-    local media_path="/"
-    local media_label="Jellyfin"
-
-    case "$media" in
-        jellyfin)
-            media_label="Jellyfin"
-            media_port=8096
-            media_path="/"
-            ;;
-        emby)
-            media_label="Emby"
-            media_port=8096
-            media_path="/"
-            ;;
-        plex)
-            media_label="Plex"
-            media_port=32400
-            media_path="/web"
-            ;;
-        *)
-            media_label="$media"
-            media_port=8096
-            media_path="/"
-            ;;
-    esac
-
     printf '%s\n' \
-        "${media}|${media_label}|${media_port}|${media_path}|ui" \
+        "jellyfin|Jellyfin|8096|/|ui" \
         "seerr-gateway|Seerr|5055|/|ui" \
         "bazarr|Bazarr|6767|/|ui" \
         "sonarr|Sonarr|8989|/|ui" \
         "radarr|Radarr|7878|/|ui" \
         "prowlarr|Prowlarr|9696|/|ui" \
-        "qbittorrent|qBittorrent|8081|/|ui" \
-        "recyclarr|Recyclarr|||internal"
+        "qbittorrent|qBittorrent|8081|/|ui"
+
+    if [ "${USENET_ENABLED:-n}" = "y" ] || [ "${USENET_ENABLED:-n}" = "Y" ]; then
+        printf '%s\n' "sabnzbd|SABnzbd|8085|/|ui"
+    fi
 
     printf '%s\n' \
-        "seerr|Seerr (internal)|||internal" \
-        "media-purge-watch|Media purge watch|||internal"
+        "recyclarr|Recyclarr|||internal" \
+        "seerr|Seerr (internal)|||internal"
 
-    if [ "${VPN_ENABLED:-n}" = "y" ]; then
+    if [ "${BYPARR_ENABLED:-n}" = "y" ] || [ "${BYPARR_ENABLED:-n}" = "Y" ]; then
+        printf '%s\n' "byparr|Byparr (solver)|||internal"
+    fi
+
+    printf '%s\n' "media-purge-watch|Media purge watch|||internal"
+
+    if [ "${VPN_ENABLED:-n}" = "y" ] || [ "${VPN_ENABLED:-n}" = "Y" ]; then
         printf '%s\n' \
             "gluetun|Gluetun (VPN)|||internal" \
             "deunhealth|Deunhealth|||internal" \
@@ -61,11 +43,15 @@ list_service_catalog() {
     fi
 }
 
-# Build URL for a catalog row (localhost — stable across DHCP changes)
+# Build URL for a catalog row (uses localhost unless API_HOST points to a LAN/remote host)
 service_ui_url() {
     local port="$1"
     local path="${2:-/}"
-    local host="${3:-localhost}"
+    local host="${3:-${API_HOST:-localhost}}"
+
+    case "$host" in
+        ""|127.0.0.1|0.0.0.0) host="localhost" ;;
+    esac
 
     [ -z "$port" ] && { echo ""; return 0; }
     if [ "$path" != "/" ] && [[ "$path" != /* ]]; then
@@ -79,7 +65,7 @@ service_ui_url() {
 }
 
 # True when a compose ps row is ready for the operator.
-# healthy → ready; starting/unhealthy → not; no healthcheck + running → ready.
+# healthy -> ready; starting/unhealthy -> not; no healthcheck + running -> ready.
 service_row_ready() {
     local state="${1:-}"
     local health="${2:-}"
@@ -94,12 +80,12 @@ service_row_ready() {
 
 # Human-readable service URLs only (setup summary / scripting)
 running_services_location() {
-    local host_ip="localhost"
+    local host_ip="${1:-${API_HOST:-localhost}}"
     local line svc label port path kind
 
     echo "Service URLs (live: ${APP_CLI_NAME:-assemblrr} status):"
     while IFS='|' read -r svc label port path kind; do
         [ "$kind" = "ui" ] || continue
-        printf '  %-12s %s\n' "$label" "$(service_ui_url "$port" "$path" "$host_ip")"
+        printf '  %-14s %s\n' "$label" "$(service_ui_url "$port" "$path" "$host_ip")"
     done < <(list_service_catalog)
 }

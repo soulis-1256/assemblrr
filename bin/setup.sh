@@ -1,11 +1,11 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# assemblrr first-time setup, reconfigure, and backup-restore wizard
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_ROOT=""
 
-# Support both repository layout (`bin/` + `lib/`) and installed layout
-# (entrypoints copied into the install root with `lib/` underneath).
 if [ -f "$SCRIPT_DIR/../lib/core.sh" ]; then
     APP_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 elif [ -f "$SCRIPT_DIR/lib/core.sh" ]; then
@@ -18,124 +18,59 @@ fi
 resolve_project_file() {
     local relative_path="$1"
     local candidate="$APP_ROOT/$relative_path"
-
     if [ -f "$candidate" ]; then
         echo "$candidate"
         return 0
     fi
-
     case "$relative_path" in
-        bin/*)
-            candidate="$APP_ROOT/${relative_path#bin/}"
-            ;;
+        bin/*) candidate="$APP_ROOT/${relative_path#bin/}" ;;
     esac
-
     if [ -f "$candidate" ]; then
         echo "$candidate"
         return 0
     fi
-
     return 1
 }
 
-# Source core library (logging, colors, safe_source, path utilities)
+# shellcheck source=/dev/null
 source "$APP_ROOT/lib/core.sh"
-
-# Source branding — all names/paths come from here
+# shellcheck source=/dev/null
 source "$APP_ROOT/lib/branding.sh"
 load_branding "$APP_ROOT"
-
-# Source Docker Compose builder
+# shellcheck source=/dev/null
 source "$APP_ROOT/lib/compose.sh"
-
-# Source VPN helpers
+# shellcheck source=/dev/null
 source "$APP_ROOT/lib/vpn.sh"
+# shellcheck source=/dev/null
+source "$APP_ROOT/lib/managed_files.sh"
+# shellcheck source=/dev/null
+source "$APP_ROOT/lib/fzf-tui.sh"
+# shellcheck source=/dev/null
+source "$APP_ROOT/lib/services.sh"
+# shellcheck source=/dev/null
+source "$APP_ROOT/lib/quality.sh"
+# shellcheck source=/dev/null
+[ -f "$APP_ROOT/lib/qbit.sh" ] && source "$APP_ROOT/lib/qbit.sh"
+# shellcheck source=/dev/null
+[ -f "$APP_ROOT/lib/usenet.sh" ] && source "$APP_ROOT/lib/usenet.sh"
+# shellcheck source=/dev/null
+source "$APP_ROOT/lib/prompts.sh"
 
-echo "===================================================="
-echo "                             | |   | |          "
-echo "  __ _ ___ ___  ___ _ __ ___ | |__ | |_ __ _ __ "
-echo " / _\` / __/ __|/ _ \ '_ \` _ \\| '_ \\| | '__| '__|"
-echo "| (_| \\__ \\__ \\  __/ | | | | | |_) | | |  | |   "
-echo " \\__,_|___/___/\\___|_| |_| |_|_.__/|_|_|  |_|   "
-echo "                                                 "
-echo "===================================================="
-echo "Welcome to ${APP_DISPLAY_NAME} (${APP_DESCRIPTION})"
-echo "===================================================="
-echo ""
-
-# --- Setup mode & argument parsing ---
-RESTORE_BACKUP_FILE=""
-while [ $# -gt 0 ]; do
-    case "$1" in
-        --restore)
-            SETUP_MODE="restore"
-            if [ -n "${2:-}" ] && [[ ! "$2" =~ ^-- ]]; then
-                RESTORE_BACKUP_FILE="$2"
-                shift
-            fi
-            shift
-            ;;
-        --restore=*)
-            SETUP_MODE="restore"
-            RESTORE_BACKUP_FILE="${1#*=}"
-            shift
-            ;;
-        --express)
-            SETUP_MODE="express"
-            shift
-            ;;
-        --manual)
-            SETUP_MODE="manual"
-            shift
-            ;;
-        *)
-            shift
-            ;;
-    esac
-done
-
-if [ -z "${SETUP_MODE:-}" ]; then
-    echo "  1) Express (recommended — minimal questions, smart defaults)"
-    echo "  2) Manual (full control over every setting)"
-    echo "  3) Restore (rebuild stack from an existing backup archive)"
-    while true; do
-        read -p "Choose setup mode [1]: " setup_mode_choice
-        setup_mode_choice=${setup_mode_choice:-1}
-        case "$setup_mode_choice" in
-            1) SETUP_MODE="express"; break ;;
-            2) SETUP_MODE="manual"; break ;;
-            3) SETUP_MODE="restore"; break ;;
-            *) log_warning "Invalid choice. Please choose 1, 2, or 3." ;;
-        esac
-    done
-fi
-export SETUP_MODE
-
-if [ "$SETUP_MODE" = "express" ]; then
-    echo ""
-    log_success "Express mode — we'll use smart defaults and only ask the essentials."
-    echo ""
-elif [ "$SETUP_MODE" = "restore" ]; then
-    echo ""
-    log_info "Restore mode — we'll rebuild your stack from an existing backup archive."
-    echo ""
-else
-    echo ""
-    log_info "Manual mode — you'll configure every setting."
-    echo ""
-fi
-
-# Constants
-readonly SUPPORTED_MEDIA_SERVICES=("jellyfin" "emby" "plex")
+readonly SUPPORTED_MEDIA_SERVICES=("jellyfin")
 readonly DEFAULT_MEDIA_SERVICE="jellyfin"
 readonly DEFAULT_VPN_SERVICE="protonvpn"
-readonly MEDIA_SUBDIRS=("torrents/movies" "torrents/tv" "media/movies" "media/tv" "blackhole")
+readonly MEDIA_SUBDIRS=("torrents/movies" "torrents/tv" "torrents/incomplete" "usenet/incomplete" "usenet/complete/movies" "usenet/complete/tv" "media/movies" "media/tv" "blackhole")
+readonly REQUIRED_COMMANDS=("curl" "jq" "sed" "awk" "envsubst" "fzf" "python3")
 
-# Dependencies
-readonly REQUIRED_COMMANDS=("curl" "jq" "sed" "awk" "envsubst" "fzf")
-
-# LOG_FILE is set in main() — lib/core.sh log_info/log_debug handle file logging natively
-# Path utilities (expand_path, read_masked, create_and_verify_directory, etc.) are in lib/core.sh
+setup_show_help() {
+    echo "Usage: setup.sh [--express | --manual | --restore [archive.tar.gz] | --reconfigure]"
+    echo
+    echo "Modes:"
+    echo "  --express       Minimal prompts with smart defaults"
+    echo "  --manual        Full interactive setup (including optional overlays)"
+    echo "  --reconfigure   Re-run wizard on an existing installation"
+    echo "  --restore FILE  Rebuild stack from a backup archive"
+}
 
 detect_package_manager() {
     if command -v apt-get &>/dev/null; then
@@ -151,10 +86,34 @@ detect_package_manager() {
     fi
 }
 
+_map_distro_package() {
+    local pm="$1" cmd="$2"
+    case "$cmd" in
+        envsubst)
+            case "$pm" in
+                apt) echo "gettext-base" ;;
+                *) echo "gettext" ;;
+            esac
+            ;;
+        python3)
+            case "$pm" in
+                pacman) echo "python" ;;
+                *) echo "python3" ;;
+            esac
+            ;;
+        *)
+            echo "$cmd"
+            ;;
+    esac
+}
+
 install_packages() {
-    local pkgs=("$@")
-    local pm
+    local pm pkgs=() c mapped
     pm=$(detect_package_manager)
+    for c in "$@"; do
+        mapped=$(_map_distro_package "$pm" "$c")
+        pkgs+=("$mapped")
+    done
 
     case "$pm" in
         apt)
@@ -164,8 +123,6 @@ install_packages() {
             echo
             log_warning "Arch Linux: about to run a full system upgrade (pacman -Syu)."
             log_info "A partial install (-Sy without -u) can break jq (GLIBC mismatch)."
-            log_info "This updates the whole system, then installs: ${pkgs[*]}"
-            echo
             sudo pacman -Syu --noconfirm --needed "${pkgs[@]}"
             ;;
         dnf)
@@ -181,10 +138,10 @@ install_packages() {
 }
 
 check_dependencies() {
-    local missing_packages=()
+    local missing_packages=() pkg works
 
     for pkg in "${REQUIRED_COMMANDS[@]}"; do
-        local works=false
+        works=false
         if command -v "$pkg" &>/dev/null; then
             case "$pkg" in
                 curl) curl --version &>/dev/null && works=true ;;
@@ -193,10 +150,10 @@ check_dependencies() {
                 sed) echo "" | sed '' &>/dev/null && works=true ;;
                 envsubst) echo "" | envsubst &>/dev/null && works=true ;;
                 fzf) fzf --version &>/dev/null && works=true ;;
+                python3) python3 --version &>/dev/null && works=true ;;
                 *) works=true ;;
             esac
         fi
-
         if ! $works; then
             missing_packages+=("$pkg")
         else
@@ -206,33 +163,14 @@ check_dependencies() {
 
     if [ ${#missing_packages[@]} -gt 0 ]; then
         log_warning "Missing required packages: ${missing_packages[*]}"
-        read -p "Would you like to install the missing packages? (y/N) [Default = n]: " install_deps
+        local install_deps="n"
+        read_prompt "Would you like to install the missing packages? (y/N) [Default = n]: " install_deps
         install_deps=${install_deps:-"n"}
 
         if [ "${install_deps,,}" = "y" ]; then
             echo "Installing missing packages..."
             if ! install_packages "${missing_packages[@]}"; then
-                log_error "Failed to install missing packages. Please install them manually: ${missing_packages[*]}"
-            fi
-            local still_broken=()
-            local pkg
-            for pkg in "${missing_packages[@]}"; do
-                case "$pkg" in
-                    jq) echo "{}" | jq . &>/dev/null || still_broken+=("$pkg") ;;
-                    fzf) fzf --version &>/dev/null || still_broken+=("$pkg") ;;
-                    curl) curl --version &>/dev/null || still_broken+=("$pkg") ;;
-                    *) command -v "$pkg" &>/dev/null || still_broken+=("$pkg") ;;
-                esac
-            done
-            if [ ${#still_broken[@]} -gt 0 ]; then
-                echo
-                log_warning "Installed, but still not runnable: ${still_broken[*]}"
-                if printf '%s\n' "${still_broken[@]}" | grep -qx jq; then
-                    jq . </dev/null 2>&1 | head -5 || true
-                    log_info "On Arch this is usually a partial upgrade. In WSL run: sudo pacman -Syu"
-                    log_info "Then open a new WSL terminal and re-run setup."
-                fi
-                log_error "Please fix the packages above and re-run setup."
+                log_error "Failed to install missing packages. Please install manually: ${missing_packages[*]}"
             fi
             log_success "Successfully installed missing packages"
         else
@@ -240,20 +178,15 @@ check_dependencies() {
         fi
     fi
 
-    # Check Docker and Docker Compose
     if ! verify_docker; then
         if ! command -v docker &>/dev/null || ! docker compose version &>/dev/null; then
             log_warning "Docker/Docker Compose not found!"
-            
-            # If in WSL2, do not attempt to install Docker inside the distro.
-            # Recommend installing Docker Desktop on Windows.
             if grep -qi microsoft /proc/version 2>/dev/null; then
-                log_error "WSL2 environment detected, but Docker Desktop is not running or not installed on Windows.\n\nPlease install Docker Desktop for Windows and enable WSL2 integration:\n  https://docs.docker.com/desktop/wsl/"
+                log_error "WSL2 detected, but Docker Desktop is not running or not installed on Windows.\n\nPlease install Docker Desktop for Windows and enable WSL2 integration:\n  https://docs.docker.com/desktop/wsl/"
             fi
-
-            read -p "Install Docker and Docker Compose? (y/N) [Default = n]: " install_docker
+            local install_docker="n"
+            read_prompt "Install Docker and Docker Compose? (y/N) [Default = n]: " install_docker
             install_docker=${install_docker:-"n"}
-
             if [ "${install_docker,,}" = "y" ]; then
                 bash "$SCRIPT_DIR/docker-install.sh"
                 if ! verify_docker; then
@@ -267,25 +200,14 @@ check_dependencies() {
         fi
     fi
 
-    # Perform snap check if docker is installed
     if command -v docker &>/dev/null; then
         if [ "$(command -v docker)" = "/snap/bin/docker" ]; then
-            log_error "Docker is installed via snap. ${APP_DISPLAY_NAME} requires the official Docker installation. Please remove snap Docker and install from https://docs.docker.com/engine/install/"
+            log_error "Docker is installed via snap. ${APP_DISPLAY_NAME} requires the official Docker installation: https://docs.docker.com/engine/install/"
         fi
         log_success "Docker is installed and running"
     fi
-
     return 0
 }
-
-# --- Setup prompts (sourced from lib/prompts.sh) ---
-# Requires: lib/core.sh already sourced, constants defined above
-# fzf-tui helpers (fzf_multi_select, fzf_single_select_data) must be sourced before prompts
-source "$APP_ROOT/lib/managed_files.sh"
-source "$APP_ROOT/lib/fzf-tui.sh"
-source "$APP_ROOT/lib/services.sh"
-source "$APP_ROOT/lib/quality.sh"
-source "$APP_ROOT/lib/prompts.sh"
 
 _copy_stall_error() {
     log_error "Timed out writing to ${install_directory} — the drive looks stuck (flaky USB / WSL). From PowerShell: wsl --shutdown — then check the drive in Explorer, or re-run setup and pick Home."
@@ -315,8 +237,8 @@ copy_configuration_files() {
         fi
 
         if ! src_path=$(resolve_project_file "$src"); then
-            if [[ "$src" == compose/examples/* ]]; then
-                log_debug "Optional example file not found: $src"
+            if [[ "$src" == compose/examples/* ]] || [[ "$src" == NOTICE ]]; then
+                log_debug "Optional file not found: $src"
                 continue
             fi
             log_error "Failed to locate source file: $src"
@@ -329,7 +251,9 @@ copy_configuration_files() {
             _copy_stall_error
         elif [ "$rc" -eq 0 ]; then
             case "$src" in
-                scripts/*|bin/cli.sh|bin/config.sh|bin/setup.sh) chmod +x "$dest_path" ;;
+                scripts/*.sh|scripts/*.py|bin/*.sh|migrations/*.sh|platform/linux/*.sh)
+                    chmod +x "$dest_path" 2>/dev/null || true
+                    ;;
             esac
             copied=$((copied + 1))
         else
@@ -341,11 +265,9 @@ copy_configuration_files() {
 
 generate_env_file() {
     local env_file="$install_directory/.env"
-
     log_debug "Generating environment configuration..."
 
-    # Set VPN-related variables for envsubst (credentials go to secrets/)
-    if [ "${setup_vpn,,}" == "y" ]; then
+    if [ "${setup_vpn,,}" = "y" ]; then
         VPN_ENABLED="y"
         VPN_SERVICE="$vpn_service"
         VPN_TYPE="$vpn_type"
@@ -366,30 +288,32 @@ generate_env_file() {
         VPN_PORT_FORWARDING="off"
     fi
 
-    # Export all variables for envsubst
     API_HOST="${API_HOST:-127.0.0.1}"
     export PUID="$puid"
     export PGID="$pgid"
     export MEDIA_DIRECTORY="$media_directory"
     export INSTALL_DIRECTORY="$install_directory"
-    export MEDIA_SERVICE="$media_service"
+    export MEDIA_SERVICE="${media_service:-jellyfin}"
     export TZ="$tz"
     export VPN_ENABLED VPN_SERVICE VPN_TYPE
     export WIREGUARD_ADDRESSES
     export PORT_FORWARD_ONLY VPN_PORT_FORWARDING
+    export VUETORRENT_ENABLED="${vuetorrent_enabled:-y}"
+    export GPU_TRANSCODING="${gpu_transcoding:-none}"
+    export BYPARR_ENABLED="${byparr_enabled:-n}"
+    export USENET_ENABLED="${usenet_enabled:-n}"
     export API_HOST
 
     local env_template
     if ! env_template=$(resolve_project_file ".env.example"); then
         log_error "Failed to locate .env.example"
     fi
-    # Explicit key list so envsubst does not pull in unrelated shell variables
-    envsubst '${PUID} ${PGID} ${MEDIA_DIRECTORY} ${INSTALL_DIRECTORY} ${MEDIA_SERVICE} ${TZ} ${VPN_ENABLED} ${VPN_SERVICE} ${VPN_TYPE} ${WIREGUARD_ADDRESSES} ${PORT_FORWARD_ONLY} ${VPN_PORT_FORWARDING} ${API_HOST}' \
+    # Explicit key list matching .env.example 1-to-1
+    envsubst '${PUID} ${PGID} ${MEDIA_DIRECTORY} ${INSTALL_DIRECTORY} ${MEDIA_SERVICE} ${TZ} ${VPN_ENABLED} ${VPN_SERVICE} ${VPN_TYPE} ${WIREGUARD_ADDRESSES} ${PORT_FORWARD_ONLY} ${VPN_PORT_FORWARDING} ${VUETORRENT_ENABLED} ${GPU_TRANSCODING} ${BYPARR_ENABLED} ${USENET_ENABLED} ${API_HOST}' \
         < "$env_template" | tr -d '\r' > "$env_file" || \
         log_error "Failed to generate .env file"
 
     chmod 600 "$env_file"
-
     log_debug "Environment configuration generated ($env_file)"
 }
 
@@ -397,80 +321,48 @@ write_vpn_secrets() {
     if [ "${setup_vpn,,}" != "y" ]; then
         return 0
     fi
-
     local secrets_dir="$install_directory/secrets"
     mkdir -p "$secrets_dir"
+    chmod 700 "$secrets_dir"
 
     if [ "$vpn_type" = "openvpn" ]; then
-        echo -n "${vpn_user:-}" > "$secrets_dir/openvpn_user.txt"
-        echo -n "${vpn_password:-}" > "$secrets_dir/openvpn_password.txt"
-        # Create empty WireGuard secret so the secret definition always resolves
-        : > "$secrets_dir/wireguard_private_key.txt"
+        write_secret_file "$secrets_dir/openvpn_user.txt" "${vpn_user:-}"
+        write_secret_file "$secrets_dir/openvpn_password.txt" "${vpn_password:-}"
+        write_secret_file "$secrets_dir/wireguard_private_key.txt" ""
     else
-        echo -n "${wireguard_private_key:-}" > "$secrets_dir/wireguard_private_key.txt"
-        # Create empty OpenVPN secrets so the secret definitions always resolve
-        : > "$secrets_dir/openvpn_user.txt"
-        : > "$secrets_dir/openvpn_password.txt"
+        write_secret_file "$secrets_dir/wireguard_private_key.txt" "${wireguard_private_key:-}"
+        write_secret_file "$secrets_dir/openvpn_user.txt" ""
+        write_secret_file "$secrets_dir/openvpn_password.txt" ""
     fi
-
-    chmod 600 "$secrets_dir"/*.txt
     log_success "VPN secrets written to $secrets_dir"
 }
 
 write_auth_secrets() {
     local secrets_dir="$install_directory/secrets"
     mkdir -p "$secrets_dir"
-
-    echo -n "${auth_username:-admin}" > "$secrets_dir/auth_username.txt"
-    echo -n "${auth_password:-}" > "$secrets_dir/auth_password.txt"
-    chmod 600 "$secrets_dir/auth_username.txt" "$secrets_dir/auth_password.txt"
+    chmod 700 "$secrets_dir"
+    write_secret_file "$secrets_dir/auth_username.txt" "${auth_username:-admin}"
+    write_secret_file "$secrets_dir/auth_password.txt" "${auth_password:-}"
     log_success "Auth credentials written to $secrets_dir"
 }
 
 write_opensubtitles_secrets() {
     local secrets_dir="$install_directory/secrets"
     mkdir -p "$secrets_dir"
-
     if [ "${opensubtitles_enabled:-n}" = "y" ] && [ -n "${opensubtitles_username:-}" ]; then
-        echo -n "${opensubtitles_username}" > "$secrets_dir/opensubtitles_username.txt"
-        echo -n "${opensubtitles_password:-}" > "$secrets_dir/opensubtitles_password.txt"
-        chmod 600 "$secrets_dir/opensubtitles_username.txt" "$secrets_dir/opensubtitles_password.txt"
+        write_secret_file "$secrets_dir/opensubtitles_username.txt" "${opensubtitles_username}"
+        write_secret_file "$secrets_dir/opensubtitles_password.txt" "${opensubtitles_password:-}"
         log_success "OpenSubtitles.com credentials written to $secrets_dir"
     else
-        # Clear stale creds if user opted out on re-run
         rm -f "$secrets_dir/opensubtitles_username.txt" "$secrets_dir/opensubtitles_password.txt" 2>/dev/null || true
     fi
 }
 
-write_qbittorrent_config() {
-    local qbit_config_dir="$install_directory/config/qbittorrent/qBittorrent"
-    mkdir -p "$qbit_config_dir"
-
-    local pbkdf2_hash
-    pbkdf2_hash=$(qbit_generate_pbkdf2 "${auth_password:-}")
-
-    if [ -n "$pbkdf2_hash" ]; then
-        if [ "${setup_vpn,,}" = "y" ]; then
-            cat > "$qbit_config_dir/qBittorrent.conf" << EOF
-[BitTorrent]
-Session\Interface=tun0
-Session\InterfaceName=tun0
-
-[Preferences]
-WebUI\Username=${auth_username:-admin}
-WebUI\Password_PBKDF2=$pbkdf2_hash
-WebUI\Port=8081
-EOF
-            log_success "Pre-configured qBittorrent credentials and tun0 bind"
-        else
-            cat > "$qbit_config_dir/qBittorrent.conf" << EOF
-[Preferences]
-WebUI\Username=${auth_username:-admin}
-WebUI\Password_PBKDF2=$pbkdf2_hash
-WebUI\Port=8081
-EOF
-            log_success "Pre-configured qBittorrent credentials (bypassing WebAPI restrictions)"
-        fi
+write_usenet_secrets() {
+    local secrets_dir="$install_directory/secrets"
+    if [ "${usenet_enabled:-n}" = "y" ] && [ -n "${usenet_password:-}" ]; then
+        mkdir -p "$secrets_dir"
+        write_secret_file "$secrets_dir/usenet_password.txt" "${usenet_password}"
     fi
 }
 
@@ -479,14 +371,10 @@ validate_vpn_config() {
 }
 
 test_vpn_connection() {
-    # Profile is only needed for media services; Gluetun has no profile.
-    local profile="${media_service:-jellyfin}"
     build_compose_args "$install_directory" "${setup_vpn,,}"
-    test_vpn_connection_shared run_docker compose "${COMPOSE_ARGS[@]}" --profile "$profile"
+    test_vpn_connection_shared run_docker compose "${COMPOSE_ARGS[@]}"
 }
 
-# Provisional host vars so Gluetun can start before the rest of the wizard.
-# Final paths/user are collected after a successful tunnel test and may change.
 set_provisional_vpn_test_defaults() {
     username="${username:-$USER}"
     puid="${puid:-$(id -u)}"
@@ -497,8 +385,8 @@ set_provisional_vpn_test_defaults() {
         install_directory=$(expand_path "$install_directory")
         media_directory=$(expand_path "$media_directory")
     fi
-    media_service="${media_service:-jellyfin}"
-    media_service_port="${media_service_port:-8096}"
+    media_service="jellyfin"
+    media_service_port=8096
     if [ -z "${tz:-}" ]; then
         tz=$(cat /etc/timezone 2>/dev/null || timedatectl show -p Timezone -v 2>/dev/null | tail -1 || echo "UTC")
         tz=${tz:-UTC}
@@ -506,8 +394,6 @@ set_provisional_vpn_test_defaults() {
     export username puid pgid install_directory media_directory media_service media_service_port tz
 }
 
-# Gate the rest of setup on a working tunnel. On failure, re-prompt credentials
-# and retry instead of abandoning a half-finished install.
 ensure_vpn_connection() {
     if [ "${setup_vpn,,}" != "y" ]; then
         return 0
@@ -522,26 +408,13 @@ ensure_vpn_connection() {
 
         echo
         echo -e "${RED}VPN test failed — cannot continue setup without a working VPN.${NC}"
-        echo -e "${YELLOW}Download clients (qBittorrent, SABnzbd) require the VPN to function.${NC}"
-        echo
-        echo "Credentials live under $install_directory/secrets/ (not as passwords in .env)."
-        if [ "${vpn_type:-openvpn}" = "wireguard" ]; then
-            echo "  WireGuard key:  $install_directory/secrets/wireguard_private_key.txt"
-            echo "  WG address:     WIREGUARD_ADDRESSES in $install_directory/.env"
-        else
-            echo "  OpenVPN user:   $install_directory/secrets/openvpn_user.txt"
-            echo "  OpenVPN pass:   $install_directory/secrets/openvpn_password.txt"
-        fi
-        echo "Gluetun logs above usually show why the tunnel failed."
-        echo
-
+        echo "Credentials live under $install_directory/secrets/ (not in .env)."
         local retry=""
-        read -p "Re-enter VPN credentials and try again? (Y/n) [Default = y]: " retry
+        read_prompt "Re-enter VPN credentials and try again? (Y/n) [Default = y]: " retry
         retry=${retry:-y}
         if [ "${retry,,}" != "y" ]; then
             echo
             echo "Setup stopped — VPN was not verified, so the rest of the wizard was not run."
-            echo "When you are ready, re-run setup and enter correct VPN details:"
             local raw_base="${APP_REPO_URL:-https://github.com/soulis-1256/assemblrr}"
             raw_base="${raw_base/github.com/raw.githubusercontent.com}/main"
             echo "  Linux / WSL2:  bash <(curl -fsSL ${raw_base}/platform/linux/bootstrap.sh)"
@@ -557,18 +430,14 @@ ensure_vpn_connection() {
         log_info "Re-enter VPN credentials for ${vpn_service:-your provider} (${vpn_type:-openvpn})."
         prompt_vpn_credentials
         write_vpn_secrets
-        # WIREGUARD_ADDRESSES and related values live in .env
         generate_env_file
     done
 }
 
-# Right after VPN prompts: materialize a minimal install and prove the tunnel
-# before asking about users, paths, media, etc.
 early_vpn_gate() {
     if [ "${setup_vpn,,}" != "y" ]; then
         return 0
     fi
-
     echo
     log_info "Testing VPN connection before the rest of setup..."
     set_provisional_vpn_test_defaults
@@ -577,7 +446,6 @@ early_vpn_gate() {
     bootstrap_operator
     generate_env_file
     write_vpn_secrets
-    # Bind mounts must exist as the host user before Gluetun starts
     prepare_install_dirs "$install_directory" "$puid" "$pgid"
     ensure_vpn_connection
     log_success "VPN is working — continuing with the rest of setup."
@@ -589,10 +457,19 @@ write_runtime_config() {
     cat > "$config_file" << EOF
 INSTALL_DIRECTORY="$install_directory"
 MEDIA_DIRECTORY="$media_directory"
-MEDIA_SERVICE="$media_service"
+MEDIA_SERVICE="${media_service:-jellyfin}"
 VPN_ENABLED="${setup_vpn,,}"
 VPN_TYPE="${vpn_type:-openvpn}"
 TZ="$tz"
+VUETORRENT_ENABLED="${vuetorrent_enabled:-y}"
+GPU_TRANSCODING="${gpu_transcoding:-none}"
+BYPARR_ENABLED="${byparr_enabled:-n}"
+USENET_ENABLED="${usenet_enabled:-n}"
+USENET_HOST="${usenet_host:-}"
+USENET_PORT="${usenet_port:-563}"
+USENET_SSL="${usenet_ssl:-y}"
+USENET_USERNAME="${usenet_username:-}"
+USENET_CONNECTIONS="${usenet_connections:-8}"
 QUALITY_TIER="$(quality_tier)"
 QUALITY_SOURCE="$(quality_source)"
 SEERR_IS_4K="$(quality_seerr_is_4k)"
@@ -605,8 +482,26 @@ EOF
     log_debug "Runtime config written to $config_file"
 }
 
-# build_compose_args is defined in lib/compose.sh
-# Usage: build_compose_args "$install_directory" "${setup_vpn,,}"
+_record_install_metadata() {
+    local channel="${ASSEMBLRR_INSTALL_REF:-main}"
+    printf '%s\n' "$channel" > "$install_directory/.assemblrr-channel"
+
+    local sha="unknown"
+    if [ -d "$APP_ROOT/.git" ]; then
+        sha=$(git -C "$APP_ROOT" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    fi
+    printf 'setup:%s@%s(%s)\n' "${APP_REPO_URL:-https://github.com/soulis-1256/assemblrr}" "$channel" "$sha" \
+        > "$install_directory/.assemblrr-version"
+
+    if [ -d "$APP_ROOT/migrations" ]; then
+        local mf mid
+        : > "$install_directory/.assemblrr-migrations"
+        while IFS= read -r -d '' mf; do
+            mid=$(sed -n 's/^migration_id=["\x27]\([^"\x27]*\)["\x27].*/\1/p' "$mf" 2>/dev/null | head -1)
+            [ -n "$mid" ] && printf '%s\n' "$mid" >> "$install_directory/.assemblrr-migrations"
+        done < <(find "$APP_ROOT/migrations" -maxdepth 1 -type f -name '*.sh' -print0 2>/dev/null | sort -z)
+    fi
+}
 
 install_cli() {
     if [ ! -f "$install_directory/cli.sh" ]; then
@@ -618,12 +513,12 @@ install_cli() {
     log_debug "CLI installed to $HOME/.local/bin/$APP_CLI_NAME"
 }
 
-# Materialize install tree + operator CLI as soon as we know the install path.
-# Lets users run: assemblrr uninstall  after aborting mid-setup.
-# Callers still generate .env / secrets when those steps are ready.
 bootstrap_operator() {
     local quiet="${1:-}"
     mkdir -p "$install_directory"
+    if [ "${ASSEMBLRR_RECONFIGURE:-0}" != "1" ]; then
+        : > "$install_directory/.assemblrr-setup-in-progress"
+    fi
     copy_configuration_files
     write_runtime_config
     if install_cli; then
@@ -637,16 +532,30 @@ bootstrap_operator() {
 
 set_permissions() {
     log_debug "Setting ownership for install and media directories..."
-
-    # Install bind-mount tree (idempotent; also fixes root-owned leftovers)
     prepare_install_dirs "$install_directory" "$puid" "$pgid"
-
     if [ ! -d "$media_directory" ]; then
         mkdir -p "$media_directory" || log_error "Failed to create media directory $media_directory"
     fi
     ensure_owned "$media_directory" "$puid" "$pgid"
-
     log_debug "Ownership set for $install_directory and $media_directory"
+}
+
+_validate_restore_archive() {
+    local archive="$1"
+    [ -f "$archive" ] || return 1
+    gzip -t "$archive" 2>/dev/null || return 1
+    local listing has_env=0 bad_path=0 entry
+    listing=$(tar -tzf "$archive" 2>/dev/null) || return 1
+    while IFS= read -r entry; do
+        [ -z "$entry" ] && continue
+        case "$entry" in
+            .env|./.env) has_env=1 ;;
+        esac
+        case "$entry" in
+            /*|..|../*|*/../*|*/..) bad_path=1; break ;;
+        esac
+    done <<< "$listing"
+    [ "$bad_path" -eq 0 ] && [ "$has_env" -eq 1 ]
 }
 
 restore_from_backup_wizard() {
@@ -656,41 +565,35 @@ restore_from_backup_wizard() {
     log_info "========================================================"
     echo ""
 
-    local backup_file="${RESTORE_BACKUP_FILE:-}"
+    local backup_file="${RESTORE_BACKUP_FILE:-}" backup_input=""
     while [ -z "$backup_file" ] || [ ! -f "$backup_file" ]; do
-        read -p "Enter path to backup archive (.tar.gz): " backup_input
+        read_prompt "Enter path to backup archive (.tar.gz): " backup_input
         backup_input=${backup_input:-}
         if [ -z "$backup_input" ]; then
             log_warning "Please enter a valid file path."
             continue
         fi
-
         backup_file=$(expand_path "$backup_input")
         if [ ! -f "$backup_file" ]; then
             log_warning "Backup file not found: $backup_file"
             backup_file=""
             continue
         fi
-
-        if ! gzip -t "$backup_file" 2>/dev/null; then
-            log_warning "File does not appear to be a valid .tar.gz archive: $backup_file"
+        if ! _validate_restore_archive "$backup_file"; then
+            log_warning "Invalid or unsafe backup archive (must contain .env without traversal): $backup_file"
             backup_file=""
             continue
         fi
     done
 
     echo ""
-    local default_install="$APP_DEFAULT_INSTALL_DIR"
-    local target_install=""
+    local default_install="$APP_DEFAULT_INSTALL_DIR" target_install="" target_input=""
     while true; do
-        read -p "Enter target installation directory [$default_install]: " target_input
+        read_prompt "Enter target installation directory [$default_install]: " target_input
         target_input=${target_input:-$default_install}
         target_install=$(expand_path "$target_input")
-        if [ -z "$target_install" ]; then
-            log_warning "Invalid directory path."
-            continue
-        fi
-        break
+        [ -n "$target_install" ] && break
+        log_warning "Invalid directory path."
     done
 
     install_directory="$target_install"
@@ -699,7 +602,8 @@ restore_from_backup_wizard() {
     if [ -d "$install_directory" ] && [ "$(ls -A "$install_directory" 2>/dev/null)" ]; then
         echo ""
         log_warning "Target directory $install_directory already exists and is not empty."
-        read -p "Overwrite existing directory contents with backup? [y/N]: " confirm_overwrite
+        local confirm_overwrite="n"
+        read_prompt "Overwrite existing directory contents with backup? [y/N]: " confirm_overwrite
         confirm_overwrite=${confirm_overwrite:-n}
         if [[ ! ${confirm_overwrite,,} =~ ^y$ ]]; then
             log_info "Restore cancelled."
@@ -708,24 +612,21 @@ restore_from_backup_wizard() {
     fi
 
     mkdir -p "$install_directory"
-
     log_info "Extracting backup archive into $install_directory..."
     local abs_backup
     abs_backup=$(realpath "$backup_file")
 
-    if ! tar -xzf "$abs_backup" -C "$install_directory" 2>/dev/null; then
+    if ! tar --no-same-owner -xzf "$abs_backup" -C "$install_directory" 2>/dev/null; then
         if ! run_docker run --rm \
             -v "$install_directory:/target" \
-            -v "$(dirname "$abs_backup"):/backup" \
-            alpine tar -xzf "/backup/$(basename "$abs_backup")" -C /target; then
+            -v "$(dirname "$abs_backup"):/backup:ro" \
+            "${UTILITY_ALPINE_IMAGE:-alpine:3.24.4}" \
+            tar --no-same-owner -xzf "/backup/$(basename "$abs_backup")" -C /target; then
             log_error "Failed to extract backup archive."
         fi
     fi
 
-    # Read configuration from restored files
-    local restored_puid restored_pgid restored_media restored_service restored_vpn restored_tz
     if [ -f "$install_directory/.env" ]; then
-        # shellcheck disable=SC1090
         safe_source "$install_directory/.env" 2>/dev/null || true
     fi
     if [ -f "$install_directory/.assemblrr-config" ]; then
@@ -734,16 +635,21 @@ restore_from_backup_wizard() {
         safe_source "$install_directory/.${APP_NAME}-config" 2>/dev/null || true
     fi
 
+    # Cross-host adaptation: rewrite INSTALL_DIRECTORY if extracted to a new host path
+    local f
+    for f in "$install_directory/.assemblrr-config" "$install_directory/.${APP_NAME}-config"; do
+        [ -f "$f" ] && sed -i -E "s|^INSTALL_DIRECTORY=.*|INSTALL_DIRECTORY=\"${install_directory}\"|" "$f" 2>/dev/null || true
+    done
+    [ -f "$install_directory/.env" ] && sed -i -E "s|^INSTALL_DIRECTORY=.*|INSTALL_DIRECTORY=${install_directory}|" "$install_directory/.env" 2>/dev/null || true
+
     puid="${PUID:-$(id -u)}"
     pgid="${PGID:-$(id -g)}"
     media_directory="${MEDIA_DIRECTORY:-$APP_DEFAULT_MEDIA_DIR}"
     media_service="${MEDIA_SERVICE:-jellyfin}"
     setup_vpn="${VPN_ENABLED:-n}"
     tz="${TZ:-UTC}"
-
     export puid pgid media_directory media_service setup_vpn tz
 
-    # Ensure bind-mount skeleton and permissions
     prepare_install_dirs "$install_directory" "$puid" "$pgid"
     if [ ! -d "$media_directory" ]; then
         mkdir -p "$media_directory" 2>/dev/null || true
@@ -751,11 +657,7 @@ restore_from_backup_wizard() {
     ensure_owned "$media_directory" "$puid" "$pgid" 2>/dev/null || true
     write_install_pointer "$install_directory" "$media_directory"
 
-    # Make scripts executable
-    chmod +x "$install_directory/bin/"*.sh "$install_directory/scripts/"*.sh 2>/dev/null || true
-    chmod +x "$install_directory/cli.sh" "$install_directory/config.sh" "$install_directory/setup.sh" 2>/dev/null || true
-
-    # Install CLI globally
+    chmod +x "$install_directory/scripts/"*.sh "$install_directory/cli.sh" "$install_directory/config.sh" "$install_directory/setup.sh" 2>/dev/null || true
     install_cli
 
     log_success "Backup extracted and configuration loaded."
@@ -763,194 +665,360 @@ restore_from_backup_wizard() {
     log_info "Starting restored services..."
 
     build_compose_args "$install_directory" "${setup_vpn,,}"
-    if ! compose_up_stack "$media_service"; then
+    if ! compose_up_stack "default"; then
         log_warning "Failed to start some restored services."
         log_info "Run '$APP_CLI_NAME logs' or '$APP_CLI_NAME status' to inspect."
         exit 1
     fi
+    rm -f "$install_directory/.assemblrr-setup-in-progress"
 
+    echo ""
+    echo "========================================================"
+    log_success "${APP_DISPLAY_NAME} restored and running!"
+    echo "========================================================"
     echo ""
     if [ -f "$install_directory/cli.sh" ]; then
-        log_info "Service dashboard:"
-        bash "$install_directory/cli.sh" status || true
+        bash "$install_directory/cli.sh" status --compact || true
+        echo
+    fi
+    printf "  %-18s %s  ·  %s\n" "Paths:" "$install_directory" "$media_directory"
+    printf "  %-18s %s status | config edit | upgrade | uninstall\n" "Manage:" "$APP_CLI_NAME"
+    echo ""
+    exit 0
+}
+
+setup_on_interrupt() {
+    trap - INT TERM
+    stty echo 2>/dev/null || true
+    echo >&2
+
+    local inst="${install_directory:-${_ASSEMBLRR_PROVISIONAL_INSTALL:-}}"
+    local media="${media_directory:-}"
+    local has_inst=0 has_media=0 has_containers=0
+    if [ -n "$inst" ] && [ -d "$inst" ] && [ -f "$inst/.assemblrr-setup-in-progress" ]; then
+        has_inst=1
+    fi
+    if [ -n "$media" ] && [ -d "$media" ]; then
+        has_media=1
+    fi
+    if command -v docker >/dev/null 2>&1 && docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx 'gluetun'; then
+        has_containers=1
     fi
 
-    echo ""
-    log_success "All done! ${APP_DISPLAY_NAME} has been restored and is running."
-    log_info "Install directory: $install_directory"
-    log_info "Media directory:   $media_directory"
-    log_info "Manage the stack:  $APP_CLI_NAME status"
-    exit 0
+    if [ "$has_inst" -eq 0 ] && [ "$has_containers" -eq 0 ]; then
+        log_info "Setup cancelled — nothing was installed."
+        exit 130
+    fi
+
+    echo
+    log_warning "Setup interrupted before completion."
+    echo "Created so far:"
+    [ "$has_inst" -eq 1 ] && echo "  - Partial config & CLI: $inst"
+    [ "$has_containers" -eq 1 ] && echo "  - Temporary VPN container: gluetun"
+    [ "$has_media" -eq 1 ] && echo "  - Media folders: $media"
+    echo "Not installed yet:"
+    echo "  - Core media stack containers & service wiring"
+    echo
+
+    local ans="n"
+    if [ -t 0 ] && [ -r /dev/tty ]; then
+        read_prompt "Clean up partial setup now (stops temp containers & deletes partial config; keeps any media files)? [Y/n]: " ans
+        ans=${ans:-y}
+    fi
+
+    if [ "${ans,,}" = "y" ]; then
+        if [ "$has_inst" -eq 1 ]; then
+            type _cleanup_leftover_compose >/dev/null 2>&1 && _cleanup_leftover_compose "$inst"
+            safe_rm_rf "$inst"
+        elif [ "$has_containers" -eq 1 ]; then
+            docker rm -f gluetun >/dev/null 2>&1 || true
+            docker network rm "${APP_NETWORK_NAME:-assemblrr_network}" >/dev/null 2>&1 || true
+        fi
+        local ptr ptr_inst removed_ptr=false
+        for ptr in "$HOME/.assemblrr-config" "$HOME/.${APP_NAME:-assemblrr}-config"; do
+            [ -f "$ptr" ] || continue
+            ptr_inst=$(_pointer_get "$ptr" "INSTALL_DIRECTORY")
+            if [ -n "$ptr_inst" ] && [ ! -d "$ptr_inst" ]; then
+                rm -f "$ptr"
+                removed_ptr=true
+            fi
+        done
+        if [ "$removed_ptr" = true ]; then
+            rm -f "$HOME/.local/bin/${APP_CLI_NAME:-assemblrr}" 2>/dev/null || true
+        fi
+        if [ "$has_media" -eq 1 ]; then
+            if [ -z "$(find "$media" -type f -print -quit 2>/dev/null || true)" ]; then
+                safe_rm_rf "$media"
+                log_info "Empty media folder skeleton removed ($media)."
+            else
+                log_info "Existing files found under $media — kept untouched."
+            fi
+        fi
+        log_success "Partial setup cleaned up."
+    else
+        log_info "Partial setup left in place. Re-run setup.sh to clean up, or run: ${APP_CLI_NAME:-assemblrr} uninstall --force"
+    fi
+    exit 130
 }
 
 main() {
-# Prevent running as root
-if [[ "$EUID" = 0 ]]; then
-    log_error "${APP_DISPLAY_NAME} must run without sudo! Please run with regular permissions"
-fi
-
-# Setup logging
-LOG_FILE="/tmp/${APP_NAME}-setup-$(date '+%Y%m%d-%H%M%S').log"
-log_info "Setup log: $LOG_FILE"
-log_info "Checking prerequisites..."
-check_dependencies
-
-if [ "${SETUP_MODE:-}" = "restore" ]; then
-    restore_from_backup_wizard
-fi
-
-refuse_setup_if_already_installed
-offer_leftover_cleanup
-
-# 1) VPN questions, then immediately test the tunnel (fail fast).
-#    VPN path bootstraps install tree + CLI early so uninstall works if you abort.
-configure_vpn
-early_vpn_gate
-
-# 2) Only after VPN works (or is disabled): rest of the wizard
-get_user_info
-get_installation_paths
-# No-VPN (or path change after provisional VPN defaults): ensure tree + CLI exist
-bootstrap_operator quiet
-configure_media_service
-configure_quality_profile
-configure_subtitle_language
-configure_opensubtitles
-configure_timezone
-configure_auth
-
-# ---- Installation summary / confirmation ----
-echo
-echo "========================================================"
-echo "  ${APP_DISPLAY_NAME} — Installation Summary"
-echo "========================================================"
-echo "  User:              $username (PUID=$puid, PGID=$pgid)"
-echo "  Install directory: $install_directory"
-echo "  Media directory:   $media_directory"
-if [ "${setup_vpn,,}" = "y" ]; then
-    echo "  VPN:               ENABLED ($vpn_service, $vpn_type)"
-    echo "  Port forwarding:   ${enable_port_forwarding:-n}"
-else
-    echo "  VPN:               DISABLED"
-fi
-echo "  Media service:     $media_service (port $media_service_port)"
-if [ "$QUALITY_TIER" = "any" ]; then
-    echo "  Quality profile:   any"
-else
-    echo "  Quality profile:   $QUALITY_TIER / ${QUALITY_SOURCE:-bluray} (4K=$seerr_is_4k)"
-fi
-if [ -n "${subtitle_languages:-}" ] && [ "${subtitle_languages}" != "${subtitle_language:-}" ]; then
-    echo "  Subtitle languages: ${subtitle_language} (preferred), ${subtitle_languages#*,}"
-else
-    echo "  Subtitle language: ${subtitle_language:-en (Bazarr default)}"
-fi
-if [ "${opensubtitles_enabled:-n}" = "y" ]; then
-    echo "  OpenSubtitles.com: yes (username=${opensubtitles_username})"
-else
-    echo "  OpenSubtitles.com: no"
-fi
-echo "  Timezone:          $tz"
-echo "  Service login:     $auth_username"
-echo "========================================================"
-echo
-if [ "${SETUP_MODE:-}" != "express" ]; then
-    while true; do
-        read -p "Proceed with installation? (Y/n) [Default = y]: " proceed
-        proceed=${proceed:-"y"}
-        if [ "${proceed,,}" = "y" ]; then
-            break
-        elif [ "${proceed,,}" = "n" ]; then
-            log_info "Installation cancelled by user"
-            exit 0
-        else
-            log_warning "Please answer y or n."
-        fi
+    RESTORE_BACKUP_FILE=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -h|--help) setup_show_help; exit 0 ;;
+            --restore)
+                SETUP_MODE="restore"
+                if [ -n "${2:-}" ] && [[ ! "$2" =~ ^-- ]]; then
+                    RESTORE_BACKUP_FILE="$2"
+                    shift
+                fi
+                shift
+                ;;
+            --restore=*)
+                SETUP_MODE="restore"
+                RESTORE_BACKUP_FILE="${1#*=}"
+                shift
+                ;;
+            --express) SETUP_MODE="express"; shift ;;
+            --manual) SETUP_MODE="manual"; shift ;;
+            --reconfigure) ASSEMBLRR_RECONFIGURE=1; export ASSEMBLRR_RECONFIGURE; shift ;;
+            *) shift ;;
+        esac
     done
-fi
 
-log_info "Configuring ${APP_DISPLAY_NAME} for user \"$username\" in \"$install_directory\"..."
-
-# Refresh install tree for final paths/settings (may differ from provisional VPN test defaults)
-copy_configuration_files
-generate_env_file
-write_vpn_secrets
-
-# Final bind-mount skeleton + ownership before any further compose operations
-prepare_install_dirs "$install_directory" "$puid" "$pgid"
-
-# Re-check only if we never verified (VPN disabled skips; early gate already set the flag)
-if [ "${setup_vpn,,}" = "y" ] && [ "${VPN_ALREADY_VERIFIED:-}" != "1" ]; then
-    ensure_vpn_connection
-elif [ "${setup_vpn,,}" = "y" ]; then
-    log_debug "VPN already verified earlier — not re-testing."
-fi
-
-write_auth_secrets
-write_opensubtitles_secrets
-write_qbittorrent_config
-write_runtime_config
-install_cli
-set_permissions
-
-log_success "Install files ready — starting services..."
-# Ensure mounts still exist/owned immediately before the full stack comes up
-prepare_install_dirs "$install_directory" "$puid" "$pgid"
-build_compose_args "$install_directory" "${setup_vpn,,}"
-if ! compose_up_stack "$media_service"; then
-    echo
-    log_warning "Failed to start ${APP_DISPLAY_NAME} services"
-    echo
-    log_info "The operator CLI is already installed. From a WSL or Linux shell:"
-    log_info "  $HOME/.local/bin/$APP_CLI_NAME status"
-    log_info "  $HOME/.local/bin/$APP_CLI_NAME uninstall"
-    log_info "If '$APP_CLI_NAME' is not found, use that full path (or open a new terminal)."
-    echo
-    exit 1
-fi
-
-# Wire services (Radarr, Prowlarr, etc.)
-local wiring_ok=1
-if [ -f "$install_directory/config.sh" ]; then
-    if ! bash "$install_directory/config.sh"; then
-        wiring_ok=0
-        log_warning "Service wiring had critical failures. Containers are still running."
-        log_warning "Fix the issues above, then re-run setup or: $APP_CLI_NAME upgrade"
+    if [[ "${EUID:-$(id -u)}" = 0 ]]; then
+        log_error "${APP_DISPLAY_NAME} must run without sudo! Please run with regular permissions"
     fi
-fi
-# Drop legacy name if an older install left it behind
-rm -f "$install_directory/configure.sh" 2>/dev/null || true
+    trap 'setup_on_interrupt' INT TERM
 
-echo
-# Live dashboard once (status exits non-zero when something is unhealthy —
-# that is still a successful print; do not fall back to a second URL list).
-if [ -f "$install_directory/lib/services.sh" ]; then
-    # shellcheck source=/dev/null
-    source "$install_directory/lib/services.sh"
-fi
-if [ -f "$install_directory/cli.sh" ]; then
-    log_info "Service dashboard:"
-    bash "$install_directory/cli.sh" status || true
-    log_info "Re-check anytime: $APP_CLI_NAME status"
-elif type running_services_location >/dev/null 2>&1; then
-    running_services_location
-    log_info "After install, run: $APP_CLI_NAME status"
-fi
-# Drop legacy cheat-sheet if an older setup left one behind
-rm -f "$HOME/assemblrr_services.txt" 2>/dev/null || true
+    echo "===================================================="
+    echo "                             | |   | |          "
+    echo "  __ _ ___ ___  ___ _ __ ___ | |__ | |_ __ _ __ "
+    echo " / _\` / __/ __|/ _ \ '_ \` _ \\| '_ \\| | '__| '__|"
+    echo "| (_| \\__ \\__ \\  __/ | | | | | |_) | | |  | |   "
+    echo " \\__,_|___/___/\\___|_| |_| |_|_.__/|_|_|  |_|   "
+    echo "                                                 "
+    echo "===================================================="
+    echo "Welcome to ${APP_DISPLAY_NAME} (${APP_DESCRIPTION})"
+    echo "===================================================="
+    echo ""
 
-log_info "========================================================"
-if [ "$wiring_ok" -eq 1 ]; then
-    log_success "All done! Enjoy ${APP_DISPLAY_NAME}!"
-    log_info "Install directory: $install_directory"
-    log_info "Docs: ${APP_REPO_URL}"
-    exit 0
-fi
+    if [ -z "${SETUP_MODE:-}" ]; then
+        echo "  1) Express (recommended — minimal questions, smart defaults)"
+        echo "  2) Manual (full control over every setting)"
+        echo "  3) Restore (rebuild stack from an existing backup archive)"
+        while true; do
+            read_prompt "Choose setup mode [1]: " setup_mode_choice
+            setup_mode_choice=${setup_mode_choice:-1}
+            case "$setup_mode_choice" in
+                1) SETUP_MODE="express"; break ;;
+                2) SETUP_MODE="manual"; break ;;
+                3) SETUP_MODE="restore"; break ;;
+                *) log_warning "Invalid choice. Please choose 1, 2, or 3." ;;
+            esac
+        done
+    fi
+    export SETUP_MODE
 
-log_warning "Setup finished, but service wiring failed."
-log_warning "Install directory: $install_directory"
-log_warning "Fix issues, then re-run setup or: $APP_CLI_NAME upgrade"
-log_info "Docs: ${APP_REPO_URL}"
-exit 1
+    if [ "$SETUP_MODE" = "express" ]; then
+        echo ""
+        log_success "Express mode — we'll use smart defaults and only ask the essentials."
+        echo ""
+    elif [ "$SETUP_MODE" = "restore" ]; then
+        echo ""
+        log_info "Restore mode — we'll rebuild your stack from an existing backup archive."
+        echo ""
+    else
+        echo ""
+        log_info "Manual mode — you'll configure every setting."
+        echo ""
+    fi
+
+    LOG_FILE="/tmp/${APP_NAME}-setup-$(date '+%Y%m%d-%H%M%S').log"
+    log_info "Setup log: $LOG_FILE"
+    log_info "Checking prerequisites..."
+    check_dependencies
+
+    if [ "${SETUP_MODE:-}" = "restore" ]; then
+        restore_from_backup_wizard
+    fi
+
+    refuse_setup_if_already_installed
+    offer_leftover_cleanup
+
+    configure_vpn
+    early_vpn_gate
+
+    get_user_info
+    get_installation_paths
+    bootstrap_operator quiet
+    configure_media_service
+    configure_quality_profile
+    configure_subtitle_language
+    configure_opensubtitles
+    configure_vuetorrent
+    configure_gpu_transcoding
+    configure_byparr
+    configure_usenet
+    configure_timezone
+    configure_auth
+
+    echo
+    echo "========================================================"
+    echo "  ${APP_DISPLAY_NAME} — Installation Summary"
+    echo "========================================================"
+    echo "  User:              $username (PUID=$puid, PGID=$pgid)"
+    echo "  Install directory: $install_directory"
+    echo "  Media directory:   $media_directory"
+    if [ "${setup_vpn,,}" = "y" ]; then
+        echo "  VPN:               ENABLED ($vpn_service, $vpn_type)"
+        echo "  Port forwarding:   ${enable_port_forwarding:-n}"
+    else
+        echo "  VPN:               DISABLED"
+    fi
+    echo "  Media service:     $media_service (port $media_service_port)"
+    echo "  VueTorrent UI:     ${vuetorrent_enabled:-y}"
+    echo "  GPU transcoding:   ${gpu_transcoding:-none}"
+    echo "  Byparr solver:     ${byparr_enabled:-n}"
+    echo "  SABnzbd / Usenet:  ${usenet_enabled:-n}"
+    if [ "$QUALITY_TIER" = "any" ]; then
+        echo "  Quality profile:   any"
+    else
+        echo "  Quality profile:   $QUALITY_TIER / ${QUALITY_SOURCE:-bluray} (4K=$seerr_is_4k)"
+    fi
+    if [ -n "${subtitle_languages:-}" ] && [ "${subtitle_languages}" != "${subtitle_language:-}" ]; then
+        echo "  Subtitle languages: ${subtitle_language} (preferred), ${subtitle_languages#*,}"
+    else
+        echo "  Subtitle language: ${subtitle_language:-en (Bazarr default)}"
+    fi
+    if [ "${opensubtitles_enabled:-n}" = "y" ]; then
+        echo "  OpenSubtitles.com: yes (username=${opensubtitles_username})"
+    else
+        echo "  OpenSubtitles.com: no"
+    fi
+    echo "  Timezone:          $tz"
+    echo "  Service login:     $auth_username"
+    echo "========================================================"
+    echo
+
+    if [ "${SETUP_MODE:-}" != "express" ]; then
+        while true; do
+            read_prompt "Proceed with installation? (Y/n) [Default = y]: " proceed
+            proceed=${proceed:-"y"}
+            if [ "${proceed,,}" = "y" ]; then
+                break
+            elif [ "${proceed,,}" = "n" ]; then
+                log_info "Installation cancelled by user"
+                exit 0
+            else
+                log_warning "Please answer y or n."
+            fi
+        done
+    fi
+
+    log_info "Configuring ${APP_DISPLAY_NAME} for user \"$username\" in \"$install_directory\"..."
+
+    copy_configuration_files
+    generate_env_file
+    write_vpn_secrets
+    prepare_install_dirs "$install_directory" "$puid" "$pgid"
+
+    if [ "${setup_vpn,,}" = "y" ] && [ "${VPN_ALREADY_VERIFIED:-}" != "1" ]; then
+        ensure_vpn_connection
+    elif [ "${setup_vpn,,}" = "y" ]; then
+        log_debug "VPN already verified earlier — not re-testing."
+    fi
+
+    write_auth_secrets
+    write_opensubtitles_secrets
+    write_usenet_secrets
+    VUETORRENT_ENABLED="${vuetorrent_enabled:-y}" write_qbittorrent_config
+    write_runtime_config
+    _record_install_metadata
+    install_cli
+    set_permissions
+
+    log_success "Install files ready — starting services..."
+    prepare_install_dirs "$install_directory" "$puid" "$pgid"
+    build_compose_args "$install_directory" "${setup_vpn,,}"
+    if ! compose_up_stack "default"; then
+        echo
+        log_warning "Failed to start ${APP_DISPLAY_NAME} services"
+        echo
+        log_info "The operator CLI is already installed. From a WSL or Linux shell:"
+        log_info "  $HOME/.local/bin/$APP_CLI_NAME status"
+        log_info "  $HOME/.local/bin/$APP_CLI_NAME uninstall"
+        log_info "If '$APP_CLI_NAME' is not found, use that full path (or open a new terminal)."
+        echo
+        exit 1
+    fi
+    rm -f "$install_directory/.assemblrr-setup-in-progress"
+    trap - INT TERM
+
+    local wiring_ok=1
+    if [ -f "$install_directory/config.sh" ]; then
+        if ! ASSEMBLRR_FROM_SETUP=1 bash "$install_directory/config.sh"; then
+            wiring_ok=0
+            log_warning "Service wiring had critical failures. Containers are still running."
+            log_warning "Fix the issues above, then re-run: $APP_CLI_NAME config apply"
+        fi
+    fi
+    rm -f "$install_directory/configure.sh" 2>/dev/null || true
+    rm -f "$HOME/assemblrr_services.txt" 2>/dev/null || true
+
+    local -a ready_badges=()
+    if [ "${setup_vpn,,}" = "y" ]; then
+        ready_badges+=("VPN on")
+    else
+        ready_badges+=("VPN off")
+    fi
+    [ "${gpu_transcoding:-none}" != "none" ] && ready_badges+=("GPU ${gpu_transcoding}")
+    [ "${vuetorrent_enabled:-y}" = "y" ] && ready_badges+=("VueTorrent")
+    [ "${byparr_enabled:-n}" = "y" ] && ready_badges+=("Byparr")
+    [ "${usenet_enabled:-n}" = "y" ] && ready_badges+=("Usenet")
+    local badge_str="" _b
+    for _b in "${ready_badges[@]}"; do
+        [ -n "$badge_str" ] && badge_str+=" · "
+        badge_str+="$_b"
+    done
+
+    local ui_host="${API_HOST:-localhost}"
+    [ "$ui_host" = "127.0.0.1" ] && ui_host="localhost"
+
+    echo
+    echo "========================================================"
+    if [ "$wiring_ok" -eq 1 ]; then
+        log_success "${APP_DISPLAY_NAME} is ready!  (${badge_str})"
+    else
+        log_warning "${APP_DISPLAY_NAME} started with wiring warnings  (${badge_str})"
+    fi
+    echo "========================================================"
+    echo
+
+    if [ -f "$install_directory/cli.sh" ]; then
+        bash "$install_directory/cli.sh" status --compact || true
+        echo
+    elif type running_services_location >/dev/null 2>&1; then
+        running_services_location
+        echo
+    fi
+
+    if [ -n "${auth_username:-}" ]; then
+        printf "  %-18s %s / <your setup password>\n" "Login:" "$auth_username"
+    fi
+    printf "  %-18s %s  ·  %s\n" "Paths:" "$install_directory" "$media_directory"
+    echo
+    printf "  %-18s Request in Seerr (http://%s:5055/), watch in Jellyfin (http://%s:8096/)\n" "Start here:" "$ui_host" "$ui_host"
+    printf "  %-18s %s status | config edit | upgrade | uninstall\n" "Manage:" "$APP_CLI_NAME"
+    if [ "$wiring_ok" -eq 0 ]; then
+        printf "  %-18s %s config apply\n" "Fix wiring:" "$APP_CLI_NAME"
+    fi
+    echo
+
+    [ "$wiring_ok" -eq 1 ] && exit 0
+    exit 1
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

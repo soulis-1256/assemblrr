@@ -1,62 +1,26 @@
 #!/bin/bash
-# assemblrr setup prompts — sourced by setup.sh
-# Provides: interactive prompt functions for service configuration
-# Requires: lib/core.sh (logging, read_masked, expand_path, directory helpers),
-#           SETUP_MODE, SUPPORTED_MEDIA_SERVICES, APP_DEFAULT_INSTALL_DIR,
-#           APP_DEFAULT_MEDIA_DIR, MEDIA_SUBDIRS (all set by setup.sh)
+# SPDX-License-Identifier: GPL-3.0-or-later
+# assemblrr setup prompts — sourced by setup.sh & config_edit.sh
+# Provides: interactive prompt functions for service and feature configuration
+# Does not set -euo pipefail when sourced.
 
-set -euo pipefail
+if [ -n "${_ASSEMBLRR_PROMPTS_SOURCED:-}" ]; then
+    return 0
+fi
+readonly _ASSEMBLRR_PROMPTS_SOURCED=1
 
 _prompts_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 [ -f "$_prompts_dir/ui.sh" ] && source "$_prompts_dir/ui.sh"
+# shellcheck source=/dev/null
+[ -f "$_prompts_dir/languages.sh" ] && source "$_prompts_dir/languages.sh"
 
 configure_media_service() {
-    # Express mode: use Jellyfin by default
-    if [ "${SETUP_MODE:-}" = "express" ]; then
-        media_service="jellyfin"
-        media_service_port=8096
-        log_success "Media service: Jellyfin (port $media_service_port)"
-        export media_service media_service_port
-        return 0
-    fi
-
-    ui_intro \
-        "Time to choose your media service." \
-        "Change the media server. This restarts the stack."
-    echo "  1) Jellyfin (recommended, easier)"
-    echo "  2) Emby"
-    echo "  3) Plex (advanced, uses host networking)"
-
-    while true; do
-        read -p "Choose your media service [1]: " media_service_choice
-        media_service_choice=${media_service_choice:-1}
-
-        case "$media_service_choice" in
-            1) media_service="jellyfin"; break ;;
-            2) media_service="emby"; break ;;
-            3) media_service="plex"; break ;;
-            *) media_service=$(echo "$media_service_choice" | awk '{print tolower($0)}') ;;
-        esac
-
-        if [[ ! " ${SUPPORTED_MEDIA_SERVICES[@]} " =~ " ${media_service} " ]]; then
-            log_warning "\"$media_service\" is not supported. Please choose 1, 2, or 3."
-        else
-            break
-        fi
-    done
-
-    # Set media service port
-    if [ "$media_service" == "plex" ]; then
-        media_service_port=32400
-    else
-        media_service_port=8096
-    fi
-
-    echo
-    log_success "${APP_DISPLAY_NAME} will install \"$media_service\" on port \"$media_service_port\""
-
+    media_service="jellyfin"
+    media_service_port=8096
+    log_success "Media service: Jellyfin (port $media_service_port)"
     export media_service media_service_port
+    return 0
 }
 
 configure_quality_profile() {
@@ -67,8 +31,9 @@ configure_quality_profile() {
     echo "  2) 1080p (TV: assemblrr 1080p WEB)"
     echo "  3) Any (stock *arr profile — no quality preference)"
 
+    local quality_choice source_choice
     while true; do
-        read -p "Choose your default quality profile [1]: " quality_choice
+        read_prompt "Choose your default quality profile [1]: " quality_choice
         quality_choice=${quality_choice:-1}
 
         case "$quality_choice" in
@@ -87,7 +52,7 @@ configure_quality_profile() {
         echo "  1) WEB only (smaller files; no Blu-ray upgrades)"
         echo "  2) Bluray + WEB (upgrades WEB to a Blu-ray encode when one exists)"
         while true; do
-            read -p "Choose movie source [2]: " source_choice
+            read_prompt "Choose movie source [2]: " source_choice
             source_choice=${source_choice:-2}
             case "$source_choice" in
                 1) QUALITY_SOURCE="web"; break ;;
@@ -121,13 +86,11 @@ configure_quality_profile() {
     esac
 }
 
-# Older name — setup / config edit used this when the question was Seerr-only.
 configure_seerr_profile() {
     configure_quality_profile
 }
 
 configure_subtitle_language() {
-    # Jellyfin iso6392.txt: iso639-2/T|iso639-2/B|iso639-1|english_name|french_name
     local iso639_url="https://raw.githubusercontent.com/jellyfin/jellyfin/master/Emby.Server.Implementations/Localization/iso6392.txt"
     local awk_filter='$4 != "" {print $1 "\t" $4}'
 
@@ -146,18 +109,18 @@ configure_subtitle_language() {
     local data
     data=$(curl -sf --connect-timeout 5 "$iso639_url" 2>/dev/null | awk -F'|' "$awk_filter" | sort -k2) || true
     if [ -z "$data" ]; then
-        log_info "Could not load language list — leaving subtitle language unchanged."
-        return 0
+        log_info "Could not fetch full ISO-639 list online — using bundled common languages."
+        data=$(iso639_bundled_menu)
     fi
 
     local prompt header preselect_names=""
     preselect_names=$(_subtitle_stored_lang_codes)
     if ui_is_edit; then
         prompt="Subtitle languages> "
-        header="Enter/TAB=toggle  Ctrl-O=save  Esc=cancel"
+        header="TAB=toggle  Enter=save  Esc=cancel"
     else
         prompt="Subtitle languages> "
-        header="Enter/TAB=toggle  Ctrl-O=confirm  Esc=skip"
+        header="TAB=toggle  Enter=confirm  Esc=skip"
     fi
     fzf_multi_select "$data" \
         "$prompt" \
@@ -220,120 +183,36 @@ configure_subtitle_language() {
     export subtitle_language subtitle_languages
 }
 
-# OpenSubtitles.com website login accepts email or username; the REST API (and
-# Bazarr) require the profile username. Consumer Api-Key is Bazarr's public key
-# from upstream so we validate the same path Bazarr will use at runtime.
-# Override with OPENSUBTITLES_API_KEY if needed.
-_verify_opensubtitles_login() {
-    local user="$1"
-    local pass="$2"
-    local api_key="${OPENSUBTITLES_API_KEY:-s38zmzVlW7IlYruWi7mHwDYl2SfMQoC1}"
-    local ua="${OPENSUBTITLES_USER_AGENT:-assemblrr/1.0}"
-    local tmp http_code body
-    local attempt
-
-    tmp=$(mktemp)
-    for attempt in 1 2 3; do
-        http_code=$(curl -sS -o "$tmp" -w "%{http_code}" --connect-timeout 10 --max-time 30 \
-            -X POST "https://api.opensubtitles.com/api/v1/login" \
-            -H "Content-Type: application/json" \
-            -H "Api-Key: ${api_key}" \
-            -H "User-Agent: ${ua}" \
-            -d "$(jq -nc --arg u "$user" --arg p "$pass" '{username:$u,password:$p}')" \
-            2>/dev/null || echo "000")
-        body=$(cat "$tmp" 2>/dev/null || true)
-
-        case "$http_code" in
-            200)
-                if echo "$body" | jq -e '.token // empty' >/dev/null 2>&1; then
-                    rm -f "$tmp"
-                    return 0
-                fi
-                rm -f "$tmp"
-                return 1
-                ;;
-            429)
-                log_warning "OpenSubtitles rate limit — retrying (${attempt}/3)..."
-                sleep $((attempt + 1))
-                continue
-                ;;
-            000)
-                log_warning "OpenSubtitles: network error (could not reach API)"
-                rm -f "$tmp"
-                return 2
-                ;;
-            *)
-                # Prefer API message when present
-                local msg
-                msg=$(echo "$body" | jq -r '.message // empty' 2>/dev/null || true)
-                if [ -n "$msg" ]; then
-                    log_warning "OpenSubtitles: $msg"
-                else
-                    log_warning "OpenSubtitles: login failed (HTTP ${http_code})"
-                fi
-                rm -f "$tmp"
-                return 1
-                ;;
-        esac
-    done
-    rm -f "$tmp"
-    return 1
-}
-
-# Collect verified OpenSubtitles.com username/password into the usual globals.
-# $1 = cancel_on_empty_user (1 for config edit, 0 for setup).
-# Returns 0 on verified login, 1 on cancel/skip.
-_opensubtitles_ask_and_verify() {
+# Collect OpenSubtitles.com username/password cleanly (Bazarr validates them directly).
+_opensubtitles_collect() {
     local cancel_on_empty="${1:-0}"
-    local retry=""
+    opensubtitles_username=""
+    opensubtitles_password=""
 
-    while true; do
-        opensubtitles_username=""
-        opensubtitles_password=""
-
-        while [ -z "$opensubtitles_username" ]; do
-            read_prompt "OpenSubtitles.com username (profile name, not email): " opensubtitles_username
-            if [ -z "$opensubtitles_username" ]; then
-                if [ "$cancel_on_empty" = "1" ]; then
-                    return 1
-                fi
-                log_warning "Username cannot be empty."
-                continue
+    while [ -z "$opensubtitles_username" ]; do
+        read_prompt "OpenSubtitles.com username (profile name, not email; blank to cancel): " opensubtitles_username
+        if [ -z "$opensubtitles_username" ]; then
+            if [ "$cancel_on_empty" = "1" ]; then
+                return 1
             fi
-            if [[ "$opensubtitles_username" == *@* ]]; then
-                log_warning "That looks like an email. OpenSubtitles API rejects email logins."
-                log_warning "Use your profile username (website login may accept email; Bazarr does not)."
-                opensubtitles_username=""
-            fi
-        done
-        while [ -z "$opensubtitles_password" ]; do
-            if [ -r /dev/tty ]; then
-                read_masked "OpenSubtitles.com password: " opensubtitles_password </dev/tty
-            else
-                read_masked "OpenSubtitles.com password: " opensubtitles_password
-            fi
-            if [ -z "$opensubtitles_password" ]; then
-                log_warning "Password cannot be empty."
-            fi
-        done
-
-        log_info "Verifying OpenSubtitles.com login..."
-        if _verify_opensubtitles_login "$opensubtitles_username" "$opensubtitles_password"; then
-            log_success "OpenSubtitles.com: login OK — credentials will be stored under secrets/"
-            return 0
-        fi
-
-        read_prompt "Try again? (Y/n) [Default = y]: " retry
-        retry=${retry:-y}
-        if [ "${retry,,}" != "y" ]; then
             return 1
         fi
+        if [[ "$opensubtitles_username" == *@* ]]; then
+            log_warning "That looks like an email. Bazarr / OpenSubtitles API require your profile username."
+            opensubtitles_username=""
+        fi
     done
+
+    while [ -z "$opensubtitles_password" ]; do
+        read_masked "OpenSubtitles.com password: " opensubtitles_password
+        if [ -z "$opensubtitles_password" ]; then
+            log_warning "Password cannot be empty."
+        fi
+    done
+    log_success "OpenSubtitles.com credentials collected (Bazarr will store and validate them)."
+    return 0
 }
 
-# Optional OpenSubtitles.com account for Bazarr (free registration).
-# Setup: y/N first (optional). Config edit: user already picked this section,
-# so go straight to username/password. Empty username cancels with no change.
 configure_opensubtitles() {
     opensubtitles_enabled="n"
     opensubtitles_username=""
@@ -341,7 +220,7 @@ configure_opensubtitles() {
 
     if ui_is_edit; then
         echo
-        if _opensubtitles_ask_and_verify 1; then
+        if _opensubtitles_collect 1; then
             opensubtitles_enabled="y"
         else
             opensubtitles_enabled="n"
@@ -355,8 +234,7 @@ configure_opensubtitles() {
     ui_intro \
         "Optional: OpenSubtitles.com credentials for Bazarr (https://www.opensubtitles.com/)." \
         "Update OpenSubtitles.com credentials for Bazarr."
-    log_info "The website login accepts email or username; Bazarr/API require your profile username."
-    log_info "Find it under your OpenSubtitles profile (not the signup email)."
+    log_info "The website login accepts email or username; Bazarr requires your profile username."
     ui_note \
         "Other subtitle providers can be configured later with: ${APP_CLI_NAME:-assemblrr} config edit" \
         ""
@@ -370,15 +248,169 @@ configure_opensubtitles() {
         return 0
     fi
 
-    if _opensubtitles_ask_and_verify 0; then
+    if _opensubtitles_collect 0; then
         opensubtitles_enabled="y"
     else
         opensubtitles_enabled="n"
         opensubtitles_username=""
         opensubtitles_password=""
-        log_warning "OpenSubtitles.com: skipped (credentials not verified)"
+        log_info "OpenSubtitles.com: skipped"
     fi
     export opensubtitles_enabled opensubtitles_username opensubtitles_password
+}
+
+configure_vuetorrent() {
+    vuetorrent_enabled="y"
+    if [ "${SETUP_MODE:-}" = "express" ]; then
+        export vuetorrent_enabled
+        return 0
+    fi
+    ui_intro \
+        "Optional: VueTorrent gives qBittorrent a modern responsive WebUI theme." \
+        "Enable or disable VueTorrent theme on qBittorrent (restarts stack)."
+    local ans="y"
+    read_prompt "Enable VueTorrent WebUI theme for qBittorrent? (Y/n) [Default = y]: " ans
+    ans=${ans:-y}
+    [ "${ans,,}" = "n" ] && vuetorrent_enabled="n" || vuetorrent_enabled="y"
+    log_success "VueTorrent: $vuetorrent_enabled"
+    export vuetorrent_enabled
+}
+
+# Detect host GPU acceleration safely: NVIDIA only if Docker runtime exists, else /dev/dri vendor.
+detect_gpu_transcoding() {
+    if command -v nvidia-smi >/dev/null 2>&1; then
+        if docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -qi '"nvidia"' || \
+           docker info 2>/dev/null | grep -qiE 'Runtimes:.*nvidia'; then
+            echo "nvidia"
+            return 0
+        fi
+    fi
+
+    local dev node vendor=""
+    for dev in /dev/dri/renderD*; do
+        [ -c "$dev" ] || continue
+        node=$(basename "$dev")
+        if [ -r "/sys/class/drm/${node}/device/vendor" ]; then
+            vendor=$(cat "/sys/class/drm/${node}/device/vendor" 2>/dev/null || echo "")
+        fi
+        case "$vendor" in
+            0x1002) echo "amd"; return 0 ;;
+            0x8086) echo "intel"; return 0 ;;
+            *) echo "vaapi"; return 0 ;;
+        esac
+    done
+
+    echo "none"
+}
+
+configure_gpu_transcoding() {
+    gpu_transcoding=$(detect_gpu_transcoding)
+    if [ "${SETUP_MODE:-}" = "express" ]; then
+        export gpu_transcoding
+        return 0
+    fi
+
+    local has_nvidia_smi=0
+    command -v nvidia-smi >/dev/null 2>&1 && has_nvidia_smi=1
+
+    local hinted="1" amd_note="" intel_note="" nv_note=""
+    case "$gpu_transcoding" in
+        amd) hinted="2"; amd_note=" [detected]" ;;
+        vaapi) hinted="2"; amd_note=" [detected]" ;;
+        intel) hinted="3"; intel_note=" [detected]" ;;
+        nvidia) hinted="4"; nv_note=" [detected]" ;;
+        *)
+            if [ "$has_nvidia_smi" -eq 1 ]; then
+                nv_note=" [nvidia-smi found, install nvidia-container-toolkit first]"
+            fi
+            ;;
+    esac
+
+    ui_intro \
+        "Optional: hardware GPU transcoding passthrough and Jellyfin auto-configuration." \
+        "Select hardware GPU transcoding mode for Jellyfin (restarts stack & configures Jellyfin)."
+    echo "  1) None (CPU software transcoding)"
+    echo "  2) AMD (VAAPI via /dev/dri)${amd_note}"
+    echo "  3) Intel (QSV via /dev/dri)${intel_note}"
+    echo "  4) NVIDIA (NVENC via nvidia-container-toolkit)${nv_note}"
+
+    local choice
+    while true; do
+        read_prompt "Choose GPU transcoding mode [${hinted}]: " choice
+        choice=${choice:-$hinted}
+        case "${choice,,}" in
+            1|none) gpu_transcoding="none"; break ;;
+            2|amd|vaapi) gpu_transcoding="amd"; break ;;
+            3|intel|qsv) gpu_transcoding="intel"; break ;;
+            4|nvidia) gpu_transcoding="nvidia"; break ;;
+            *) log_warning "Invalid choice. Choose 1, 2, 3, or 4." ;;
+        esac
+    done
+    log_success "GPU transcoding: $gpu_transcoding"
+    export gpu_transcoding
+}
+
+configure_byparr() {
+    byparr_enabled="n"
+    if [ "${SETUP_MODE:-}" = "express" ]; then
+        export byparr_enabled
+        return 0
+    fi
+    ui_intro \
+        "Optional: Byparr solves Cloudflare challenges for Prowlarr indexers (FlareSolverr drop-in)." \
+        "Enable or disable Byparr Cloudflare solver in Prowlarr (restarts stack)."
+    local ans="n"
+    read_prompt "Enable Byparr challenge solver container? (y/N) [Default = n]: " ans
+    ans=${ans:-n}
+    [ "${ans,,}" = "y" ] && byparr_enabled="y" || byparr_enabled="n"
+    log_success "Byparr: $byparr_enabled"
+    export byparr_enabled
+}
+
+configure_usenet() {
+    usenet_enabled="n"
+    usenet_host=""
+    usenet_port="563"
+    usenet_ssl="y"
+    usenet_username=""
+    usenet_password=""
+    usenet_connections="8"
+    if [ "${SETUP_MODE:-}" = "express" ]; then
+        export usenet_enabled usenet_host usenet_port usenet_ssl usenet_username usenet_password usenet_connections
+        return 0
+    fi
+
+    ui_intro \
+        "Optional: SABnzbd Usenet downloader (wired automatically into Sonarr/Radarr/Prowlarr)." \
+        "Enable or configure SABnzbd Usenet downloader and NNTP provider (restarts stack)."
+    log_info "Note: real Usenet downloads require your own NNTP provider account (no subscription is bundled)."
+    local ans="n"
+    read_prompt "Enable SABnzbd Usenet downloader? (y/N) [Default = n]: " ans
+    ans=${ans:-n}
+    if [ "${ans,,}" != "y" ]; then
+        usenet_enabled="n"
+        log_success "SABnzbd / Usenet: disabled"
+        export usenet_enabled usenet_host usenet_port usenet_ssl usenet_username usenet_password usenet_connections
+        return 0
+    fi
+
+    usenet_enabled="y"
+    local add_nntp="n"
+    read_prompt "Configure an NNTP server now? (y/N, or 'n' to add in SABnzbd UI later): " add_nntp
+    add_nntp=${add_nntp:-n}
+    if [ "${add_nntp,,}" = "y" ]; then
+        read_prompt "NNTP host (e.g. news.provider.example): " usenet_host
+        read_prompt "NNTP port [563]: " usenet_port
+        usenet_port=${usenet_port:-563}
+        read_prompt "Use SSL/TLS? (Y/n) [Default = y]: " usenet_ssl
+        usenet_ssl=${usenet_ssl:-y}
+        read_prompt "NNTP username: " usenet_username
+        read_masked "NNTP password: " usenet_password
+        read_prompt "Max connections [8]: " usenet_connections
+        usenet_connections=${usenet_connections:-8}
+    fi
+    log_success "SABnzbd / Usenet: enabled"
+    export usenet_enabled usenet_host usenet_port usenet_ssl usenet_username usenet_password usenet_connections
 }
 
 configure_vpn() {
@@ -387,27 +419,32 @@ configure_vpn() {
         "Change VPN settings. This restarts the stack and can interrupt downloads."
     log_info "Supported VPN providers: https://github.com/qdm12/gluetun-wiki"
 
-    read -p "Configure VPN? (Y/n) [Default = y]: " setup_vpn
-    setup_vpn=${setup_vpn:-"y"}
+    while true; do
+        read_prompt "Configure VPN? (Y/n) [Default = y]: " setup_vpn
+        setup_vpn=${setup_vpn:-"y"}
+        case "${setup_vpn,,}" in
+            y|yes) setup_vpn="y"; break ;;
+            n|no)
+                export setup_vpn="n"
+                export vpn_service=""
+                export vpn_type="openvpn"
+                export wireguard_addresses=""
+                export enable_port_forwarding="n"
+                return 0
+                ;;
+            *) log_warning "Please answer y or n." ;;
+        esac
+    done
 
-    if [ "${setup_vpn,,}" != "y" ]; then
-        export setup_vpn="n"
-        export vpn_service=""
-        export vpn_type="openvpn"
-        export enable_port_forwarding="n"
-        return 0
-    fi
-
-    # Supported VPN providers (from Gluetun)
     local -a vpn_providers=(
         "protonvpn"
         "surfshark"
         "mullvad"
         "nordvpn"
         "expressvpn"
-        "pia"
+        "private internet access"
         "windscribe"
-        "ivyvpn"
+        "ivpn"
         "custom"
     )
 
@@ -418,38 +455,36 @@ configure_vpn() {
     echo "  5) ExpressVPN"
     echo "  6) Private Internet Access"
     echo "  7) Windscribe"
-    echo "  8) IvyVPN"
+    echo "  8) IVPN"
     echo "  9) Custom (manual configuration)"
 
-    read -p "Choose your VPN provider [1]: " vpn_choice
-    vpn_choice=${vpn_choice:-1}
-
-    if [[ "$vpn_choice" =~ ^[0-9]+$ ]] && [ "$vpn_choice" -ge 1 ] && [ "$vpn_choice" -le ${#vpn_providers[@]} ]; then
-        vpn_service="${vpn_providers[$((vpn_choice-1))]}"
-    else
-        vpn_service="$vpn_choice"
-    fi
+    local vpn_choice vpn_type_choice
+    while true; do
+        read_prompt "Choose your VPN provider [1]: " vpn_choice
+        vpn_choice=${vpn_choice:-1}
+        if [[ "$vpn_choice" =~ ^[0-9]+$ ]]; then
+            if [ "$vpn_choice" -ge 1 ] && [ "$vpn_choice" -le ${#vpn_providers[@]} ]; then
+                vpn_service="${vpn_providers[$((vpn_choice-1))]}"
+                break
+            fi
+            log_warning "Please choose a number from 1 to ${#vpn_providers[@]} (or type a Gluetun provider slug)."
+        else
+            vpn_service="${vpn_choice,,}"
+            break
+        fi
+    done
 
     echo
     echo "  1) WireGuard (recommended)"
     echo "  2) OpenVPN"
-    read -p "Choose VPN type [1]: " vpn_type_choice
-    vpn_type_choice=${vpn_type_choice:-1}
-
     while true; do
+        read_prompt "Choose VPN type [1]: " vpn_type_choice
+        vpn_type_choice=${vpn_type_choice:-1}
         case "$vpn_type_choice" in
-            1) vpn_type="wireguard"; break ;;
-            2) vpn_type="openvpn"; break ;;
-            *) vpn_type="$vpn_type_choice" ;;
+            1|wireguard) vpn_type="wireguard"; break ;;
+            2|openvpn) vpn_type="openvpn"; break ;;
+            *) log_warning "Unsupported VPN type. Please choose 1 or 2." ;;
         esac
-
-        if [[ "$vpn_type" != "openvpn" && "$vpn_type" != "wireguard" ]]; then
-            log_warning "Unsupported VPN type. Please choose 1 or 2."
-            read -p "Choose VPN type [1]: " vpn_type_choice
-            vpn_type_choice=${vpn_type_choice:-1}
-        else
-            break
-        fi
     done
 
     echo
@@ -458,17 +493,18 @@ configure_vpn() {
 
     prompt_vpn_credentials
 
-    # Port forwarding — we do not maintain a provider allowlist (lists go stale).
     log_info "Port forwarding only helps if your provider supports it (and Gluetun can use it)."
-    log_info "If they do not, leave this off — turning it on can limit which servers Gluetun picks."
-    read -p "Enable port forwarding? (y/N) [Default = n]: " enable_port_forwarding
+    read_prompt "Enable port forwarding? (y/N) [Default = n]: " enable_port_forwarding
     enable_port_forwarding=${enable_port_forwarding:-"n"}
+    case "${enable_port_forwarding,,}" in
+        y|yes) enable_port_forwarding="y" ;;
+        *) enable_port_forwarding="n" ;;
+    esac
 
     export setup_vpn vpn_service vpn_type enable_port_forwarding
     export vpn_user vpn_password wireguard_private_key wireguard_addresses
 }
 
-# Prompt only for credentials (uses existing vpn_type). Safe to call again on VPN test failure.
 prompt_vpn_credentials() {
     if [ "${vpn_type:-}" = "wireguard" ]; then
         wireguard_private_key=""
@@ -478,7 +514,7 @@ prompt_vpn_credentials() {
         done
         wireguard_addresses=""
         while [ -z "$wireguard_addresses" ]; do
-            read_masked "WireGuard interface addresses (e.g., 10.64.0.1/32): " wireguard_addresses
+            read_prompt "WireGuard interface addresses (e.g., 10.64.0.1/32): " wireguard_addresses
             [ -z "$wireguard_addresses" ] && log_warning "Addresses cannot be empty. Try again."
         done
         vpn_user=""
@@ -486,7 +522,7 @@ prompt_vpn_credentials() {
     else
         vpn_user=""
         while [ -z "$vpn_user" ]; do
-            read -p "VPN username (without spaces): " vpn_user
+            read_prompt "VPN username (without spaces): " vpn_user
             [ -z "$vpn_user" ] && log_warning "Username cannot be empty. Try again."
         done
         vpn_password=""
@@ -515,13 +551,13 @@ configure_auth() {
         "Set one username and password for every service web UI." \
         "Change the shared login on every service UI."
     ui_note \
-        "Same login on Radarr, Sonarr, Prowlarr, qBittorrent, Jellyfin, and Bazarr. Seerr signs in with the Jellyfin (or Emby) user." \
-        "Updates Radarr, Sonarr, Prowlarr, qBittorrent, Jellyfin, and Bazarr. Seerr signs in with the Jellyfin (or Emby) user."
+        "Same login on Radarr, Sonarr, Prowlarr, qBittorrent, Jellyfin, Bazarr, and SABnzbd (when enabled). Seerr signs in via Jellyfin." \
+        "Updates Radarr, Sonarr, Prowlarr, qBittorrent, Jellyfin, Bazarr, and SABnzbd (when enabled). Seerr signs in via Jellyfin."
     echo
 
     auth_username=""
     while [ -z "$auth_username" ]; do
-        read -p "Username for service login? [$USER]: " auth_username
+        read_prompt "Username for service login? [$USER]: " auth_username
         auth_username=${auth_username:-$USER}
         [ -z "$auth_username" ] && log_warning "Username cannot be empty. Try again."
     done
@@ -549,7 +585,6 @@ configure_timezone() {
     detected_tz=$(cat /etc/timezone 2>/dev/null || timedatectl show -p Timezone -v 2>/dev/null | tail -1 || echo "UTC")
     detected_tz=${detected_tz:-"UTC"}
 
-    # Express mode: auto-detect timezone
     if [ "${SETUP_MODE:-}" = "express" ]; then
         tz="$detected_tz"
         log_success "Timezone: $tz (auto-detected)"
@@ -557,14 +592,22 @@ configure_timezone() {
         return 0
     fi
 
-    read -p "Timezone? [$detected_tz]: " tz
-    tz=${tz:-$detected_tz}
+    while true; do
+        read_prompt "Timezone? [$detected_tz]: " tz
+        tz=${tz:-$detected_tz}
+        if [ -d /usr/share/zoneinfo ] && [ ! -f "/usr/share/zoneinfo/${tz}" ]; then
+            log_warning "Timezone '$tz' not found under /usr/share/zoneinfo (example: Europe/Athens, America/New_York, UTC)."
+            local keep="n"
+            read_prompt "Keep '$tz' anyway? (y/N) [Default = n]: " keep
+            [ "${keep,,}" = "y" ] && break
+            continue
+        fi
+        break
+    done
 
     export tz
 }
 
-# running_services_location lives in lib/services.sh (sourced by setup via core path
-# or explicitly). Keep a thin wrapper if services.sh not loaded yet.
 if ! type running_services_location >/dev/null 2>&1; then
     running_services_location() {
         if [ -f "${_lib_dir:-}/services.sh" ]; then
@@ -578,7 +621,6 @@ if ! type running_services_location >/dev/null 2>&1; then
 fi
 
 get_user_info() {
-    # Express mode: use current user
     if [ "${SETUP_MODE:-}" = "express" ]; then
         username="$USER"
         puid=$(id -u "$username")
@@ -589,7 +631,7 @@ get_user_info() {
     fi
 
     while true; do
-        read -p "User to own the media server files? [$USER]: " username
+        read_prompt "User to own the media server files? [$USER]: " username
         username=${username:-$USER}
 
         if id -u "$username" &>/dev/null; then
@@ -623,8 +665,10 @@ _probe_selected_storage() {
     return 0
 }
 
-# Setup is first-time only. A complete tree means use the CLI, not bootstrap again.
 refuse_setup_if_already_installed() {
+    if [ "${ASSEMBLRR_RECONFIGURE:-0}" = "1" ]; then
+        return 0
+    fi
     poke_wsl_automounts 2>/dev/null || true
     local existing=""
     existing=$(find_install_directory 2>/dev/null || true)
@@ -654,24 +698,61 @@ refuse_setup_if_already_installed() {
     exit 1
 }
 
-# Incomplete trees from an aborted setup. Offer to delete them before we start.
+# Stop containers created by an aborted setup before removing the leftover directory.
+_cleanup_leftover_compose() {
+    local path="$1"
+    command -v docker >/dev/null 2>&1 || return 0
+    [ -f "$path/compose/base.yaml" ] || return 0
+
+    local vpn_enabled="n" cfg=""
+    if [ -f "$path/.assemblrr-config" ]; then
+        cfg="$path/.assemblrr-config"
+    elif [ -f "$path/.${APP_NAME:-assemblrr}-config" ]; then
+        cfg="$path/.${APP_NAME:-assemblrr}-config"
+    elif [ -f "$path/.env" ]; then
+        cfg="$path/.env"
+    fi
+    if [ -n "$cfg" ]; then
+        vpn_enabled=$(_pointer_get "$cfg" "VPN_ENABLED")
+    fi
+
+    local -a cargs=(--project-directory "$path" -f "$path/compose/base.yaml")
+    if [ "${vpn_enabled,,}" = "y" ] && [ -f "$path/compose/vpn.yaml" ]; then
+        cargs+=(-f "$path/compose/vpn.yaml")
+    elif [ -f "$path/compose/direct-access.yaml" ]; then
+        cargs+=(-f "$path/compose/direct-access.yaml")
+    fi
+    [ -f "$path/.env" ] && cargs+=(--env-file "$path/.env")
+
+    docker compose "${cargs[@]}" down --remove-orphans >/dev/null 2>&1 || true
+}
+
 offer_leftover_cleanup() {
     poke_wsl_automounts 2>/dev/null || true
     local leftover kind path ans
     leftover=$(list_assemblrr_leftovers || true)
     [ -n "$leftover" ] || return 0
 
-    local has_install=false
-    local has_media=false
-    if echo "$leftover" | grep -q $'^install\t'; then
-        has_install=true
-    fi
-    if echo "$leftover" | grep -q $'^media\t'; then
-        has_media=true
-    fi
+    local has_install=false has_media=false has_incomplete=false removed_install=false
+    while IFS=$'\t' read -r kind path; do
+        [ -n "$path" ] || continue
+        case "$kind" in
+            install)
+                has_install=true
+                [ -f "$path/.assemblrr-setup-in-progress" ] && has_incomplete=true
+                ;;
+            media)
+                has_media=true
+                ;;
+        esac
+    done <<< "$leftover"
 
     echo
-    log_warning "Found leftover ${APP_DISPLAY_NAME:-assemblrr} files from an earlier attempt:"
+    if [ "$has_incomplete" = true ]; then
+        log_warning "Found an incomplete ${APP_DISPLAY_NAME:-assemblrr} setup from an earlier attempt:"
+    else
+        log_warning "Found leftover ${APP_DISPLAY_NAME:-assemblrr} files from an earlier attempt:"
+    fi
     while IFS=$'\t' read -r kind path; do
         [ -n "$path" ] || continue
         case "$kind" in
@@ -686,11 +767,15 @@ offer_leftover_cleanup() {
         if [ "$has_media" = true ]; then
             prompt_msg="Remove leftover install files (keeps media)? (Y/n) [Default = y]: "
         fi
-        read -p "$prompt_msg" ans
+        read_prompt "$prompt_msg" ans
         ans=${ans:-y}
         if [ "${ans,,}" = "y" ]; then
+            removed_install=true
             while IFS=$'\t' read -r kind path; do
-                [ "$kind" = "install" ] && [ -n "$path" ] && safe_rm_rf "$path"
+                if [ "$kind" = "install" ] && [ -n "$path" ]; then
+                    _cleanup_leftover_compose "$path"
+                    safe_rm_rf "$path"
+                fi
             done <<< "$leftover"
         fi
     fi
@@ -701,7 +786,7 @@ offer_leftover_cleanup() {
         if [ "$has_install" = true ]; then
             prompt_media="Also remove leftover media directories? (y/N) [Default = n]: "
         fi
-        read -p "$prompt_media" ans
+        read_prompt "$prompt_media" ans
         ans=${ans:-n}
         if [ "${ans,,}" = "y" ]; then
             while IFS=$'\t' read -r kind path; do
@@ -709,11 +794,26 @@ offer_leftover_cleanup() {
             done <<< "$leftover"
         fi
     fi
+
+    if [ "$removed_install" = true ]; then
+        local ptr ptr_inst removed_ptr=false
+        for ptr in "$HOME/.assemblrr-config" "$HOME/.${APP_NAME:-assemblrr}-config"; do
+            [ -f "$ptr" ] || continue
+            ptr_inst=$(_pointer_get "$ptr" "INSTALL_DIRECTORY")
+            if [ -n "$ptr_inst" ] && [ ! -d "$ptr_inst" ]; then
+                rm -f "$ptr"
+                removed_ptr=true
+            fi
+        done
+        if [ "$removed_ptr" = true ]; then
+            rm -f "$HOME/.local/bin/${APP_CLI_NAME:-assemblrr}" 2>/dev/null || true
+        fi
+    fi
 }
 
 get_installation_paths() {
     ui_intro \
-        "Where should assemblrr store config and media? External drives (WSL E:, USB, …) show up in the list." \
+        "Where should assemblrr store config and media? External drives (WSL E:, USB, ...) show up in the list." \
         "Change install and media directories. This does not move existing files."
 
     while true; do
@@ -725,16 +825,18 @@ get_installation_paths() {
             continue
         fi
 
-        # Record both paths before any copy so uninstall can find an external
-        # drive even if setup dies mid-copy.
         write_install_pointer "$install_directory" "$media_directory"
 
-        # VPN gate bootstraps ~/assemblrr first. If the user then picked another
-        # install path, drop that leftover tree so CLI discovery cannot shadow it.
         if [ -n "${_ASSEMBLRR_PROVISIONAL_INSTALL:-}" ] && \
            [ "$install_directory" != "$_ASSEMBLRR_PROVISIONAL_INSTALL" ] && \
            [ -d "$_ASSEMBLRR_PROVISIONAL_INSTALL" ]; then
-            log_info "Install path changed — removing temporary files at $_ASSEMBLRR_PROVISIONAL_INSTALL"
+            log_info "Install path changed — stopping temporary containers and removing $_ASSEMBLRR_PROVISIONAL_INSTALL"
+            if command -v docker >/dev/null 2>&1 && [ -f "$_ASSEMBLRR_PROVISIONAL_INSTALL/compose/base.yaml" ]; then
+                docker compose --project-directory "$_ASSEMBLRR_PROVISIONAL_INSTALL" \
+                    -f "$_ASSEMBLRR_PROVISIONAL_INSTALL/compose/base.yaml" \
+                    -f "$_ASSEMBLRR_PROVISIONAL_INSTALL/compose/vpn.yaml" \
+                    down --remove-orphans >/dev/null 2>&1 || true
+            fi
             safe_rm_rf "$_ASSEMBLRR_PROVISIONAL_INSTALL"
         fi
 

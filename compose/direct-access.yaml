@@ -1,5 +1,5 @@
 # Overlay: direct access ports and networks for qBittorrent (no VPN)
-# Usage: docker compose -f base.yaml -f direct-access.yaml --profile <media_service> up -d
+# Usage: docker compose -f base.yaml -f direct-access.yaml up -d
 
 services:
   qbittorrent:

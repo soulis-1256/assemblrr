@@ -4,45 +4,57 @@
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20WSL2-orange.svg)](#installation)
-[![Stack](https://img.shields.io/badge/Stack-Jellyfin%20%2B%20*arr-green.svg)](#the-stack)
+[![Stack](https://img.shields.io/badge/Stack-Jellyfin%2012.4%20%2B%20*arr-green.svg)](#the-stack)
 [![Discussions](https://img.shields.io/github/discussions/soulis-1256/assemblrr)](https://github.com/soulis-1256/assemblrr/discussions)
 
-assemblrr is an automated setup and management suite for self-hosted media stacks. It provisions, wires, and maintains a complete ecosystem (media server, torrent client, indexers, request management, subtitles, and quality profiles) with zero manual work.
+assemblrr is an automated setup and management suite for self-hosted media stacks. It provisions, wires, and maintains a complete ecosystem (media server, download clients, indexers, request portal, subtitles, quality profiles, and optional overlays) with minimal friction.
 
-[Features](#features) • [The Stack](#the-stack) • [Installation](#installation) • [CLI Usage](#cli-usage) • [Default Ports](#service-ports) • [Documentation](#documentation) • [Development](#development)
+[Features](#features) • [The Stack](#the-stack) • [Optional Overlays](#optional-overlays) • [Installation](#installation) • [CLI Usage](#cli-usage) • [Service Ports](#service-ports) • [Documentation](#documentation) • [Development](#development)
 
 ---
 
 ## Features
 
-- **Guided Multi-Platform Setup:** Interactive installer for bare-metal Linux and Windows (via automated WSL2 bridging).
-- **Automated Service Wiring:** Auto-configures and interconnects Radarr, Sonarr, Prowlarr, qBittorrent, Bazarr, Seerr, Recyclarr, and Jellyfin out of the box.
-- **VPN-First Networking:** Built-in Gluetun integration routes download traffic through your VPN, complete with start-up validation and a stalled-routing watchdog.
-- **Unified Operator CLI:** Manage the stack (`start`, `stop`, `restart`, `status`), change settings, take backups, and run updates directly from your terminal.
-- **Hardlink-Optimized Storage:** Atomic moves and hardlink-friendly directory layout with automated TRaSH Guides quality profile sync via Recyclarr.
-- **Granular Media Purge:** Single-command cleanup (`assemblrr purge`) that cleanly removes titles across *arr apps, the disk, and matching torrents simultaneously.
-- **Disaster Recovery & Migration:** Rebuild your entire stack on a clean host directly from a backup archive via the setup wizard (`Restore` mode) or `assemblrr restore`.
+- **Guided Multi-Platform Setup:** Interactive installer for bare-metal Linux and Windows (via automated WSL2 bridging), with Express, Manual, Reconfigure (`--reconfigure`), and Restore modes.
+- **Automated Service Wiring:** Auto-configures and interconnects Radarr, Sonarr, Prowlarr, qBittorrent, Bazarr, Seerr, Recyclarr, and Jellyfin (`12.4+` with `Authorization: MediaBrowser` auth) — plus optional SABnzbd and Byparr.
+- **VPN-First Networking:** Built-in Gluetun integration routes torrent traffic through your VPN with start-up validation and a cooldown-guarded routing watchdog (`vpn-watchdog`).
+- **Unified Operator CLI:** Manage the stack (`start`, `stop`, `restart`, `status`, `health`, `config edit`, `config apply`, `upgrade`, `backup`, `restore`, `purge`, `uninstall`) from your terminal.
+- **Safe Rollback Upgrades:** `assemblrr upgrade` backs up managed files, applies atomic staged updates + migrations, validates resolved Docker Compose config before stamping, and rolls back automatically if validation fails.
+- **Hardlink-Optimized Storage:** Atomic moves and hardlink-friendly layout across `/data/torrents`, `/data/usenet`, and `/data/media`, plus TRaSH Guides profile sync via Recyclarr.
+- **Authenticated Request-Delete Gateway:** `seerr-gateway` verifies caller permissions (`GET /api/v1/auth/me`) before draining in-flight downloads and cleaning library/season files safely.
 
 ---
 
 ## The Stack
 
-assemblrr provides an officially supported, fully-automated **express stack**:
+assemblrr provides an officially supported core stack with pinned container versions:
 
 | Service | Category | Default Port | Description |
 |---|---|---|---|
-| **[Jellyfin](https://jellyfin.org/)** | Media Server | `8096` | Open-source media streaming platform |
-| **[qBittorrent](https://www.qbittorrent.org/)** | Download Client | `8081` | Torrent client isolated behind VPN (or direct access) |
+| **[Jellyfin](https://jellyfin.org/)** (`12.4`) | Media Server | `8096` | Open-source media streaming platform |
+| **[qBittorrent](https://www.qbittorrent.org/)** (`5.3.0`) | Torrent Client | `8081` | Torrent client isolated behind VPN (or direct access) |
 | **[Sonarr](https://sonarr.tv/)** | TV Management | `8989` | Smart PVR & series download automation |
 | **[Radarr](https://radarr.video/)** | Movie Management | `7878` | Movie collection manager and automation |
-| **[Prowlarr](https://prowlarr.com/)** | Indexer Sync | `9696` | Centralized indexer proxy syncing to *arr apps |
-| **[Seerr](https://github.com/seerr-team/seerr)** | Request Management | `5055` | Media discovery and user request gateway |
-| **[Bazarr](https://www.bazarr.media/)** | Subtitles | `6767` | Automatic subtitle downloader for Sonarr and Radarr |
+| **[Prowlarr](https://prowlarr.com/)** | Indexer Sync | `9696` | Centralized indexer manager syncing to *arr apps |
+| **[Seerr](https://github.com/seerr-team/seerr)** | Request Portal | `5055` | Media discovery & requests behind authenticating `seerr-gateway` |
+| **[Bazarr](https://www.bazarr.media/)** | Subtitles | `6767` | Automatic subtitle manager for Sonarr and Radarr |
 | **[Recyclarr](https://recyclarr.dev/)** | Quality Profiles | — | Syncs recommended TRaSH Guides quality profiles & custom formats |
-| **[Gluetun](https://github.com/qdm12/gluetun)** *(Optional)* | VPN & Killswitch | — | Secure VPN tunnel with health watchdog for download traffic |
+| **[Gluetun](https://github.com/qdm12/gluetun)** *(Optional)* | VPN & Killswitch | — | Secure VPN tunnel with `deunhealth` & `vpn-watchdog` |
+
+### Optional Overlays
+
+Enable during `Manual` setup or toggle anytime via `assemblrr config edit`:
+
+| Overlay File | Env Key | Description |
+|---|---|---|
+| [`compose/vuetorrent.yaml`](compose/vuetorrent.yaml) | `VUETORRENT_ENABLED=y` | Modern VueTorrent WebUI theme mod for qBittorrent *(default: enabled)* |
+| [`compose/gpu-intel.yaml`](compose/gpu-intel.yaml) | `GPU_TRANSCODING=amd` / `intel` | AMD VAAPI / Intel QSV (`/dev/dri`) hardware transcoding + Jellyfin auto-wiring |
+| [`compose/gpu-nvidia.yaml`](compose/gpu-nvidia.yaml) | `GPU_TRANSCODING=nvidia` | NVIDIA NVENC/NVDEC GPU reservation + Jellyfin auto-wiring *(auto-enabled when detected)* |
+| [`compose/byparr.yaml`](compose/byparr.yaml) | `BYPARR_ENABLED=y` | Byparr Cloudflare solver wired into Prowlarr (`byparr` tag) |
+| [`compose/usenet.yaml`](compose/usenet.yaml) | `USENET_ENABLED=y` | SABnzbd (`8085`) wired into Sonarr, Radarr, and Prowlarr (requires your own NNTP account) |
 
 > [!TIP]
-> **Custom & Extended Services:** You can easily add custom containers (e.g. Plex, Emby, SABnzbd, Portainer) via `compose/custom.yaml` or optional compose profiles. Official automated wiring and CLI maintenance workflows target the core stack above.
+> Need self-managed extras (Plex, Emby, Lidarr, Komodo Periphery)? Copy [`compose/examples/custom.yaml.example`](compose/examples/custom.yaml.example) to `compose/custom.yaml`. Custom services use `.30+` IPs on `assemblrr_network` and are left untouched by upgrades.
 
 ---
 
@@ -50,202 +62,151 @@ assemblrr provides an officially supported, fully-automated **express stack**:
 
 ### Linux / WSL2
 
-Run the one-line bootstrap installer in your terminal (requires `bash` and `curl`):
-
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/soulis-1256/assemblrr/main/platform/linux/bootstrap.sh)
 ```
 
 ### Windows (PowerShell)
 
-Ensure Docker Desktop is running, then launch PowerShell as Administrator and run:
+Ensure Docker Desktop is running with WSL2 integration enabled, then run PowerShell and execute:
 
 ```powershell
 irm https://raw.githubusercontent.com/soulis-1256/assemblrr/main/platform/windows/bootstrap.ps1 | iex
 ```
 
-> [!NOTE]
-> The Windows installer automatically bridges the stack into your default WSL2 Linux distribution.
-
 ### Advanced Options
 
-#### Fish Shell
-
-```fish
-bash (curl -fsSL https://raw.githubusercontent.com/soulis-1256/assemblrr/main/platform/linux/bootstrap.sh | psub)
-```
-
-#### Custom Branch or Tag
-
-**Linux / WSL2:**
+**Custom branch, tag, or commit SHA:**
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/soulis-1256/assemblrr/main/platform/linux/bootstrap.sh) --ref dev
-# or:
-ASSEMBLRR_REF=dev bash <(curl -fsSL https://raw.githubusercontent.com/soulis-1256/assemblrr/main/platform/linux/bootstrap.sh)
 ```
-
-**Windows (PowerShell):**
 ```powershell
 $env:ASSEMBLRR_REF = "dev"; irm https://raw.githubusercontent.com/soulis-1256/assemblrr/main/platform/windows/bootstrap.ps1 | iex
 ```
 
-#### Restore on a Clean Host from Backup
-
-To rebuild your entire stack on a fresh host from an existing backup archive, run the bootstrap installer and select `3) Restore`, or pass the `--restore` flag:
-
-**Linux / WSL2:**
+**Restore on a clean host from backup:**
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/soulis-1256/assemblrr/main/platform/linux/bootstrap.sh) --restore /path/to/assemblrr-backup.tar.gz
 ```
 
-**Windows (PowerShell):**
-```powershell
-irm https://raw.githubusercontent.com/soulis-1256/assemblrr/main/platform/windows/bootstrap.ps1 | iex -ArgumentList "--restore", "C:\path\to\assemblrr-backup.tar.gz"
-```
-
 > [!IMPORTANT]
-> **Already installed?** Use `assemblrr upgrade` to update or `assemblrr uninstall` to remove. Do not re-run the bootstrap script on an existing installation.
+> **Already installed?** Use `assemblrr upgrade` to update, `assemblrr config edit` to change settings/overlays, or `assemblrr uninstall` to remove.
 
 ---
 
 ## CLI Usage
-
-Once installed, the `assemblrr` command-line interface is available on your system `PATH`:
 
 ```bash
 assemblrr <command> [options]
 ```
 
 ### Stack Control
-
 | Command | Description |
 |---|---|
-| `assemblrr start [service]` | Start all services (or a specific service) with VPN verification |
-| `assemblrr stop [service]` | Stop all running services (or a specific service) |
-| `assemblrr restart [service]` | Restart all services (or a specific service) |
-| `assemblrr destroy [service]` | Teardown and reset container state |
+| `assemblrr start [service]` | Start all (or named) services and wait for readiness |
+| `assemblrr stop [service]` | Stop running services |
+| `assemblrr restart [service]` | Restart running services |
+| `assemblrr destroy [service]` | Stop and remove containers/network (keeps config & media) |
 
 ### Status & Inspection
-
 | Command | Description |
 |---|---|
-| `assemblrr status` | Operator dashboard displaying service states, health, and access URLs |
-| `assemblrr status --docker` | Raw `docker compose ps` output |
-| `assemblrr health` | Compact health check pass/fail summary for all containers |
-| `assemblrr logs [service]` | Tail and follow logs for all containers or a specific service |
-| `assemblrr check-vpn` | Verify VPN connectivity, assigned IP, and tunnel health |
+| `assemblrr status` | Operator dashboard displaying service states, health, and URLs |
+| `assemblrr status --docker` | Raw `docker compose ps` table |
+| `assemblrr health` | Compact health pass/fail check across catalog services |
+| `assemblrr logs [service]` | Tail container logs |
+| `assemblrr check-vpn` | Compare host exit IP against Gluetun tunnel IP |
 
-### Configuration & Wiring
-
+### Configuration & Maintenance
 | Command | Description |
 |---|---|
-| `assemblrr config` | List all available configuration options |
-| `assemblrr config show` | Display active environment configuration |
-| `assemblrr config edit` | Interactive wizard to update settings (VPN, indexers, credentials, etc.) |
-| `assemblrr config apply` | Re-run automated service wiring (alias: `config wire`) |
-
-### Maintenance, Backups & Cleanup
-
-| Command | Description |
-|---|---|
-| `assemblrr backup <path>` | Create a timestamped configuration backup archive |
-| `assemblrr restore <file.tar.gz>` | Restore configuration from a backup archive |
-| `assemblrr update-containers` | Pull the latest Docker images and restart the stack (prompts for backup first) |
-| `assemblrr upgrade` | Upgrade assemblrr core scripts, apply migrations, and update wiring |
-| `assemblrr upgrade --check` | Dry-run: preview upcoming file changes and migrations |
-| `assemblrr upgrade --skip-stack`| Apply CLI and script updates without restarting running containers |
-| `assemblrr purge` | Delete a title across Sonarr/Radarr, filesystem, and active qBittorrent torrents |
-| `assemblrr uninstall` | Cleanly remove the entire stack (preserves media unless `--media` is passed) |
+| `assemblrr config show` | Show active configuration & resolved compose overlays |
+| `assemblrr config edit` | Interactive picker for VPN, quality, overlays (VueTorrent/GPU/Byparr/Usenet), auth, etc. |
+| `assemblrr config apply` | Re-run non-interactive service API wiring (`alias: config wire`) |
+| `assemblrr upgrade` | Upgrade managed files, apply migrations, validate & rebuild stack (`--check`, `--from DIR`, `--ref REF`, `--skip-stack`) |
+| `assemblrr update-containers` | Rebuild local sidecars and pull any custom overlay images |
+| `assemblrr purge ...` | Remove a movie/series/season across *arr, library disk, qBittorrent, and SABnzbd |
+| `assemblrr backup <dir>` | Create a `0600` backup archive |
+| `assemblrr restore <file.tar.gz>` | Validate archive and restore config/secrets |
+| `assemblrr uninstall` | Clean removal (preserves media unless `--media` is passed) |
 
 ---
 
 ## Service Ports
 
-When running the default stack, the following ports are mapped on `http://localhost:<PORT>`:
-
-| Service | Port | Default URL | Purpose |
+| Service | Host Port | Default URL | Notes |
 |---|---|---|---|
 | **Jellyfin** | `8096` | `http://localhost:8096` | Media streaming frontend |
-| **qBittorrent** | `8081` | `http://localhost:8081` | Torrent Web UI |
-| **Sonarr** | `8989` | `http://localhost:8989` | TV show manager |
-| **Radarr** | `7878` | `http://localhost:7878` | Movie collection manager |
-| **Prowlarr** | `9696` | `http://localhost:9696` | Indexer management |
-| **Seerr** | `5055` | `http://localhost:5055` | Media request portal (via gateway) |
+| **Seerr (Gateway)** | `5055` | `http://localhost:5055` | Media requests + delete-request purge |
 | **Bazarr** | `6767` | `http://localhost:6767` | Subtitle manager |
+| **Sonarr** | `8989` | `http://localhost:8989` | TV show manager |
+| **Radarr** | `7878` | `http://localhost:7878` | Movie manager |
+| **Prowlarr** | `9696` | `http://localhost:9696` | Indexer manager |
+| **qBittorrent** | `8081` | `http://localhost:8081` | Torrent Web UI (+ VueTorrent when enabled) |
+| **SABnzbd** *(opt.)* | `8085` | `http://localhost:8085` | Usenet downloader (`USENET_ENABLED=y`) |
 
 ---
 
 ## Configuration & Layout
 
-Configuration and persistent state live in your installation directory (default: `~/assemblrr`):
-
 ```text
 ~/assemblrr/
-├── .env                  # Environment variables generated during setup (see .env.example)
-├── secrets/              # Authenticated credentials and VPN keys (kept separate from .env)
+├── .env                       # Environment variables generated by setup
+├── .assemblrr-config          # Install metadata + active UI/feature settings
+├── .assemblrr-channel         # Active upgrade git ref (default: main)
+├── .assemblrr-version         # Recorded upgrade version stamp
+├── .assemblrr-migrations      # Applied migration IDs
+├── secrets/                   # 0700 dir of 0600 service passwords & VPN keys
 ├── compose/
-│   ├── base.yaml         # Core service definitions
-│   ├── vpn.yaml          # VPN network overlay (Gluetun)
-│   ├── direct-access.yaml# Direct networking overlay (non-VPN)
-│   └── custom.yaml       # User-defined custom services
-├── config/               # Persistent database and appdata for all services
-└── scripts/              # Internal watchdog and gateway sidecar scripts
+│   ├── base.yaml              # Core service definitions
+│   ├── vpn.yaml               # Gluetun VPN network + watchdog overlay
+│   ├── direct-access.yaml     # Non-VPN overlay
+│   ├── vuetorrent.yaml        # Optional VueTorrent WebUI overlay
+│   ├── gpu-intel.yaml         # Optional Intel/AMD VAAPI GPU overlay
+│   ├── gpu-nvidia.yaml        # Optional NVIDIA NVENC GPU overlay
+│   ├── byparr.yaml            # Optional Byparr Cloudflare solver overlay
+│   ├── usenet.yaml            # Optional SABnzbd Usenet overlay
+│   └── custom.yaml            # User-defined custom services (untouched by upgrade)
+├── config/                    # Persistent service appdata
+├── migrations/                # Idempotent upgrade migrations
+└── scripts/                   # Sidecar watchdog, purge & gateway hooks
 ```
 
 ---
 
 ## Documentation
 
-- **[TRaSH Guides & Quality Profiles](docs/trash-guides.md):** Quality profile synchronization and custom format handling.
-- **[Seerr Delete Request](docs/seerr-delete-request.md):** In-flight download cancellation workflow and gateway architecture.
-- **[Uninstall Guide](docs/uninstall.md):** Complete removal walkthrough and resource inventory.
-- **[API Reference](docs/api-reference.md):** Upstream API endpoints and integration notes.
+- **[TRaSH Guides & Quality Profiles](docs/trash-guides.md):** Quality profile sync and custom format notes.
+- **[Seerr Delete Request](docs/seerr-delete-request.md):** Gateway RBAC auth, queue drain, and season-scoped purge architecture.
+- **[Komodo Integration](docs/komodo.md):** Running and monitoring assemblrr stacks via Komodo.
+- **[API Reference](docs/api-reference.md):** Jellyfin 12 `MediaBrowser` auth headers, *arr/SABnzbd/Byparr endpoints.
+- **[Uninstall Guide](docs/uninstall.md):** Complete removal walkthrough and directory inventory.
+- **[Security Policy](SECURITY.md) • [Contributing](CONTRIBUTING.md) • [Changelog](CHANGELOG.md) • [Legal Notice](NOTICE)**
 
 ---
 
 ## Development
 
-### Setting Up a Development Environment
-
-**Linux / WSL2:**
 ```bash
-git clone https://github.com/soulis-1256/assemblrr.git
-cd assemblrr
-bash bin/setup.sh
+make test                 # Unit tests + compose validation + shellcheck lint
+make test-unit            # Offline shell + Python unit suites
+make test-compose         # Docker Compose validation across overlay matrix
+make lint                 # Run shellcheck across shell scripts
 ```
 
-**Windows (PowerShell):**
-```powershell
-git clone https://github.com/soulis-1256/assemblrr.git
-cd assemblrr
-.\platform\windows\bootstrap-dev.ps1 -Full        # Full setup (copies files to WSL2 and runs setup.sh)
-.\platform\windows\bootstrap-dev.ps1 -Full -Clean # Clean install (uninstalls previous setup first)
-.\platform\windows\bootstrap-dev.ps1 -Update      # Fast sync for local script/CLI edits
-```
-
-### Running Tests
-
-```bash
-make test                 # Run all unit tests, compose validation, and shellcheck
-make test-unit            # Pure shell unit tests (no Docker required)
-make test-compose         # Docker Compose syntax and configuration validation
-make test-integration     # Live integration tests (requires ASSEMBLRR_ALLOW_LIVE_TEST=1)
-make lint                 # Run shellcheck on all scripts
-```
-
-See [tests/README.md](tests/README.md) for testing guidelines and environment flags.
+See [tests/README.md](tests/README.md) for the test suite layout, including the offline NNTP/Newznab Usenet mock harness.
 
 ---
 
 ## Community & Legal
 
-assemblrr is infrastructure automation tooling designed to wire together and manage self-hosted applications. It does not provide, index, host, or distribute media content. Users are solely responsible for complying with applicable laws and licensing regulations in their jurisdiction.
+assemblrr is infrastructure automation tooling for self-hosted applications. It does **not** include, host, index, or distribute copyrighted media content or external subscriptions. Users are solely responsible for complying with applicable laws in their jurisdiction. See [NOTICE](NOTICE).
 
-Join discussions, request features, and connect with the community on **[GitHub Discussions](https://github.com/soulis-1256/assemblrr/discussions)**.
+Join discussions on **[GitHub Discussions](https://github.com/soulis-1256/assemblrr/discussions)**.
 
 ---
 
-## Acknowledgments & License
+## License
 
-- Originally inspired by [YAMS](https://yams.media/) ([rogsme/yams](https://github.com/rogsme/yams)); assemblrr has since been completely re-architected and expanded into an independent platform.
-- Licensed under the **[GNU General Public License v3.0](LICENSE)**.
+- Inspired in early versions by [YAMS](https://yams.media/), now independently architected and modularized.
+- Licensed under the **[GNU General Public License v3.0 or later](LICENSE)**.

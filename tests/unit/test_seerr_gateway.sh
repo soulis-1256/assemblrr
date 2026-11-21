@@ -1,12 +1,13 @@
-#!/bin/bash
-# Unit tests for scripts/seerr-gateway.py (offline mock Seerr via --self-test)
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Unit tests for scripts/seerr-gateway.py (offline mock Seerr via unittest suite)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/../helpers.sh"
 
-test_suite "seerr-gateway self-test"
+test_suite "seerr-gateway unittest suite"
 
 if ! command -v python3 >/dev/null 2>&1; then
     echo "SKIP: python3 not available"
@@ -14,21 +15,22 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 gw="$REPO_ROOT/scripts/seerr-gateway.py"
+suite="$REPO_ROOT/tests/unit/test_seerr_gateway_suite.py"
 assert_true "gateway script exists" "[ -f \"$gw\" ]"
+assert_true "gateway unittest suite exists" "[ -f \"$suite\" ]"
 
-if python3 "$gw" --self-test; then
+if python3 "$suite"; then
     _TEST_PASSES=$((_TEST_PASSES + 1))
-    echo "  PASS: seerr-gateway --self-test"
+    echo "  PASS: seerr-gateway unittest suite"
 else
     _TEST_FAILURES=$((_TEST_FAILURES + 1))
-    echo "  FAIL: seerr-gateway --self-test"
+    echo "  FAIL: seerr-gateway unittest suite"
 fi
 
 # Compose wiring: seerr-gateway publishes 5055; seerr does not bind host 5055
 test_suite "compose seerr-gateway wiring"
 base="$REPO_ROOT/compose/base.yaml"
 assert_contains "$(grep -A2 'container_name: seerr-gateway' "$base" || true)" "seerr-gateway" "gateway service present"
-# Host publish 5055 should appear under seerr-gateway, not as seerr's ports block alone
 seerr_block=$(awk '/^  seerr:/{p=1} p&&/^  [a-z]/{if(!/^  seerr:/)exit} p' "$base")
 assert_not_contains "$seerr_block" "5055:5055" "seerr service does not publish host 5055"
 gw_block=$(awk '/^  seerr-gateway:/{p=1} p&&/^  [a-z]/{if(!/^  seerr-gateway:/)exit} p' "$base")

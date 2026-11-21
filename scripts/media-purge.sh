@@ -1,21 +1,21 @@
-#!/bin/bash
-# Remove a title from *arr, library files, and qBittorrent.
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Remove a title from *arr, library files, qBittorrent, and (if enabled) SABnzbd.
 # Usage: media-purge.sh --movie-id N | --series-id N | --path P | --tmdb ID | --tvdb ID
 #        media-purge.sh --series-id N --seasons 1,2
 #        media-purge.sh --radarr-event | --sonarr-event | --qb-only --path P
-#        media-purge.sh --match-self-test
 #
 # TV: --seasons (or a path under Season N) deletes only those seasons' files,
 # unmonitors them, and only removes the series when nothing monitored/on-disk
 # remains. qB matching then requires a season token and refuses packs that
 # also name another season.
 #
-# Safety ladder for qB cleanup (prefer under-delete over collateral damage):
-#   1) *arr queue + history download hashes that still exist in qB (hash is identity)
-#   2) Title + year match on torrent name / content path (The Avengers (2012) ==
-#      The Avengers 2012 REPACK…; indexer prefixes allowed; next token after the
+# Safety ladder for download cleanup (prefer under-delete over collateral damage):
+#   1) *arr queue + history download IDs/hashes that still exist in qB / SABnzbd
+#   2) Title + year match on item name / content path (Alpha Film (2016) ==
+#      Alpha Film 2016 REPACK...; indexer prefixes allowed; next token after the
 #      title must be that year). No-year keys still require a season/year/end
-#      boundary so Lost does not hit Lost in Space.
+#      boundary so Sample Show does not hit Sample Show Extended.
 #   3) Never bare short titles (len < 3). Refuse ambiguous multi-matches on
 #      the name step. Season purge still refuses packs / other seasons.
 # After a successful non-qb-only purge, best-effort Jellyfin /Library/Refresh.
@@ -26,6 +26,7 @@ API_HOST="${API_HOST:-127.0.0.1}"
 RADARR_URL="${RADARR_URL:-http://${API_HOST}:7878}"
 SONARR_URL="${SONARR_URL:-http://${API_HOST}:8989}"
 JELLYFIN_URL="${JELLYFIN_URL:-http://jellyfin:8096}"
+SABNZBD_URL="${SABNZBD_URL:-http://${API_HOST}:8085}"
 CONFIG_DIR="${CONFIG_DIR:-}"
 DRY_RUN="${DRY_RUN:-0}"
 QB_ONLY=0
@@ -40,6 +41,16 @@ TVDB_ID=""
 SEASONS=""
 # Set when we actually removed something worth notifying the media server about.
 PURGE_TOUCHED=0
+QBIT_JAR=""
+QBIT_BASE=""
+_QBIT_LOGGED_IN=0
+
+cleanup_purge() {
+    if [ -n "${QBIT_JAR:-}" ] && [ -f "${QBIT_JAR:-}" ]; then
+        rm -f "$QBIT_JAR"
+    fi
+}
+trap cleanup_purge EXIT INT TERM
 
 log() { echo "media-purge: $*" >&2; }
 die() { log "ERROR: $*"; exit 1; }
@@ -75,7 +86,7 @@ folder_key_from() {
     echo ""
 }
 
-# "1,02 3" → unique integers as lines. Empty / junk → nothing.
+# "1,02 3" -> unique integers as lines. Empty / junk -> nothing.
 parse_season_list() {
     local raw="${1:-}"
     [ -n "$raw" ] || return 0
@@ -84,7 +95,7 @@ parse_season_list() {
     ' | sort -n | uniq
 }
 
-# Path under .../Season N/... or .../Specials/... → season number. Else empty.
+# Path under .../Season N/... or .../Specials/... -> season number. Else empty.
 path_season_number() {
     local p="${1:-}"
     local n
@@ -146,9 +157,37 @@ discover_api_key() {
     return 1
 }
 
+discover_sabnzbd_api_key() {
+    if [ -n "${SABNZBD_API_KEY:-}" ]; then
+        echo "$SABNZBD_API_KEY"
+        return 0
+    fi
+    local f
+    for f in \
+        "${CONFIG_DIR:+$CONFIG_DIR/sabnzbd/sabnzbd.ini}" \
+        "/config/sabnzbd/sabnzbd.ini" \
+        "${INSTALL_DIR:+$INSTALL_DIR/config/sabnzbd/sabnzbd.ini}"; do
+        [ -n "${f:-}" ] && [ -f "$f" ] || continue
+        local k
+        k=$(sed -n 's/^[[:space:]]*api_key[[:space:]]*=[[:space:]]*//p' "$f" 2>/dev/null | head -1 | tr -d '\r')
+        if [ -n "$k" ]; then
+            echo "$k"
+            return 0
+        fi
+    done
+    return 1
+}
+
 qbit_login() {
-    local user pass jar
-    jar="${1:-/tmp/media-purge-qb.cookies}"
+    local user pass
+    if [ -n "${1:-}" ]; then
+        QBIT_JAR="$1"
+        _QBIT_LOGGED_IN=0
+    fi
+    if [ "$_QBIT_LOGGED_IN" -eq 1 ] && [ -n "${QBIT_JAR:-}" ] && [ -f "$QBIT_JAR" ]; then
+        return 0
+    fi
+
     user="${AUTH_USERNAME:-}"
     pass="${AUTH_PASSWORD:-}"
     [ -z "$user" ] && user=$(read_secret_file "${AUTH_USERNAME_FILE:-/run/secrets/auth_username.txt}" 2>/dev/null || true)
@@ -169,7 +208,9 @@ qbit_login() {
         [ -n "$QBIT_BASE" ] || QBIT_BASE="http://${API_HOST}:8081"
     fi
 
-    QBIT_JAR="$jar"
+    if [ -z "${QBIT_JAR:-}" ]; then
+        QBIT_JAR=$(mktemp "${TMPDIR:-/tmp}/media-purge-qb.XXXXXX")
+    fi
     curl -s --connect-timeout 8 -c "$QBIT_JAR" \
         -H "Referer: ${QBIT_BASE}/" \
         --data-urlencode "username=${user}" \
@@ -179,6 +220,7 @@ qbit_login() {
         "${QBIT_BASE}/api/v2/app/version" 2>/dev/null | grep -q .; then
         die "qBittorrent login failed (${QBIT_BASE})"
     fi
+    _QBIT_LOGGED_IN=1
     log "qB session ok (${QBIT_BASE})"
 }
 
@@ -204,17 +246,20 @@ qbit_delete_hashes() {
         log "DRY_RUN: skip qB delete"
         return 0
     fi
-    curl -s --connect-timeout 15 -b "$QBIT_JAR" -H "Referer: ${QBIT_BASE}/" \
+    local code
+    code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 15 \
+        -b "$QBIT_JAR" -H "Referer: ${QBIT_BASE}/" \
         -d "hashes=${csv}&deleteFiles=true" \
-        "${QBIT_BASE}/api/v2/torrents/delete" >/dev/null || true
+        "${QBIT_BASE}/api/v2/torrents/delete" 2>/dev/null || echo "000")
+    log "qB: torrents/delete HTTP ${code}"
     PURGE_TOUCHED=1
 }
 
 # Title + year matcher shared by name fallback and leftover-dir cleanup.
-# A movie key "The Avengers (2012)" hits "The Avengers 2012 REPACK…" and
-# "www.UIndex.org - The Avengers 2012 …" because the title tokens appear
-# consecutively and the next token is that year. It does not hit Age of Ultron
-# (next token is not 2012) or "It Comes at Night" for It (2017).
+# Example: "Alpha Film (2016)" matches "Alpha Film 2016 REPACK..." and
+# "indexer.example - Alpha Film 2016 ..." because title tokens appear
+# consecutively and the next token is that year, while rejecting unrelated sequels
+# ("Alpha Film Sequel Extended (2022)") or longer titles ("Brief Story Extended").
 QB_TITLE_YEAR_JQ=$(cat <<'JQ'
         def norm:
           ascii_downcase
@@ -307,8 +352,9 @@ qb_match_jq() {
 }
 
 # Season-scoped matcher: title+year (or no-year title boundary) plus season
-# tokens. Refuse packs that also name a season we are not deleting
-# (S01.S02 / S01-03 / Season 1-3). No season token → skip (under-delete).
+# tokens (with strict non-alphanumeric left boundaries so dts5/ps4/x265 do not
+# trigger false seasons). Handles Specials (season 0) too. Refuse packs that
+# also name a season we are not deleting (S01.S02 / S01-03 / Season 1-3).
 qb_match_season_jq() {
     jq -r --arg folder "$1" --argjson seasons "$2" "${QB_TITLE_YEAR_JQ}"'
         def expand_range($a; $b):
@@ -320,10 +366,11 @@ qb_match_season_jq() {
           def ranges($re):
               [ $t | scan($re) | if type == "array" then expand_range(.[0]|tonumber; .[1]|tonumber)[] else empty end ];
           (
-            ranges("s0*([0-9]{1,2})[[:space:]]*[-–][[:space:]]*s?0*([0-9]{1,2})")
-            + ranges("season[s]?[[:space:]]*0*([0-9]{1,2})[[:space:]]*[-–][[:space:]]*0*([0-9]{1,2})")
-            + nums("s([0-9]{1,2})")
-            + nums("season[[:space:]]*0*([0-9]{1,2})")
+            ranges("(?:^|[^a-z0-9])s0*([0-9]{1,2})[[:space:]]*[-–][[:space:]]*s?0*([0-9]{1,2})(?=$|[^0-9])")
+            + ranges("(?:^|[^a-z0-9])seasons?[[:space:]]*0*([0-9]{1,2})[[:space:]]*[-–][[:space:]]*0*([0-9]{1,2})(?=$|[^0-9])")
+            + nums("(?:^|[^a-z0-9])s0*([0-9]{1,2})(?=e[0-9]{1,3}|$|[^0-9])")
+            + nums("(?:^|[^a-z0-9])seasons?[[:space:]]*0*([0-9]{1,2})(?=$|[^0-9])")
+            + (if ($t | test("(?:^|[^a-z0-9])specials(?=$|[^a-z0-9])")) then [0] else [] end)
           ) | unique;
         def in_wanted($n): ($seasons | index($n)) != null;
         .[]
@@ -344,11 +391,9 @@ qb_match_season_jq() {
 }
 
 # Keep *arr queue/history hashes that still exist in qB. The hash is identity —
-# do not also require a folder-key name match (release names rarely look like
-# "Title (YYYY)"). stdin: qB info JSON. args: candidate hashes.
+# do not also require a folder-key name match. stdin: qB info JSON. args: hashes.
 qbit_filter_hashes_jq() {
     local hashes_json
-    # Lowercase/trim only — do not strip non-hex (breaks tests and rare non-standard ids).
     hashes_json=$(printf '%s\n' "$@" | jq -R . | jq -s -c 'map(ascii_downcase | gsub("^ +| +$"; "")) | map(select(length > 0)) | unique')
     jq -r --argjson want "$hashes_json" '
         .[]
@@ -385,24 +430,39 @@ qbit_delete_by_folder_key() {
     remove_orphan_torrent_dirs "$folder_key"
 }
 
-# *arr Completed Download Handling often removes the qB item but leaves
-# torrents/tv|movies/<release>. Title-delete then finds no qB row.
+# Clean up completed/incomplete torrent & usenet dirs left behind on disk.
 remove_orphan_torrent_dirs() {
     local folder_key="$1"
     local seasons_json="${2:-}"
-    local root="${MEDIA_ROOT:-/data}/torrents"
-    local d base info tokens_json hashes
+    local torrents_root="${MEDIA_ROOT:-/data}/torrents"
+    local usenet_root="${MEDIA_ROOT:-/data}/usenet"
+    local -a dirs=()
     [ -n "$folder_key" ] || return 0
-    [ -d "$root/tv" ] || [ -d "$root/movies" ] || return 0
 
-    tokens_json=$(jq -nc --arg k "$folder_key" '[$k]')
     shopt -s nullglob
-    for d in "$root/tv"/* "$root/movies"/* \
-             "$root/incomplete/tv"/* "$root/incomplete/movies"/*; do
+    if [ -d "$torrents_root/tv" ] || [ -d "$torrents_root/movies" ]; then
+        dirs+=(
+            "$torrents_root/tv"/* "$torrents_root/movies"/*
+            "$torrents_root/incomplete/tv"/* "$torrents_root/incomplete/movies"/*
+        )
+    fi
+    if [ -d "$usenet_root/complete" ] || [ -d "$usenet_root/incomplete" ]; then
+        dirs+=(
+            "$usenet_root/complete/tv"/* "$usenet_root/complete/movies"/*
+            "$usenet_root/incomplete/tv"/* "$usenet_root/incomplete/movies"/*
+            "$usenet_root/incomplete"/*
+        )
+    fi
+    shopt -u nullglob
+
+    [ "${#dirs[@]}" -gt 0 ] || return 0
+    local d base info tokens_json hashes
+    tokens_json=$(jq -nc --arg k "$folder_key" '[$k]')
+    for d in "${dirs[@]}"; do
         [ -d "$d" ] || continue
         base=$(basename_of "$d")
         case "$base" in
-            tv|movies|incomplete|""|.) continue ;;
+            tv|movies|incomplete|complete|""|.) continue ;;
         esac
         info=$(jq -nc --arg n "$base" --arg p "$d" '[{hash:"fs",name:$n,content_path:$p}]')
         if [ -n "$seasons_json" ] && [ "$seasons_json" != "[]" ]; then
@@ -418,7 +478,6 @@ remove_orphan_torrent_dirs() {
         fi
         rm -rf -- "$d" && PURGE_TOUCHED=1
     done
-    shopt -u nullglob
 }
 
 qbit_delete_by_folder_key_seasons() {
@@ -447,10 +506,8 @@ qbit_delete_by_folder_key_seasons() {
     remove_orphan_torrent_dirs "$folder_key" "$seasons_json"
 }
 
-# Back-compat name used by older call sites / mental model.
 qbit_delete_by_tokens() {
-    local folder=""
-    local t b
+    local folder="" t b
     for t in "$@"; do
         [ -n "$t" ] || continue
         b=$(basename_of "$t")
@@ -464,7 +521,7 @@ qbit_delete_by_tokens() {
             [ -n "$t" ] || continue
             b=$(basename_of "$t")
             case "$b" in
-                media|movies|tv|torrents|data|incomplete|"") continue ;;
+                media|movies|tv|torrents|usenet|data|incomplete|complete|"") continue ;;
             esac
             if [ "${#b}" -ge 10 ]; then
                 folder="$b"
@@ -473,6 +530,30 @@ qbit_delete_by_tokens() {
         done
     fi
     qbit_delete_by_folder_key "$folder"
+}
+
+# Best-effort SABnzbd queue/history deletion for matching SABnzbd_nzo_* IDs.
+sabnzbd_delete_nzo_ids() {
+    local nzo_ids=("$@")
+    [ "${#nzo_ids[@]}" -gt 0 ] || return 0
+    local sab_key
+    sab_key=$(discover_sabnzbd_api_key 2>/dev/null || true)
+    [ -n "$sab_key" ] || return 0
+
+    local id
+    for id in "${nzo_ids[@]}"; do
+        [ -n "$id" ] || continue
+        log "SABnzbd: deleting download ${id}"
+        if [ "$DRY_RUN" = "1" ]; then
+            log "DRY_RUN: skip SABnzbd delete ${id}"
+            continue
+        fi
+        curl -sf --connect-timeout 5 --max-time 15 \
+            "${SABNZBD_URL%/}/api?mode=queue&name=delete&del_files=1&value=${id}&apikey=${sab_key}&output=json" >/dev/null 2>&1 || true
+        curl -sf --connect-timeout 5 --max-time 15 \
+            "${SABNZBD_URL%/}/api?mode=history&name=delete&del_files=1&value=${id}&apikey=${sab_key}&output=json" >/dev/null 2>&1 || true
+        PURGE_TOUCHED=1
+    done
 }
 
 arr_get() {
@@ -499,7 +580,6 @@ arr_history_hashes() {
     fi
 }
 
-# Active *arr queue download hashes (in-progress grabs). Hash is identity.
 arr_queue_hashes() {
     local base="$1" key="$2" kind="$3" id="$4"
     local endpoint raw
@@ -536,28 +616,19 @@ arr_queue_hashes_seasons() {
         else empty end
         | select((.seriesId // empty) == ($id|tonumber))
         | . as $r
-        | (
-            $r.episode.seasonNumber
-            // $r.seasonNumber
-            // empty
-          ) as $sn
+        | ($r.episode.seasonNumber // $r.seasonNumber // empty) as $sn
         | select(($sn != null) and (($seasons | index($sn)) != null))
         | $r.downloadId // $r.data.torrentInfoHash // empty
     ' 2>/dev/null | tr 'A-F' 'a-f' | sort -u
 }
 
-# Same as series history, but only grab/import rows whose episode season is in $5 (lines of ints).
 arr_history_hashes_seasons() {
     local base="$1" key="$2" id="$3" seasons_json="$4"
     local hist
     hist=$(arr_get "$base" "$key" "/api/v3/history?pageSize=250&seriesId=${id}")
     echo "$hist" | jq -r --argjson seasons "$seasons_json" '
         .records[]? as $r
-        | (
-            $r.episode.seasonNumber
-            // $r.data.seasonNumber
-            // empty
-          ) as $sn
+        | ($r.episode.seasonNumber // $r.data.seasonNumber // empty) as $sn
         | select(($sn != null) and (($seasons | index($sn)) != null))
         | $r.downloadId // $r.data.torrentInfoHash // empty
     ' 2>/dev/null | tr 'A-F' 'a-f' | sort -u
@@ -592,7 +663,6 @@ arr_delete_series() {
 }
 
 # Remaining seasons from Sonarr series + episodefile JSON (includes specials / 0).
-# Used to decide series delete vs season-scoped delete.
 seasons_remaining_json() {
     local series="${1:-}"
     local files="${2:-}"
@@ -608,8 +678,6 @@ seasons_remaining_json() {
     printf '%s\n' "$out"
 }
 
-# True when this season list covers every remaining on-disk / monitored season
-# (specials/0 count; deleting S01 must not wipe Specials).
 seasons_list_covers_remaining() {
     local seasons_json="$1"
     local remain_json="$2"
@@ -645,7 +713,6 @@ arr_unmonitor_seasons() {
         "${SONARR_URL}/api/v3/series/${id}" 2>/dev/null || echo "000")
     log "Sonarr: unmonitor seasons ${seasons_json} HTTP ${code}"
 
-    # Also flip per-episode monitored so missing-search will not re-grab.
     local eps ids
     eps=$(arr_get "$SONARR_URL" "$key" "/api/v3/episode?seriesId=${id}")
     ids=$(echo "$eps" | jq -c --argjson seasons "$seasons_json" \
@@ -681,13 +748,12 @@ arr_delete_series_seasons() {
     arr_unmonitor_seasons "$key" "$id" "$seasons_json"
 }
 
-# Exact *arr path match only (no bare endswith of short basenames).
 arr_id_for_path() {
     local base="$1" key="$2" kind="$3" path="$4"
     local b json
     b=$(basename_of "$path")
     case "$b" in
-        movies|tv|media|torrents|incomplete|data|""|.) return 0 ;;
+        movies|tv|media|torrents|usenet|incomplete|complete|data|""|.) return 0 ;;
     esac
     if [ "$kind" = "movie" ]; then
         json=$(arr_get "$base" "$key" "/api/v3/movie")
@@ -713,10 +779,10 @@ arr_id_for_path() {
 purge_qb() {
     local kind="$1" base_url="$2" key="$3" id="$4" title="$5" path="$6"
     local seasons_json="${7:-}"
-    local folder hlist=() filtered=() info h
+    local folder hlist=() qb_ids=() nzo_ids=() filtered=() info h
 
     folder=$(folder_key_from "$path" "$title")
-    log "qB purge kind=${kind} id=${id} folder_key=${folder:-<none>} seasons=${seasons_json:-<all>}"
+    log "download purge kind=${kind} id=${id} folder_key=${folder:-<none>} seasons=${seasons_json:-<all>}"
 
     if [ -n "$seasons_json" ] && [ "$seasons_json" != "[]" ]; then
         while IFS= read -r h; do
@@ -733,27 +799,37 @@ purge_qb() {
             [ -n "$h" ] && hlist+=("$h")
         done < <(arr_history_hashes "$base_url" "$key" "$kind" "$id")
     fi
-    if [ "${#hlist[@]}" -gt 0 ]; then
-        # Unique, keep order
-        hlist=($(printf '%s\n' "${hlist[@]}" | awk 'NF && !seen[$0]++'))
-    fi
 
     if [ "${#hlist[@]}" -gt 0 ]; then
-        log "${kind} queue/history candidates: ${hlist[*]}"
+        mapfile -t hlist < <(printf '%s\n' "${hlist[@]}" | awk 'NF && !seen[$0]++')
+        for h in "${hlist[@]}"; do
+            case "$h" in
+                sabnzbd_nzo_*) nzo_ids+=("SABnzbd_nzo_${h#sabnzbd_nzo_}") ;;
+                *) qb_ids+=("$h") ;;
+            esac
+        done
+    fi
+
+    if [ "${#nzo_ids[@]}" -gt 0 ]; then
+        sabnzbd_delete_nzo_ids "${nzo_ids[@]}"
+    fi
+
+    if [ "${#qb_ids[@]}" -gt 0 ]; then
+        log "${kind} queue/history qB candidates: ${qb_ids[*]}"
         info=$(qbit_torrents_info)
         while IFS= read -r h; do
             [ -n "$h" ] && filtered+=("$h")
-        done < <(echo "$info" | qbit_filter_hashes_jq "${hlist[@]}" 2>/dev/null || true)
+        done < <(echo "$info" | qbit_filter_hashes_jq "${qb_ids[@]}" 2>/dev/null || true)
 
         if [ "${#filtered[@]}" -gt 0 ]; then
             log "qB: queue/history hashes in qB (${#filtered[@]}): ${filtered[*]}"
             qbit_delete_hashes "${filtered[@]}"
             remove_orphan_torrent_dirs "$folder" "$seasons_json"
-        else
-            log "qB: queue/history hashes not in qB; trying title+year match"
+            return 0
         fi
+        log "qB: queue/history hashes not in qB; trying title+year match"
     else
-        log "no queue/history hashes for ${kind} ${id}"
+        log "no qB queue/history hashes for ${kind} ${id}"
     fi
 
     if [ -n "$folder" ]; then
@@ -775,7 +851,7 @@ purge_qb_for_series() {
     purge_qb series "$SONARR_URL" "$1" "$2" "$3" "$4" "${5:-}"
 }
 
-# Best-effort library refresh so deletes do not leave ghost items.
+# Best-effort Jellyfin library refresh so deletes do not leave ghost items.
 notify_jellyfin() {
     if [ "$SKIP_JELLYFIN" = "1" ] || [ "$DRY_RUN" = "1" ]; then
         return 0
@@ -783,13 +859,12 @@ notify_jellyfin() {
     if [ "$PURGE_TOUCHED" != "1" ]; then
         return 0
     fi
-    # Only meaningful for Jellyfin (and Emby-compatible token header).
     case "${MEDIA_SERVICE:-jellyfin}" in
-        jellyfin|emby|"") ;;
+        jellyfin|"") ;;
         *) log "media server ${MEDIA_SERVICE}: skip library refresh"; return 0 ;;
     esac
 
-    local key="" url code
+    local key="" auth_hdr tasks scan_state code
     if [ -n "${JELLYFIN_API_KEY:-}" ]; then
         key="$JELLYFIN_API_KEY"
     elif [ -f "${JELLYFIN_API_KEY_FILE:-/run/secrets/jellyfin_api_key.txt}" ]; then
@@ -804,9 +879,24 @@ notify_jellyfin() {
         return 0
     fi
 
-    url="${JELLYFIN_URL%/}/Library/Refresh"
+    auth_hdr="Authorization: MediaBrowser Client=\"assemblrr\", Device=\"media-purge\", DeviceId=\"assemblrr-purge\", Version=\"1.0\", Token=\"${key}\""
+
+    # Never cancel an active RefreshLibrary scan in Jellyfin 12
+    tasks=$(curl -sS --connect-timeout 5 --max-time 10 \
+        -H "$auth_hdr" \
+        "${JELLYFIN_URL%/}/ScheduledTasks" 2>/dev/null || echo "")
+    scan_state=$(printf '%s' "$tasks" | jq -r \
+        '([.[]? | select(.Key == "RefreshLibrary") | .State] | first) // "Idle"' \
+        2>/dev/null || echo "Idle")
+    case "$scan_state" in
+        Running|Cancelling)
+            log "Jellyfin: scan already ${scan_state}, skipping /Library/Refresh"
+            return 0
+            ;;
+    esac
+
     code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 8 \
-        -X POST -H "X-Emby-Token: ${key}" "$url" 2>/dev/null || echo "000")
+        -X POST -H "$auth_hdr" "${JELLYFIN_URL%/}/Library/Refresh" 2>/dev/null || echo "000")
     if [ "$code" -ge 200 ] && [ "$code" -lt 300 ]; then
         log "Jellyfin: library refresh triggered (HTTP ${code})"
     else
@@ -814,203 +904,52 @@ notify_jellyfin() {
     fi
 }
 
-# Offline matcher self-test (no Docker / qB): media-purge.sh --match-self-test
-if [ "${1:-}" = "--match-self-test" ]; then
-    failures=0
-    check() {
-        local want="$1" name="$2" tokens="$3" torrents="$4"
-        local got
-        got=$(echo "$torrents" | qb_match_jq "$tokens" | tr '\n' ' ' | sed 's/[[:space:]]*$//')
-        if [ "$got" = "$want" ]; then
-            echo "  PASS: $name"
-        else
-            echo "  FAIL: $name (want='$want' got='$got')"
-            failures=$((failures + 1))
-        fi
-    }
-    check_filter() {
-        local want="$1" name="$2" torrents="$3"
-        shift 3
-        local got
-        got=$(echo "$torrents" | qbit_filter_hashes_jq "$@" | tr '\n' ' ' | sed 's/[[:space:]]*$//')
-        if [ "$got" = "$want" ]; then
-            echo "  PASS: $name"
-        else
-            echo "  FAIL: $name (want='$want' got='$got')"
-            failures=$((failures + 1))
-        fi
-    }
-    echo "=== media-purge qB match self-test ==="
-    # Synthetic titles only — prove match rules, not real catalog entries.
-    check "hash_a" "year folder hits only first film" \
-        '["Alpha Film (2016)"]' \
-        '[{"hash":"hash_a","name":"Alpha Film (2016) [GRP]","content_path":"/data/torrents/movies/Alpha Film (2016)"},{"hash":"hash_b","name":"Alpha Film Sequel Extended (2022)","content_path":"/data/torrents/movies/Alpha Film Sequel Extended (2022)"}]'
-    check "" "bare short title does not hit longer sequel name" \
-        '["Alpha Film"]' \
-        '[{"hash":"hash_b","name":"Alpha Film Sequel Extended (2022)","content_path":"/data/torrents/movies/Alpha Film Sequel Extended (2022)"}]'
-    check "hash_a" "bare short title hits exact name only" \
-        '["Alpha Film"]' \
-        '[{"hash":"hash_a","name":"Alpha Film","content_path":"/data/torrents/movies/Alpha Film"},{"hash":"hash_b","name":"Alpha Film Sequel Extended","content_path":"/data/torrents/movies/Alpha Film Sequel Extended"}]'
-    check "hash_y" "year preferred when bare+year present" \
-        '["Sample Title","Sample Title (2008)"]' \
-        '[{"hash":"hash_y","name":"Sample Title (2008) [e2e]","content_path":"/data/torrents/movies/Sample Title (2008) [e2e]"},{"hash":"hash_z","name":"Sample Title Adventures","content_path":"/data/torrents/movies/Sample Title Adventures"}]'
-    check "hash_m1" "bare title does not hit same-prefix sequel" \
-        '["Beta Movie"]' \
-        '[{"hash":"hash_m1","name":"Beta Movie","content_path":"/data/torrents/movies/Beta Movie"},{"hash":"hash_m2","name":"Beta Movie Reloaded","content_path":"/data/torrents/movies/Beta Movie Reloaded"}]'
-    check_filter "hash_a" "history filter keeps live hash even when name is a release" \
-        '[{"hash":"hash_a","name":"The Avengers 2012 REPACK BluRay","content_path":"/data/torrents/incomplete/movies/The Avengers 2012 REPACK BluRay"},{"hash":"hash_b","name":"Other Title","content_path":"/data/torrents/movies/Other"}]' \
-        hash_a
-    check_filter "hash_a" "history filter keeps every live candidate hash" \
-        '[{"hash":"hash_a","name":"Alpha Film Sequel Extended (2022)","content_path":"/data/torrents/movies/Alpha Film Sequel Extended (2022)"}]' \
-        hash_a hash_b
-    check_filter "" "history filter drops hashes not in qB" \
-        '[{"hash":"hash_b","name":"Other","content_path":"/x"}]' \
-        hash_a
-    check "hash_av" "title+year hits release name without parens" \
-        '["The Avengers (2012)"]' \
-        '[{"hash":"hash_av","name":"The Avengers 2012 REPACK BluRay 1080p DDP 5 1 x264-hallowed","content_path":"/data/torrents/incomplete/movies/www.UIndex.org    -    The Avengers 2012 REPACK BluRay 1080p DDP 5 1 x264-hallowed"}]'
-    check "hash_av" "title+year hits indexer-prefixed incomplete path" \
-        '["The Avengers (2012)"]' \
-        '[{"hash":"hash_av","name":"www.UIndex.org - The Avengers 2012 REPACK","content_path":"/data/torrents/incomplete/movies/www.UIndex.org - The Avengers 2012 REPACK"}]'
-    check "" "title+year does not hit Age of Ultron" \
-        '["The Avengers (2012)"]' \
-        '[{"hash":"hash_u","name":"Avengers Age of Ultron 2015 1080p","content_path":"/data/torrents/movies/Avengers Age of Ultron 2015 1080p"}]'
-    check "" "short It (2017) does not hit It Comes at Night" \
-        '["It (2017)"]' \
-        '[{"hash":"hash_n","name":"It Comes at Night 2017 1080p","content_path":"/data/torrents/movies/It Comes at Night 2017"}]'
-    check "hash_it" "It (2017) hits It 2017 release" \
-        '["It (2017)"]' \
-        '[{"hash":"hash_it","name":"It 2017 1080p BluRay","content_path":"/data/torrents/movies/It 2017 1080p BluRay"}]'
-    check "hash_bb" "article-stripped title still needs the year next" \
-        '["The Avengers (2012)"]' \
-        '[{"hash":"hash_bb","name":"Avengers 2012 1080p","content_path":"/data/torrents/movies/Avengers 2012 1080p"}]'
-    check_season() {
-        local want="$1" name="$2" folder="$3" seasons="$4" torrents="$5"
-        local got
-        got=$(echo "$torrents" | qb_match_season_jq "$folder" "$seasons" | tr '\n' ' ' | sed 's/[[:space:]]*$//')
-        if [ "$got" = "$want" ]; then
-            echo "  PASS: $name"
-        else
-            echo "  FAIL: $name (want='$want' got='$got')"
-            failures=$((failures + 1))
-        fi
-    }
-    check_season "hash_s1" "S01 pack matches season 1 only" \
-        "Loki" '[1]' \
-        '[{"hash":"hash_s1","name":"Loki.S01.COMPLETE.1080p","content_path":"/data/torrents/tv/Loki.S01.COMPLETE.1080p"},{"hash":"hash_s2","name":"Loki.S02.COMPLETE.1080p","content_path":"/data/torrents/tv/Loki.S02.COMPLETE.1080p"}]'
-    check_season "" "S02 pack is not deleted with season 1" \
-        "Loki" '[1]' \
-        '[{"hash":"hash_s2","name":"Loki.S02.COMPLETE.1080p.DSNP.WEB-DL","content_path":"/data/torrents/tv/Loki.S02.COMPLETE.1080p.DSNP.WEB-DL"}]'
-    check_season "" "multi-season pack refused when deleting S01 only" \
-        "Loki" '[1]' \
-        '[{"hash":"hash_both","name":"Loki.S01.S02.COMPLETE","content_path":"/data/torrents/tv/Loki.S01.S02.COMPLETE"}]'
-    check_season "" "no season token is skipped (under-delete)" \
-        "Loki" '[1]' \
-        '[{"hash":"hash_bare","name":"Loki","content_path":"/data/torrents/tv/Loki"}]'
-    check_season "" "other show S01 is not matched" \
-        "Loki" '[1]' \
-        '[{"hash":"hash_x","name":"Other Show.S01.COMPLETE","content_path":"/data/torrents/tv/Other Show.S01.COMPLETE"}]'
-    check_season "" "S01-03 range pack refused when deleting S01 only" \
-        "Loki" '[1]' \
-        '[{"hash":"hash_r","name":"Loki.S01-03.COMPLETE","content_path":"/data/torrents/tv/Loki.S01-03.COMPLETE"}]'
-    check_season "" "Season 1-3 range pack refused when deleting S01 only" \
-        "Loki" '[1]' \
-        '[{"hash":"hash_r2","name":"Loki Season 1-3","content_path":"/data/torrents/tv/Loki Season 1-3"}]'
-    check_season "" "short folder key does not match any S01 torrent" \
-        "Oz" '[1]' \
-        '[{"hash":"hash_oz","name":"Other.S01.COMPLETE","content_path":"/data/torrents/tv/Other.S01.COMPLETE"}]'
-    check_season "" "Lost S01 does not match Lost in Space S01" \
-        "Lost" '[1]' \
-        '[{"hash":"hash_lis","name":"Lost in Space.S01.COMPLETE","content_path":"/data/torrents/tv/Lost in Space.S01.COMPLETE"}]'
-    check_season "hash_e1 hash_e2" "multiple S01E0x torrents all match" \
-        "Loki" '[1]' \
-        '[{"hash":"hash_e1","name":"Loki.S01E01","content_path":"/data/torrents/tv/Loki.S01E01"},{"hash":"hash_e2","name":"Loki.S01E02","content_path":"/data/torrents/tv/Loki.S01E02"}]'
-    check "hash_s2" "title-level Loki matches S02 complete pack" \
-        '["Loki"]' \
-        '[{"hash":"hash_s2","name":"Loki.S02.COMPLETE.1080p.DSNP.WEB-DL","content_path":"/data/torrents/tv/Loki.S02.COMPLETE.1080p.DSNP.WEB-DL"}]'
-    check "" "title-level Lost still does not match Lost in Space pack" \
-        '["Lost"]' \
-        '[{"hash":"hash_lis","name":"Lost in Space.S01.COMPLETE","content_path":"/data/torrents/tv/Lost in Space.S01.COMPLETE"}]'
+run_movie_purge() {
+    local mid="$1"
+    [ -n "$mid" ] || die "--movie-id required"
+    [ -n "$RADARR_API_KEY" ] || die "Radarr API key missing"
+    local movie title path
+    movie=$(arr_get "$RADARR_URL" "$RADARR_API_KEY" "/api/v3/movie/${mid}")
+    title=$(echo "$movie" | jq -r '.title // empty')
+    path=$(echo "$movie" | jq -r '.path // empty')
+    purge_qb_for_movie "$RADARR_API_KEY" "$mid" "$title" "$path"
+    if [ "$QB_ONLY" != "1" ]; then
+        arr_delete_movie "$RADARR_API_KEY" "$mid"
+    fi
+}
 
-    echo "=== media-purge remaining-season cover ==="
-    cover_check() {
-        local want="$1" name="$2" seasons="$3" series="$4" files="$5"
-        local remain got
-        remain=$(seasons_remaining_json "$series" "$files")
-        if seasons_list_covers_remaining "$seasons" "$remain"; then
-            got="cover"
-        else
-            got="partial"
+run_series_purge() {
+    local sid="$1"
+    [ -n "$sid" ] || die "--series-id required"
+    [ -n "$SONARR_API_KEY" ] || die "Sonarr API key missing"
+    local series title path season_lines seasons_json
+    series=$(arr_get "$SONARR_URL" "$SONARR_API_KEY" "/api/v3/series/${sid}")
+    title=$(echo "$series" | jq -r '.title // empty')
+    path=$(echo "$series" | jq -r '.path // empty')
+    season_lines=$(parse_season_list "$SEASONS")
+    if [ -n "$season_lines" ]; then
+        seasons_json=$(seasons_json_from_list "$season_lines")
+        log "series ${sid} season-scoped ${seasons_json}"
+        purge_qb_for_series "$SONARR_API_KEY" "$sid" "$title" "$path" "$seasons_json"
+        if [ "$QB_ONLY" != "1" ]; then
+            if seasons_cover_remaining "$SONARR_API_KEY" "$sid" "$seasons_json"; then
+                log "requested seasons cover remaining library; deleting series"
+                arr_delete_series "$SONARR_API_KEY" "$sid"
+            else
+                arr_delete_series_seasons "$SONARR_API_KEY" "$sid" "$seasons_json"
+            fi
         fi
-        if [ "$got" = "$want" ]; then
-            echo "  PASS: $name"
-        else
-            echo "  FAIL: $name (want='$want' got='$got' remain='$remain')"
-            failures=$((failures + 1))
+    else
+        purge_qb_for_series "$SONARR_API_KEY" "$sid" "$title" "$path"
+        if [ "$QB_ONLY" != "1" ]; then
+            arr_delete_series "$SONARR_API_KEY" "$sid"
         fi
-    }
-    _series_s01s02='{"seasons":[{"seasonNumber":1,"monitored":true},{"seasonNumber":2,"monitored":true}]}'
-    _files_s01s02='[{"seasonNumber":1},{"seasonNumber":2}]'
-    _series_s01_spec='{"seasons":[{"seasonNumber":0,"monitored":true},{"seasonNumber":1,"monitored":true}]}'
-    _files_s01_spec='[{"seasonNumber":0},{"seasonNumber":1}]'
-    _series_spec_only='{"seasons":[{"seasonNumber":0,"monitored":true}]}'
-    _files_spec_only='[{"seasonNumber":0}]'
-    cover_check "partial" "S01 request does not cover S01+S02" \
-        '[1]' "$_series_s01s02" "$_files_s01s02"
-    cover_check "cover" "S01+S02 request covers S01+S02" \
-        '[1,2]' "$_series_s01s02" "$_files_s01s02"
-    cover_check "partial" "S01 request does not cover S01+specials" \
-        '[1]' "$_series_s01_spec" "$_files_s01_spec"
-    cover_check "cover" "S01+specials request covers both" \
-        '[0,1]' "$_series_s01_spec" "$_files_s01_spec"
-    cover_check "partial" "S01 request does not cover specials-only leftover" \
-        '[1]' "$_series_spec_only" "$_files_spec_only"
-    cover_check "cover" "specials request covers specials-only leftover" \
-        '[0]' "$_series_spec_only" "$_files_spec_only"
+    fi
+}
 
-    echo "=== media-purge leftover download dirs ==="
-    _old_root="${MEDIA_ROOT:-}"
-    MEDIA_ROOT=$(mktemp -d)
-    mkdir -p "$MEDIA_ROOT/torrents/tv/Loki.S02.COMPLETE.1080p.DSNP.WEB-DL" \
-             "$MEDIA_ROOT/torrents/tv/Lost in Space.S01.COMPLETE" \
-             "$MEDIA_ROOT/torrents/incomplete/movies/www.UIndex.org - The Avengers 2012 REPACK BluRay" \
-             "$MEDIA_ROOT/torrents/movies/Avengers Age of Ultron 2015 1080p"
-    DRY_RUN=0
-    remove_orphan_torrent_dirs "Loki"
-    if [ ! -d "$MEDIA_ROOT/torrents/tv/Loki.S02.COMPLETE.1080p.DSNP.WEB-DL" ]; then
-        echo "  PASS: Loki leftover pack dir removed"
-    else
-        echo "  FAIL: Loki leftover pack dir still present"
-        failures=$((failures + 1))
-    fi
-    if [ -d "$MEDIA_ROOT/torrents/tv/Lost in Space.S01.COMPLETE" ]; then
-        echo "  PASS: Lost in Space leftover left alone"
-    else
-        echo "  FAIL: Lost in Space leftover was removed"
-        failures=$((failures + 1))
-    fi
-    remove_orphan_torrent_dirs "The Avengers (2012)"
-    if [ ! -d "$MEDIA_ROOT/torrents/incomplete/movies/www.UIndex.org - The Avengers 2012 REPACK BluRay" ]; then
-        echo "  PASS: Avengers incomplete leftover removed"
-    else
-        echo "  FAIL: Avengers incomplete leftover still present"
-        failures=$((failures + 1))
-    fi
-    if [ -d "$MEDIA_ROOT/torrents/movies/Avengers Age of Ultron 2015 1080p" ]; then
-        echo "  PASS: Age of Ultron leftover left alone"
-    else
-        echo "  FAIL: Age of Ultron leftover was removed"
-        failures=$((failures + 1))
-    fi
-    rm -rf "$MEDIA_ROOT"
-    MEDIA_ROOT="${_old_root}"
-
-    if [ "$failures" -gt 0 ]; then
-        echo "match-self-test: FAILED ($failures)"
-        exit 1
-    fi
-    echo "match-self-test: OK"
-    exit 0
+# --- sourced by unit tests: stop here ---
+if [ "${MEDIA_PURGE_SOURCE_ONLY:-0}" = "1" ]; then
+    return 0 2>/dev/null || exit 0
 fi
 
 # --- args ---
@@ -1027,7 +966,7 @@ while [ $# -gt 0 ]; do
         --qb-only) QB_ONLY=1; shift ;;
         --dry-run) DRY_RUN=1; shift ;;
         --skip-jellyfin) SKIP_JELLYFIN=1; shift ;;
-        -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
         *) die "unknown arg: $1" ;;
     esac
 done
@@ -1041,7 +980,6 @@ case "$MODE" in
         log "radarr event type=${et}"
         case "$et" in
             Test) log "Test ok"; exit 0 ;;
-            # Movie-level only: file deletes are partial and must not wipe whole qB items by title.
             MovieDelete) ;;
             MovieFileDelete)
                 log "ignore MovieFileDelete (movie-level purge only)"
@@ -1057,7 +995,6 @@ case "$MODE" in
         else
             qbit_delete_by_folder_key "$(folder_key_from "$path" "$title")"
         fi
-        # Files already removed by Radarr; still refresh Jellyfin.
         PURGE_TOUCHED=1
         notify_jellyfin
         exit 0
@@ -1087,42 +1024,10 @@ case "$MODE" in
         exit 0
         ;;
     movie)
-        [ -n "$MOVIE_ID" ] || die "--movie-id required"
-        [ -n "$RADARR_API_KEY" ] || die "Radarr API key missing"
-        movie=$(arr_get "$RADARR_URL" "$RADARR_API_KEY" "/api/v3/movie/${MOVIE_ID}")
-        title=$(echo "$movie" | jq -r '.title // empty')
-        path=$(echo "$movie" | jq -r '.path // empty')
-        # qB first (history still available), then *arr delete
-        purge_qb_for_movie "$RADARR_API_KEY" "$MOVIE_ID" "$title" "$path"
-        if [ "$QB_ONLY" != "1" ]; then
-            arr_delete_movie "$RADARR_API_KEY" "$MOVIE_ID"
-        fi
+        run_movie_purge "$MOVIE_ID"
         ;;
     series)
-        [ -n "$SERIES_ID" ] || die "--series-id required"
-        [ -n "$SONARR_API_KEY" ] || die "Sonarr API key missing"
-        series=$(arr_get "$SONARR_URL" "$SONARR_API_KEY" "/api/v3/series/${SERIES_ID}")
-        title=$(echo "$series" | jq -r '.title // empty')
-        path=$(echo "$series" | jq -r '.path // empty')
-        season_lines=$(parse_season_list "$SEASONS")
-        if [ -n "$season_lines" ]; then
-            seasons_json=$(seasons_json_from_list "$season_lines")
-            log "series ${SERIES_ID} season-scoped ${seasons_json}"
-            purge_qb_for_series "$SONARR_API_KEY" "$SERIES_ID" "$title" "$path" "$seasons_json"
-            if [ "$QB_ONLY" != "1" ]; then
-                if seasons_cover_remaining "$SONARR_API_KEY" "$SERIES_ID" "$seasons_json"; then
-                    log "requested seasons cover remaining library; deleting series"
-                    arr_delete_series "$SONARR_API_KEY" "$SERIES_ID"
-                else
-                    arr_delete_series_seasons "$SONARR_API_KEY" "$SERIES_ID" "$seasons_json"
-                fi
-            fi
-        else
-            purge_qb_for_series "$SONARR_API_KEY" "$SERIES_ID" "$title" "$path"
-            if [ "$QB_ONLY" != "1" ]; then
-                arr_delete_series "$SONARR_API_KEY" "$SERIES_ID"
-            fi
-        fi
+        run_series_purge "$SERIES_ID"
         ;;
     path)
         [ -n "$PATH_ARG" ] || die "--path required"
@@ -1191,7 +1096,7 @@ case "$MODE" in
         movies=$(arr_get "$RADARR_URL" "$RADARR_API_KEY" "/api/v3/movie")
         mid=$(echo "$movies" | jq -r --argjson t "$TMDB_ID" '.[] | select(.tmdbId == $t) | .id' | head -1)
         [ -n "$mid" ] || die "no Radarr movie tmdbId=${TMDB_ID}"
-        exec "$0" --movie-id "$mid"
+        run_movie_purge "$mid"
         ;;
     tvdb)
         [ -n "$TVDB_ID" ] || die "--tvdb required"
@@ -1199,10 +1104,7 @@ case "$MODE" in
         series_json=$(arr_get "$SONARR_URL" "$SONARR_API_KEY" "/api/v3/series")
         sid=$(echo "$series_json" | jq -r --argjson t "$TVDB_ID" '.[] | select(.tvdbId == $t) | .id' | head -1)
         [ -n "$sid" ] || die "no Sonarr series tvdbId=${TVDB_ID}"
-        if [ -n "$SEASONS" ]; then
-            exec "$0" --series-id "$sid" --seasons "$SEASONS"
-        fi
-        exec "$0" --series-id "$sid"
+        run_series_purge "$sid"
         ;;
     *)
         die "specify --movie-id, --series-id, --path, --tmdb, --tvdb, --radarr-event, or --sonarr-event"

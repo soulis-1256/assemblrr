@@ -1,0 +1,5 @@
+# Overlay: VueTorrent alternate WebUI mod for LinuxServer.io qBittorrent
+services:
+  qbittorrent:
+    environment:
+      - DOCKER_MODS=ghcr.io/vuetorrent/vuetorrent-lsio-mod:2.37.0

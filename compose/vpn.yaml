@@ -1,5 +1,5 @@
 # Overlay: VPN via Gluetun — routes qBittorrent through VPN
-# Usage: docker compose -f base.yaml -f vpn.yaml --profile <media_service> up -d
+# Usage: docker compose -f base.yaml -f vpn.yaml up -d
 
 services:
   gluetun:
@@ -65,7 +65,7 @@ services:
     restart: unless-stopped
 
   deunhealth:
-    image: qmcgaw/deunhealth:v0.3.0
+    image: qmcgaw/deunhealth@sha256:db1e4fcd3aceeb0da34a83f7a8a5432df586e6d0388ddb6ad8dd7b479e4aa25d
     container_name: deunhealth
     network_mode: "none"
     environment:

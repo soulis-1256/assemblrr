@@ -17,16 +17,20 @@ test_suite "flush_tty_input / read_prompt"
 assert_success "flush_tty_input returns 0" flush_tty_input
 assert_true "read_prompt exists" "type read_prompt >/dev/null"
 # EOF on stdin must not trip set -e when /dev/tty is unavailable to the helper's else branch.
-src=$(sed -n '/^read_prompt()/,/^}/p' "$REPO_ROOT/lib/core.sh")
+src=$(sed -n '/^read_prompt()/,/^}/p' "$REPO_ROOT/lib/tty.sh")
 assert_contains "$src" '</dev/tty' "read_prompt reads the tty"
 assert_contains "$src" '|| true' "read_prompt ignores EOF"
-flush_src=$(sed -n '/^flush_tty_input()/,/^}/p' "$REPO_ROOT/lib/core.sh")
+flush_src=$(sed -n '/^flush_tty_input()/,/^}/p' "$REPO_ROOT/lib/tty.sh")
 assert_contains "$flush_src" 'read -r -t' "flush drains leftover Enter"
 assert_not_contains "$flush_src" 'stty' "flush does not change stty"
-assert_contains "$src" 'EPOCHREALTIME' "read_prompt ignores instant empty (leaked Enter)"
+# Behavioral test: piped empty Enter returns immediately without double-prompting
+rp_val="unset"
+read_prompt "Test: " rp_val </dev/null >/dev/null 2>&1
+assert_eq "" "$rp_val" "read_prompt handles EOF cleanly under set -e"
 os_fn=$(sed -n '/^configure_opensubtitles()/,/^}/p' "$REPO_ROOT/lib/prompts.sh")
 assert_contains "$os_fn" 'ui_is_edit' "edit skips the optional y/N"
-assert_contains "$os_fn" '_opensubtitles_ask_and_verify 1' "edit goes straight to username/password"
+assert_contains "$os_fn" '_opensubtitles_collect 1' "edit goes straight to username/password"
+assert_not_contains "$(cat "$REPO_ROOT/lib/prompts.sh")" 's38zmzVlW7IlYruWi7mHwDYl2SfMQoC1' "no borrowed OpenSubtitles API key"
 assert_not_contains "$os_fn" 'Answer n to clear' "edit does not ask n to clear"
 edit_os=$(sed -n '/^_config_edit_opensubtitles()/,/^}/p' "$REPO_ROOT/lib/config_edit.sh")
 assert_contains "$edit_os" 'Cancelled.' "edit cancel is one line"
@@ -183,6 +187,10 @@ mkdir -p "$done/compose"
 : >"$done/.assemblrr-config"
 : >"$done/cli.sh"
 assert_success "config+cli is complete" is_complete_assemblrr_install "$done"
+: >"$done/.assemblrr-setup-in-progress"
+assert_failure "in-progress marker marks install incomplete" is_complete_assemblrr_install "$done"
+rm -f "$done/.assemblrr-setup-in-progress"
+assert_success "removing in-progress marker restores completeness" is_complete_assemblrr_install "$done"
 empty="$tmp/empty/assemblrr"
 mkdir -p "$empty"
 assert_failure "empty dir is not complete" is_complete_assemblrr_install "$empty"
@@ -195,6 +203,10 @@ assert_failure "cli without runtime config is not complete" is_complete_assemblr
 test_suite "setup refuses a complete install"
 assert_true "setup calls the gate" "grep -q refuse_setup_if_already_installed \"$REPO_ROOT/bin/setup.sh\""
 assert_true "setup offers leftover cleanup" "grep -q offer_leftover_cleanup \"$REPO_ROOT/bin/setup.sh\""
+assert_true "setup writes in-progress marker in bootstrap_operator" \
+    "sed -n '/^bootstrap_operator()/,/^}/p' \"$REPO_ROOT/bin/setup.sh\" | grep -q '\.assemblrr-setup-in-progress'"
+assert_true "setup clears in-progress marker in main" \
+    "sed -n '/^main()/,/^}/p' \"$REPO_ROOT/bin/setup.sh\" | grep -q 'rm -f .*\.assemblrr-setup-in-progress'"
 gate=$(sed -n '/^refuse_setup_if_already_installed()/,/^}/p' "$REPO_ROOT/lib/prompts.sh")
 assert_contains "$gate" "already installed" "says already installed"
 assert_contains "$gate" "uninstall" "points at uninstall"
@@ -235,6 +247,30 @@ assert_contains "$out_both" "Media:   $both_home/assemblrr-media" "both: media l
 HOME="$both_home" offer_leftover_cleanup <<< $'y\nn' >/dev/null 2>&1 || true
 assert_false "install directory removed on y" "[ -d \"$both_home/assemblrr\" ]"
 assert_true "media directory kept on n" "[ -d \"$both_home/assemblrr-media\" ]"
+
+aborted_home="$tmp/aborted-home"
+mkdir -p "$aborted_home/assemblrr" "$aborted_home/.local/bin"
+cat > "$aborted_home/assemblrr/.assemblrr-config" <<EOF
+INSTALL_DIRECTORY="$aborted_home/assemblrr"
+MEDIA_DIRECTORY="$aborted_home/assemblrr-media"
+VPN_ENABLED="y"
+EOF
+: > "$aborted_home/assemblrr/cli.sh"
+: > "$aborted_home/assemblrr/.assemblrr-setup-in-progress"
+cat > "$aborted_home/.assemblrr-config" <<EOF
+INSTALL_DIRECTORY="$aborted_home/assemblrr"
+MEDIA_DIRECTORY="$aborted_home/assemblrr-media"
+KNOWN_INSTALLS="$aborted_home/assemblrr"
+EOF
+: > "$aborted_home/.local/bin/assemblrr"
+aborted_rc=0
+(HOME="$aborted_home" refuse_setup_if_already_installed) || aborted_rc=$?
+assert_eq "0" "$aborted_rc" "aborted install does not trigger already-installed block"
+out_aborted=$(HOME="$aborted_home" offer_leftover_cleanup <<< "y" 2>&1 || true)
+assert_contains "$out_aborted" "incomplete" "aborted leftover cleanup labels incomplete setup"
+assert_false "aborted install directory removed on y" "[ -d \"$aborted_home/assemblrr\" ]"
+assert_false "stale pointer removed after aborted install cleanup" "[ -f \"$aborted_home/.assemblrr-config\" ]"
+assert_false "stale CLI wrapper removed after aborted install cleanup" "[ -f \"$aborted_home/.local/bin/assemblrr\" ]"
 
 test_suite "print_detected_locations"
 loc=$(INSTALL_DIR=/mnt/e/assemblrr MEDIA_DIRECTORY=/mnt/e/assemblrr-media \
@@ -315,5 +351,11 @@ printf '%s\n' '#!/bin/bash' 'echo other-cli' >"$other/cli.sh"
 chmod +x "$other/cli.sh"
 out=$(HOME="$wrap_home" ASSEMBLRR_DIR="$other" "$wrap_home/.local/bin/assemblrr")
 assert_eq "other-cli" "$out" "ASSEMBLRR_DIR wins over pointer"
+
+test_suite "Graceful Ctrl+C interrupt handling & read_masked trap preservation"
+setup_src=$(cat "$REPO_ROOT/bin/setup.sh")
+assert_contains "$setup_src" "setup_on_interrupt()" "setup defines graceful interrupt handler"
+assert_contains "$setup_src" "trap 'setup_on_interrupt' INT TERM" "main installs INT/TERM trap"
+assert_contains "$(cat "$REPO_ROOT/lib/tty.sh")" "trap -p INT" "read_masked preserves outer INT trap"
 
 test_summary

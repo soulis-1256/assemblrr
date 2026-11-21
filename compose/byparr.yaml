@@ -1,0 +1,25 @@
+# Overlay: Byparr Cloudflare challenge solver (drop-in FlareSolverr replacement for Prowlarr)
+services:
+  byparr:
+    image: ghcr.io/thephaseless/byparr:3.1.1
+    container_name: byparr
+    environment:
+      - TZ=${TZ}
+    shm_size: "1gb"
+    tmpfs:
+      - /tmp:exec,mode=1777,size=1G
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -sf http://127.0.0.1:8191/health >/dev/null || python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8191/health', timeout=5)\"",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+      start_interval: 2s
+    restart: unless-stopped
+    networks:
+      assemblrr_network:
+        ipv4_address: 172.60.0.26

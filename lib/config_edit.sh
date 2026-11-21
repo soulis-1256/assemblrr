@@ -1,7 +1,8 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Modular config edit — shared prompt/picker engines, post-install copy.
-# Sourced by the CLI. Does not run on source.
 # Provides: config_edit_run, config_edit_usage, config_edit_section_ids, config_set_kv
+# Does not set -euo pipefail when sourced.
 
 if [ -n "${_ASSEMBLRR_CONFIG_EDIT_SOURCED:-}" ]; then
     return 0
@@ -23,7 +24,10 @@ opensubtitles|OpenSubtitles.com username and password
 auth|Shared login for every service UI
 timezone|Container timezone
 vpn|VPN on/off, provider, and credentials (restarts stack)
-media|Jellyfin (supported) / Emby / Plex unsupported (restarts stack)
+vuetorrent|qBittorrent VueTorrent WebUI theme (restarts stack)
+gpu|Jellyfin hardware GPU transcoding: Intel/AMD or NVIDIA (restarts stack)
+byparr|Byparr Cloudflare solver for Prowlarr (restarts stack)
+usenet|SABnzbd Usenet downloader and NNTP provider (restarts stack)
 all|Re-run the full setup wizard
 EOF
 }
@@ -46,7 +50,6 @@ config_edit_usage() {
     done < <(_config_edit_catalog)
 }
 
-# Resolve picker output to a catalog id. Empty → "".
 config_edit_resolve() {
     local want="${1:-}"
     want=$(echo "$want" | tr '[:upper:]' '[:lower:]')
@@ -62,40 +65,51 @@ config_edit_resolve() {
     return 1
 }
 
-# Update or append KEY=value in a dotenv / runtime-config file.
-# $4 = quoted (1, default) writes KEY="value"; 0 writes KEY=value
+# Atomically update or append KEY=value in a dotenv / runtime-config file, preserving mode.
+# $4 = quoted (1, default) writes KEY="escaped_value"; 0 writes KEY=value
 config_set_kv() {
     local file="$1"
     local key="$2"
     local value="$3"
     local quoted="${4:-1}"
-    local tmp line_out
+    local tmp mode="" escaped
 
     [ -n "$file" ] && [ -n "$key" ] || return 1
     mkdir -p "$(dirname "$file")"
+    if [ -f "$file" ]; then
+        mode=$(stat -c '%a' "$file" 2>/dev/null || stat -f '%Lp' "$file" 2>/dev/null || echo "")
+    fi
     tmp=$(mktemp)
     if [ -f "$file" ]; then
         grep -v "^${key}=" "$file" > "$tmp" || true
     fi
     if [ "$quoted" = "1" ]; then
-        printf '%s="%s"\n' "$key" "$value" >> "$tmp"
+        escaped="${value//\\/\\\\}"
+        escaped="${escaped//\"/\\\"}"
+        printf '%s="%s"\n' "$key" "$escaped" >> "$tmp"
     else
         printf '%s=%s\n' "$key" "$value" >> "$tmp"
     fi
     mv "$tmp" "$file"
+    if [ -n "$mode" ]; then
+        chmod "$mode" "$file" 2>/dev/null || true
+    fi
 }
 
-# Remove KEY=... lines from a dotenv / runtime-config file.
 config_unset_kv() {
     local file="$1"
     local key="$2"
-    local tmp
+    local tmp mode=""
 
     [ -n "$file" ] && [ -n "$key" ] || return 1
     [ -f "$file" ] || return 0
+    mode=$(stat -c '%a' "$file" 2>/dev/null || stat -f '%Lp' "$file" 2>/dev/null || echo "")
     tmp=$(mktemp)
     grep -v "^${key}=" "$file" > "$tmp" || true
     mv "$tmp" "$file"
+    if [ -n "$mode" ]; then
+        chmod "$mode" "$file" 2>/dev/null || true
+    fi
 }
 
 # --- load install + *arr libs (idempotent) ---
@@ -109,6 +123,7 @@ _config_edit_load() {
 
     if [ -z "${INSTALL_DIR:-}" ] || [ ! -d "$INSTALL_DIR" ]; then
         log_error "Could not find installation. Run setup first."
+        return 1
     fi
 
     safe_source "$INSTALL_DIR/.assemblrr-config"
@@ -131,12 +146,9 @@ _config_edit_load() {
     AUTH_USERNAME=$(cat "$INSTALL_DIR/secrets/auth_username.txt" 2>/dev/null || echo "${AUTH_USERNAME:-$USER}")
     AUTH_PASSWORD=$(cat "$INSTALL_DIR/secrets/auth_password.txt" 2>/dev/null || echo "${AUTH_PASSWORD:-}")
 
-    # Section editors always use the interactive prompts, never express defaults.
     ui_set_mode edit
     SETUP_MODE="manual"
-    if [ -z "${SUPPORTED_MEDIA_SERVICES+x}" ]; then
-        SUPPORTED_MEDIA_SERVICES=("jellyfin" "emby" "plex")
-    fi
+    SUPPORTED_MEDIA_SERVICES=("jellyfin")
 
     CONFIGURE_LOG="${CONFIGURE_LOG:-/tmp/${APP_NAME:-assemblrr}-config-edit-$(date '+%Y%m%d-%H%M%S').log}"
     if ! type _cfg_log_info >/dev/null 2>&1; then
@@ -146,29 +158,16 @@ _config_edit_load() {
         _configure_total=0
         _configure_ok=0
         _configure_fail=0
-        log_step() { echo -e " ${GREEN}✓${NC} $1" | tee -a "$CONFIGURE_LOG"; _configure_ok=$((_configure_ok + 1)); _configure_total=$((_configure_total + 1)); }
-        log_step_fail() { echo -e " ${RED}✗${NC} $1" | tee -a "$CONFIGURE_LOG"; _configure_fail=$((_configure_fail + 1)); _configure_total=$((_configure_total + 1)); }
+        log_step() { printf ' %b✓%b %s\n' "${GREEN:-}" "${NC:-}" "$1"; printf ' ✓ %s\n' "$1" >> "$CONFIGURE_LOG"; _configure_ok=$((_configure_ok + 1)); _configure_total=$((_configure_total + 1)); }
+        log_step_fail() { printf ' %b✗%b %s\n' "${RED:-}" "${NC:-}" "$1"; printf ' ✗ %s\n' "$1" >> "$CONFIGURE_LOG"; _configure_fail=$((_configure_fail + 1)); _configure_total=$((_configure_total + 1)); }
     fi
 
     local lib="${INSTALL_DIR}/lib"
-    # shellcheck source=/dev/null
-    [ -f "$lib/ui.sh" ] && source "$lib/ui.sh"
-    # shellcheck source=/dev/null
-    [ -f "$lib/fzf-tui.sh" ] && source "$lib/fzf-tui.sh"
-    # shellcheck source=/dev/null
-    [ -f "$lib/api.sh" ] && source "$lib/api.sh"
-    # shellcheck source=/dev/null
-    [ -f "$lib/quality.sh" ] && source "$lib/quality.sh"
-    # shellcheck source=/dev/null
-    [ -f "$lib/arr.sh" ] && source "$lib/arr.sh"
-    # shellcheck source=/dev/null
-    [ -f "$lib/jellyfin.sh" ] && source "$lib/jellyfin.sh"
-    # shellcheck source=/dev/null
-    [ -f "$lib/seerr.sh" ] && source "$lib/seerr.sh"
-    # shellcheck source=/dev/null
-    [ -f "$lib/bazarr.sh" ] && source "$lib/bazarr.sh"
-    # shellcheck source=/dev/null
-    [ -f "$lib/prompts.sh" ] && source "$lib/prompts.sh"
+    local m
+    for m in ui.sh fzf-tui.sh api.sh quality.sh arr.sh recyclarr.sh jellyfin.sh seerr.sh bazarr.sh usenet.sh prompts.sh; do
+        # shellcheck source=/dev/null
+        [ -f "$lib/$m" ] && source "$lib/$m"
+    done
 
     _config_edit_load_keys
     _config_edit_loaded=1
@@ -196,8 +195,9 @@ _config_edit_runtime_file() {
 _config_edit_restart_stack() {
     log_info "Restarting stack to apply compose/env changes..."
     build_compose_args "$INSTALL_DIR" "${VPN_ENABLED:-n}"
-    if ! compose_up_stack "${MEDIA_SERVICE:-jellyfin}"; then
+    if ! compose_up_stack "default"; then
         log_error "docker compose up failed"
+        return 1
     fi
     log_success "Stack restarted"
 }
@@ -219,15 +219,16 @@ _config_edit_pick() {
         echo "$selected"
         return 0
     fi
-    echo
-    log_info "What do you want to change?"
+    # Non-fzf fallback prints all UI/prompts to stderr so stdout returns ONLY the chosen section id
+    echo >&2
+    log_info "What do you want to change?" >&2
     local i=1 id desc
     while IFS='|' read -r id desc; do
-        printf "  %2d) %-14s %s\n" "$i" "$id" "$desc"
+        printf "  %2d) %-14s %s\n" "$i" "$id" "$desc" >&2
         i=$((i + 1))
     done < <(_config_edit_catalog)
-    local choice
-    read -p "Choose a section [1]: " choice || true
+    local choice=""
+    read_prompt "Choose a section [1]: " choice
     choice=${choice:-1}
     if [[ "$choice" =~ ^[0-9]+$ ]]; then
         sed -n "${choice}p" < <(config_edit_section_ids)
@@ -242,9 +243,11 @@ _config_edit_indexers() {
     _config_edit_load
     if [ -z "${PROWLARR_API_KEY:-}" ]; then
         log_error "Prowlarr API key not available. Is Prowlarr running?"
+        return 1
     fi
     if ! wait_for_api "Prowlarr" "9696" "$PROWLARR_API_KEY" "/api/v1/system/status"; then
         log_error "Prowlarr is not responding on port 9696"
+        return 1
     fi
     SELECTED_INDEXERS=()
     configure_indexers "$PROWLARR_API_KEY"
@@ -256,7 +259,7 @@ _config_edit_indexers() {
         if [ -t 0 ] && [ "${ASSEMBLRR_NONINTERACTIVE:-0}" != "1" ]; then
             echo
             log_warning "No indexers selected."
-            read -p "Remove ALL Prowlarr indexers? (y/N) [Default = n]: " wipe
+            read_prompt "Remove ALL Prowlarr indexers? (y/N) [Default = n]: " wipe
             wipe=${wipe:-n}
         fi
         if [ "${wipe,,}" != "y" ]; then
@@ -282,7 +285,7 @@ _config_edit_providers() {
         if [ -t 0 ] && [ "${ASSEMBLRR_NONINTERACTIVE:-0}" != "1" ]; then
             echo
             log_warning "No subtitle providers selected."
-            read -p "Disable ALL Bazarr providers? (y/N) [Default = n]: " wipe
+            read_prompt "Disable ALL Bazarr providers? (y/N) [Default = n]: " wipe
             wipe=${wipe:-n}
         fi
         if [ "${wipe,,}" != "y" ]; then
@@ -304,9 +307,7 @@ _config_edit_language() {
     SUBTITLE_LANGUAGE="${subtitle_language:-}"
     SUBTITLE_LANGUAGES="${subtitle_languages:-}"
     configure_bazarr || true
-    if [ "${MEDIA_SERVICE:-}" = "jellyfin" ]; then
-        configure_jellyfin || true
-    fi
+    configure_jellyfin || true
 }
 
 _config_edit_profile() {
@@ -333,8 +334,10 @@ _config_edit_opensubtitles() {
     local secrets_dir="$INSTALL_DIR/secrets"
     mkdir -p "$secrets_dir"
     if [ "${opensubtitles_enabled:-n}" = "y" ] && [ -n "${opensubtitles_username:-}" ]; then
-        echo -n "${opensubtitles_username}" > "$secrets_dir/opensubtitles_username.txt"
-        echo -n "${opensubtitles_password:-}" > "$secrets_dir/opensubtitles_password.txt"
+        (umask 077
+            echo -n "${opensubtitles_username}" > "$secrets_dir/opensubtitles_username.txt"
+            echo -n "${opensubtitles_password:-}" > "$secrets_dir/opensubtitles_password.txt"
+        )
         chmod 600 "$secrets_dir/opensubtitles_username.txt" "$secrets_dir/opensubtitles_password.txt"
         log_success "OpenSubtitles.com credentials written to $secrets_dir"
         configure_bazarr || true
@@ -375,34 +378,27 @@ _config_edit_auth() {
         fail=1
     fi
 
-    case "${MEDIA_SERVICE:-jellyfin}" in
-        jellyfin)
-            jellyfin_change_credentials "$old_user" "$old_pass" "$AUTH_USERNAME" "$AUTH_PASSWORD" || fail=1
-            ;;
-        emby)
-            jellyfin_change_credentials "$old_user" "$old_pass" "$AUTH_USERNAME" "$AUTH_PASSWORD" 8096 "Emby" || fail=1
-            ;;
-        plex)
-            log_warning "Plex account password is not this login — change it in Plex."
-            ;;
-    esac
-
+    jellyfin_change_credentials "$old_user" "$old_pass" "$AUTH_USERNAME" "$AUTH_PASSWORD" || fail=1
     bazarr_set_auth || fail=1
 
-    if [ "${MEDIA_SERVICE:-jellyfin}" = "jellyfin" ] || [ "${MEDIA_SERVICE:-}" = "emby" ]; then
-        if type seerr_verify_login >/dev/null 2>&1; then
-            seerr_verify_login || true
-        fi
+    if sabnzbd_enabled 2>/dev/null; then
+        sabnzbd_change_credentials "$AUTH_USERNAME" "$AUTH_PASSWORD" || fail=1
+    fi
+
+    if type seerr_verify_login >/dev/null 2>&1; then
+        seerr_verify_login || true
     fi
 
     if [ "$fail" -ne 0 ]; then
-        log_warning "Some UIs did not take the new password. Secrets were left unchanged. Run ${APP_CLI_NAME:-assemblrr} config edit and pick login again (same password)."
+        log_warning "Some UIs did not take the new password. Secrets were left unchanged. Run ${APP_CLI_NAME:-assemblrr} config edit and pick auth again."
         return 1
     fi
 
     mkdir -p "$secrets_dir"
-    echo -n "$AUTH_USERNAME" > "$secrets_dir/auth_username.txt"
-    echo -n "$AUTH_PASSWORD" > "$secrets_dir/auth_password.txt"
+    (umask 077
+        echo -n "$AUTH_USERNAME" > "$secrets_dir/auth_username.txt"
+        echo -n "$AUTH_PASSWORD" > "$secrets_dir/auth_password.txt"
+    )
     chmod 600 "$secrets_dir/auth_username.txt" "$secrets_dir/auth_password.txt"
     log_success "Auth credentials written to $secrets_dir"
 }
@@ -441,15 +437,17 @@ _config_edit_vpn() {
     local secrets_dir="$INSTALL_DIR/secrets"
     mkdir -p "$secrets_dir"
     if [ "$enabled" = "y" ]; then
-        if [ "${vpn_type:-}" = "openvpn" ]; then
-            echo -n "${vpn_user:-}" > "$secrets_dir/openvpn_user.txt"
-            echo -n "${vpn_password:-}" > "$secrets_dir/openvpn_password.txt"
-            : > "$secrets_dir/wireguard_private_key.txt"
-        else
-            echo -n "${wireguard_private_key:-}" > "$secrets_dir/wireguard_private_key.txt"
-            : > "$secrets_dir/openvpn_user.txt"
-            : > "$secrets_dir/openvpn_password.txt"
-        fi
+        (umask 077
+            if [ "${vpn_type:-}" = "openvpn" ]; then
+                echo -n "${vpn_user:-}" > "$secrets_dir/openvpn_user.txt"
+                echo -n "${vpn_password:-}" > "$secrets_dir/openvpn_password.txt"
+                : > "$secrets_dir/wireguard_private_key.txt"
+            else
+                echo -n "${wireguard_private_key:-}" > "$secrets_dir/wireguard_private_key.txt"
+                : > "$secrets_dir/openvpn_user.txt"
+                : > "$secrets_dir/openvpn_password.txt"
+            fi
+        )
         chmod 600 \
             "$secrets_dir/openvpn_user.txt" \
             "$secrets_dir/openvpn_password.txt" \
@@ -478,19 +476,69 @@ _config_edit_vpn() {
     fi
 }
 
-_config_edit_media() {
+_config_edit_vuetorrent() {
     _config_edit_load
-    local previous="${MEDIA_SERVICE:-jellyfin}"
-    configure_media_service
-    MEDIA_SERVICE="$media_service"
-    config_set_kv "$(_config_edit_runtime_file)" "MEDIA_SERVICE" "$MEDIA_SERVICE"
-    config_set_kv "$INSTALL_DIR/.env" "MEDIA_SERVICE" "$MEDIA_SERVICE" 0
+    configure_vuetorrent
+    VUETORRENT_ENABLED="${vuetorrent_enabled:-n}"
+    config_set_kv "$(_config_edit_runtime_file)" "VUETORRENT_ENABLED" "$VUETORRENT_ENABLED"
+    config_set_kv "$INSTALL_DIR/.env" "VUETORRENT_ENABLED" "$VUETORRENT_ENABLED" 0
     _config_edit_restart_stack
-    if [ "$MEDIA_SERVICE" = "jellyfin" ]; then
-        configure_jellyfin || true
-        configure_jellyfin_notifications || true
-    elif [ "$previous" != "$MEDIA_SERVICE" ]; then
-        log_info "Switched media server to ${MEDIA_SERVICE}. Finish any first-run UI setup, then run: ${APP_CLI_NAME:-assemblrr} config apply"
+    qbit_set_credentials || true
+}
+
+_config_edit_gpu() {
+    _config_edit_load
+    configure_gpu_transcoding
+    GPU_TRANSCODING="${gpu_transcoding:-none}"
+    config_set_kv "$(_config_edit_runtime_file)" "GPU_TRANSCODING" "$GPU_TRANSCODING"
+    config_set_kv "$INSTALL_DIR/.env" "GPU_TRANSCODING" "$GPU_TRANSCODING" 0
+    _config_edit_restart_stack
+    if type configure_jellyfin_transcoding >/dev/null 2>&1; then
+        type _jf_is_up >/dev/null 2>&1 && wait_until "Waiting for Jellyfin" 60 2 _jf_is_up || true
+        configure_jellyfin_transcoding "" 8096 || true
+    fi
+}
+
+_config_edit_byparr() {
+    _config_edit_load
+    configure_byparr
+    BYPARR_ENABLED="${byparr_enabled:-n}"
+    config_set_kv "$(_config_edit_runtime_file)" "BYPARR_ENABLED" "$BYPARR_ENABLED"
+    config_set_kv "$INSTALL_DIR/.env" "BYPARR_ENABLED" "$BYPARR_ENABLED" 0
+    _config_edit_restart_stack
+    if [ -n "${PROWLARR_API_KEY:-}" ]; then
+        wait_for_api "Prowlarr" "9696" "$PROWLARR_API_KEY" "/api/v1/system/status" || true
+        prowlarr_sync_byparr_proxy "$PROWLARR_API_KEY" || true
+    fi
+}
+
+_config_edit_usenet() {
+    _config_edit_load
+    configure_usenet
+    USENET_ENABLED="${usenet_enabled:-n}"
+    config_set_kv "$(_config_edit_runtime_file)" "USENET_ENABLED" "$USENET_ENABLED"
+    config_set_kv "$INSTALL_DIR/.env" "USENET_ENABLED" "$USENET_ENABLED" 0
+    config_set_kv "$(_config_edit_runtime_file)" "USENET_HOST" "${usenet_host:-}"
+    config_set_kv "$(_config_edit_runtime_file)" "USENET_PORT" "${usenet_port:-563}"
+    config_set_kv "$(_config_edit_runtime_file)" "USENET_SSL" "${usenet_ssl:-y}"
+    config_set_kv "$(_config_edit_runtime_file)" "USENET_USERNAME" "${usenet_username:-}"
+    config_set_kv "$(_config_edit_runtime_file)" "USENET_CONNECTIONS" "${usenet_connections:-8}"
+    USENET_HOST="${usenet_host:-}"
+    USENET_PORT="${usenet_port:-563}"
+    USENET_SSL="${usenet_ssl:-y}"
+    USENET_USERNAME="${usenet_username:-}"
+    USENET_CONNECTIONS="${usenet_connections:-8}"
+    if [ -n "${usenet_password:-}" ]; then
+        mkdir -p "$INSTALL_DIR/secrets"
+        (umask 077; echo -n "$usenet_password" > "$INSTALL_DIR/secrets/usenet_password.txt")
+        chmod 600 "$INSTALL_DIR/secrets/usenet_password.txt"
+    fi
+    mkdir -p "$INSTALL_DIR/config/sabnzbd"
+    setup_directory_structure "$MEDIA_DIRECTORY" 2>/dev/null || true
+    _config_edit_restart_stack
+    if [ "$USENET_ENABLED" = "y" ]; then
+        configure_sabnzbd || true
+        arr_configure_sabnzbd || true
     fi
 }
 
@@ -504,8 +552,9 @@ _config_edit_all() {
         setup_script="$INSTALL_DIR/setup.sh"
     else
         log_error "setup.sh not found in $INSTALL_DIR"
+        return 1
     fi
-    bash "$setup_script"
+    ASSEMBLRR_RECONFIGURE=1 bash "$setup_script" --reconfigure
 }
 
 _config_edit_load_picker() {
@@ -533,6 +582,7 @@ config_edit_run() {
             ;;
         *)
             log_error "Just run '${APP_CLI_NAME:-assemblrr} config edit' and pick from the menu"
+            return 1
             ;;
     esac
 
@@ -546,9 +596,9 @@ config_edit_run() {
 
     if ! section=$(config_edit_resolve "$raw"); then
         log_error "Unknown config section: $raw"
+        return 1
     fi
 
-    # fzf's Enter is still on the tty; drain it before any `read` prompt.
     flush_tty_input
 
     case "$section" in
@@ -560,8 +610,11 @@ config_edit_run() {
         auth) _config_edit_auth ;;
         timezone) _config_edit_timezone ;;
         vpn) _config_edit_vpn ;;
-        media) _config_edit_media ;;
+        vuetorrent) _config_edit_vuetorrent ;;
+        gpu) _config_edit_gpu ;;
+        byparr) _config_edit_byparr ;;
+        usenet) _config_edit_usenet ;;
         all) _config_edit_all ;;
-        *) log_error "Unknown config section: $section" ;;
+        *) log_error "Unknown config section: $section"; return 1 ;;
     esac
 }

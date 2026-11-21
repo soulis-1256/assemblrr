@@ -47,4 +47,22 @@ test_suite "mkdir under config after prepare"
 assert_success "can create sibling of gluetun" mkdir -p "$tmp/config/__test_sibling"
 assert_true "sibling exists" "[ -d \"$tmp/config/__test_sibling\" ]"
 
+test_suite "ensure_owned prefers Docker chown before sudo"
+mkdir -p "$tmp/root_owned_sim"
+(
+    chown() { return 1; }
+    run_docker() {
+        printf '%s\n' "$*" > "$tmp/docker_called"
+        return 0
+    }
+    sudo() {
+        : > "$tmp/sudo_called"
+        return 0
+    }
+    ensure_owned "$tmp/root_owned_sim" 9999 9999
+)
+assert_true "Docker chown fallback ran" "[ -f \"$tmp/docker_called\" ]"
+assert_contains "$(cat "$tmp/docker_called")" "chown -R 9999:9999 /target" "Docker runs chown -R on /target"
+assert_false "sudo was not invoked when Docker chown succeeded" "[ -f \"$tmp/sudo_called\" ]"
+
 test_summary

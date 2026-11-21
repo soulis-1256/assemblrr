@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Operator-facing UI mode for shared prompt/picker engines.
 # setup  = first install / full wizard (optional picks, skip is fine)
 # edit   = post-install `config edit` (change current state, Esc = no change)

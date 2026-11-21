@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Migration: remove legacy Recyclarr template files superseded by 4K / 1080p standardization.
 
 migration_id="003_standardize_quality_profiles"
@@ -13,7 +14,6 @@ LEGACY_RECYCLARR_INCLUDES=(
     "sonarr-web-2160.yml"
 )
 
-# Return 0 = skip
 migration_should_skip() {
     local install_dir="${1:-}"
     local legacy_file

@@ -35,11 +35,11 @@ assert_contains "$json" '"web_ui_username":"x"' "username field set"
 assert_contains "$json" '"web_ui_password":"p&q\"r"' "password JSON-escaped"
 
 test_suite "qbit login form encodes reserved characters"
-src=$(sed -n '/^qbit_login_form()/,/^}/p' "$REPO_ROOT/lib/arr.sh")
+src=$(sed -n '/^qbit_login_form()/,/^}/p' "$REPO_ROOT/lib/qbit.sh")
 assert_contains "$src" "--data-urlencode" "qbit_login_form url-encodes fields"
 assert_not_contains "$src" '-d "username=' "qbit_login_form does not raw-concat form body"
 
-src=$(sed -n '/^qbit_apply_prefs()/,/^}/p' "$REPO_ROOT/lib/arr.sh")
+src=$(sed -n '/^qbit_apply_prefs()/,/^}/p' "$REPO_ROOT/lib/qbit.sh")
 assert_contains "$src" "--data-urlencode" "setPreferences url-encodes json="
 assert_contains "$src" "qbit_core_prefs_json" "prefs built via jq helper"
 

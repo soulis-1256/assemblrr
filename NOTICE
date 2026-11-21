@@ -1,0 +1,32 @@
+assemblrr — Third-Party Upstream Projects & Legal Notice
+==========================================================
+
+assemblrr is licensed under the GNU General Public License v3.0 or later
+(GPL-3.0-or-later). See LICENSE for the full license text.
+
+assemblrr is an orchestration and configuration tool only. It does NOT include,
+host, distribute, index, or endorse copyrighted media content or unauthorized
+sources. Users are solely responsible for configuring lawful indexers, media,
+and subscriptions in their own deployments.
+
+This project automates and integrates with independent upstream open-source
+applications and container images maintained by their respective authors:
+
+  - Jellyfin               https://jellyfin.org/
+  - LinuxServer.io Images  https://www.linuxserver.io/
+  - Sonarr                 https://sonarr.tv/
+  - Radarr                 https://radarr.video/
+  - Prowlarr               https://prowlarr.com/
+  - Bazarr                 https://www.bazarr.dev/
+  - Seerr                  https://github.com/seerr-team/seerr
+  - Recyclarr              https://recyclarr.dev/
+  - TRaSH Guides           https://trash-guides.info/
+  - qBittorrent            https://www.qbittorrent.org/
+  - VueTorrent             https://github.com/VueTorrent/VueTorrent
+  - Gluetun                https://github.com/qdm12/gluetun
+  - Deunhealth             https://github.com/qdm12/deunhealth
+  - Byparr                 https://github.com/ThePhaseless/Byparr
+  - SABnzbd                https://sabnzbd.org/
+
+All trademarks, service names, and container images remain the property of
+their respective owners.

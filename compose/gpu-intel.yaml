@@ -1,0 +1,5 @@
+# Overlay: Intel Quick Sync / AMD VAAPI hardware transcoding for Jellyfin
+services:
+  jellyfin:
+    devices:
+      - /dev/dri:/dev/dri

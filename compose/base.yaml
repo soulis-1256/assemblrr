@@ -1,8 +1,7 @@
 services:
-  # Jellyfin — open source media server (recommended)
+  # Jellyfin — open source media server (Jellyfin 12.4+)
   jellyfin:
-    profiles: ["jellyfin"]
-    image: lscr.io/linuxserver/jellyfin:10.11.11
+    image: lscr.io/linuxserver/jellyfin:12.4ubu2604-ls60
     container_name: jellyfin
     environment:
       - PUID=${PUID}
@@ -27,61 +26,9 @@ services:
       assemblrr_network:
         ipv4_address: 172.60.0.11
 
-  # Emby — UNSUPPORTED optional profile (express/default is Jellyfin only).
-  emby:
-    profiles: ["emby"]
-    image: lscr.io/linuxserver/emby
-    container_name: emby
-    environment:
-      - PUID=${PUID}
-      - PGID=${PGID}
-      - TZ=${TZ}
-      - VERSION=docker
-    volumes:
-      - /etc/localtime:/etc/localtime:ro
-      - ${MEDIA_DIRECTORY}:/data
-      - ${INSTALL_DIRECTORY}/config/emby:/config
-    ports:
-      - 8096:8096
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8096/emby/System/Ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
-      start_interval: 2s
-    restart: unless-stopped
-    networks:
-      assemblrr_network:
-        ipv4_address: 172.60.0.11
-
-  # Plex — UNSUPPORTED optional profile (express/default is Jellyfin only).
-  plex:
-    profiles: ["plex"]
-    image: lscr.io/linuxserver/plex
-    container_name: plex
-    network_mode: host
-    environment:
-      - PUID=${PUID}
-      - PGID=${PGID}
-      - TZ=${TZ}
-      - VERSION=docker
-    volumes:
-      - /etc/localtime:/etc/localtime:ro
-      - ${MEDIA_DIRECTORY}:/data
-      - ${INSTALL_DIRECTORY}/config/plex:/config
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://127.0.0.1:32400/identity"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
-      start_interval: 2s
-
-  # qBittorrent — torrent client (ports added by overlay)
+  # qBittorrent — torrent client (ports/network added by vpn or direct-access overlay)
   qbittorrent:
-    image: lscr.io/linuxserver/qbittorrent:5.2.3
+    image: lscr.io/linuxserver/qbittorrent:5.3.0
     container_name: qbittorrent
     environment:
       - PUID=${PUID}
@@ -103,7 +50,7 @@ services:
 
   # Sonarr — TV show management and automation
   sonarr:
-    image: lscr.io/linuxserver/sonarr:4.0.19.2979-ls321
+    image: lscr.io/linuxserver/sonarr:4.0.20.3014-ls6
     container_name: sonarr
     environment:
       - PUID=${PUID}
@@ -131,7 +78,7 @@ services:
 
   # Radarr — movie management and automation
   radarr:
-    image: lscr.io/linuxserver/radarr:6.3.0.10514-ls313
+    image: lscr.io/linuxserver/radarr:7.0.3.10918-ls328
     container_name: radarr
     environment:
       - PUID=${PUID}
@@ -159,7 +106,7 @@ services:
 
   # Prowlarr — indexer management for *arr apps
   prowlarr:
-    image: lscr.io/linuxserver/prowlarr:2.5.2.5491-ls156
+    image: lscr.io/linuxserver/prowlarr:3.0.2.5780-ls169
     container_name: prowlarr
     environment:
       - PUID=${PUID}
@@ -182,12 +129,9 @@ services:
       assemblrr_network:
         ipv4_address: 172.60.0.15
 
-  # Seerr — media request management (successor to Jellyseerr/Overseerr)
-  # Host port 5055 is published by seerr-gateway (not seerr) so DELETE /request
-  # can cancel in-flight *arr/qB grabs. Seerr stays on the Docker network only.
-  # Retirement: see docs/seerr-delete-request.md
+  # Seerr — media request management (internal; published via seerr-gateway:5055)
   seerr:
-    image: ghcr.io/seerr-team/seerr:v3.4.1
+    image: ghcr.io/seerr-team/seerr:v3.5.2
     container_name: seerr
     init: true
     environment:
@@ -209,11 +153,11 @@ services:
       assemblrr_network:
         ipv4_address: 172.60.0.17
 
-  # Thin reverse proxy in front of Seerr: pass-through + delete-request queue drain.
+  # Authenticating reverse proxy in front of Seerr: pass-through + delete-request purge.
   # TV: season-scoped via Sonarr when the request is a subset of remaining seasons.
   # SEERR_DELETE_REQUEST_PURGE=0 disables intercept (stock Seerr semantics).
   seerr-gateway:
-    image: python:3.12.14-alpine
+    image: python:3.12.16-alpine
     container_name: seerr-gateway
     environment:
       - TZ=${TZ}
@@ -255,10 +199,9 @@ services:
       assemblrr_network:
         ipv4_address: 172.60.0.24
 
-  # Recyclarr - automatically syncs TRaSH guides
-  # :latest is no longer published; pin a 8.x release (see recyclarr.dev).
+  # Recyclarr — automatically syncs TRaSH guides (:latest not published; pin 8.x)
   recyclarr:
-    image: ghcr.io/recyclarr/recyclarr:8.7.1
+    image: ghcr.io/recyclarr/recyclarr:8.8.1
     container_name: recyclarr
     user: ${PUID}:${PGID}
     environment:
@@ -272,7 +215,7 @@ services:
       assemblrr_network:
         ipv4_address: 172.60.0.18
 
-  # Deletes under /data/media → purge *arr entry + qB torrent/files
+  # Deletes under /data/media -> purge *arr entry + qB / SABnzbd items
   media-purge-watch:
     image: assemblrr/media-purge-watch:local
     pull_policy: build
@@ -286,6 +229,7 @@ services:
       - CONFIG_DIR=/config
       - RADARR_URL=http://radarr:7878
       - SONARR_URL=http://sonarr:8989
+      - SABNZBD_URL=http://sabnzbd:8080
       - AUTH_USERNAME_FILE=/run/secrets/auth_username.txt
       - AUTH_PASSWORD_FILE=/run/secrets/auth_password.txt
       - MEDIA_PURGE_WATCH=${MEDIA_PURGE_WATCH:-1}
@@ -303,7 +247,7 @@ services:
 
   # Bazarr — automatic subtitle management (Sonarr/Radarr companion)
   bazarr:
-    image: lscr.io/linuxserver/bazarr:1.6.0
+    image: lscr.io/linuxserver/bazarr:1.6.2
     container_name: bazarr
     environment:
       - PUID=${PUID}

@@ -1,17 +1,17 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# assemblrr CLI — lives in the install tree (or repo bin/). PATH is a thin wrapper.
 set -euo pipefail
-
-# assemblrr CLI — lives in the install tree (or repo bin/). PATH is a wrapper.
 
 _cli_self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Leftover full copies in ~/.local/bin must not run; exec the install-tree CLI.
+# Leftover full copies in ~/.local/bin must not run standalone; exec the install-tree CLI.
 if [ "$_cli_self" = "$HOME/.local/bin" ] || [ "$_cli_self" = "/usr/local/bin" ]; then
     _wrap_dir="${ASSEMBLRR_DIR:-}"
     if [ -z "$_wrap_dir" ]; then
         for _wrap_f in \
-            /opt/assemblrr/.assemblrr-config \
             "$HOME/.assemblrr-config" \
+            /opt/assemblrr/.assemblrr-config \
             "$HOME/assemblrr/.assemblrr-config"
         do
             if [ -f "$_wrap_f" ]; then
@@ -31,7 +31,6 @@ if [ "$_cli_self" = "$HOME/.local/bin" ] || [ "$_cli_self" = "/usr/local/bin" ];
     exit 1
 fi
 
-# Locate lib (repo: sibling of bin/; install: lib/ next to cli.sh)
 if [ -f "$_cli_self/../lib/core.sh" ]; then
     _lib_dir="$_cli_self/../lib"
 elif [ -f "$_cli_self/lib/core.sh" ]; then
@@ -41,56 +40,30 @@ else
     exit 1
 fi
 
+# shellcheck source=/dev/null
 source "$_lib_dir/core.sh"
+# shellcheck source=/dev/null
 source "$_lib_dir/branding.sh"
+# shellcheck source=/dev/null
 source "$_lib_dir/compose.sh"
-if [ -f "$_lib_dir/quality.sh" ]; then
-    source "$_lib_dir/quality.sh"
-fi
+# shellcheck source=/dev/null
+[ -f "$_lib_dir/quality.sh" ] && source "$_lib_dir/quality.sh"
+# shellcheck source=/dev/null
 source "$_lib_dir/vpn.sh"
-if [ -f "$_lib_dir/services.sh" ]; then
-    source "$_lib_dir/services.sh"
-fi
-# Upgrade engine (optional on older installs until first upgrade copies these)
-if [ -f "$_lib_dir/managed_files.sh" ]; then
-    source "$_lib_dir/managed_files.sh"
-fi
-if [ -f "$_lib_dir/upgrade.sh" ]; then
-    source "$_lib_dir/upgrade.sh"
-fi
+# shellcheck source=/dev/null
+[ -f "$_lib_dir/services.sh" ] && source "$_lib_dir/services.sh"
+# shellcheck source=/dev/null
+[ -f "$_lib_dir/managed_files.sh" ] && source "$_lib_dir/managed_files.sh"
+# shellcheck source=/dev/null
+[ -f "$_lib_dir/upgrade.sh" ] && source "$_lib_dir/upgrade.sh"
 
-INSTALL_DIR=$(find_install_directory)
-if [ -z "$INSTALL_DIR" ]; then
-    log_error "Could not find ${APP_NAME:-assemblrr} installation. Run setup first."
-fi
-
-# Pointer first — has MEDIA_DIRECTORY even when the install tree never finished
-# (path picker chose /mnt/e, then copy hung). Install-dir config overrides.
-load_install_pointer || true
-if [ -f "$INSTALL_DIR/.assemblrr-config" ]; then
-    safe_source "$INSTALL_DIR/.assemblrr-config"
-elif [ -f "$INSTALL_DIR/.${APP_NAME:-assemblrr}-config" ]; then
-    safe_source "$INSTALL_DIR/.${APP_NAME:-assemblrr}-config"
-fi
+# Default fallbacks (always initialized cleanly even under set -u)
 VPN_ENABLED="${VPN_ENABLED:-n}"
 VPN_TYPE="${VPN_TYPE:-openvpn}"
 MEDIA_SERVICE="${MEDIA_SERVICE:-jellyfin}"
 MEDIA_DIRECTORY="${MEDIA_DIRECTORY:-${HOME}/assemblrr-media}"
 TZ="${TZ:-UTC}"
 
-# Source branding from install directory
-load_branding "$INSTALL_DIR" 2>/dev/null || true
-
-# Build compose command dynamically (uses lib/compose.sh build_compose_args + adds profile)
-if [ -f "$INSTALL_DIR/compose/base.yaml" ]; then
-    build_compose_args "$INSTALL_DIR" "${VPN_ENABLED:-n}"
-    DC=(run_docker compose "${COMPOSE_ARGS[@]}" "--profile" "${MEDIA_SERVICE:-jellyfin}")
-else
-    # Mid-setup / incomplete tree — uninstall can still remove dirs and CLI
-    DC=(run_docker compose)
-    COMPOSE_ARGS=()
-fi
-# Cold start: Jellyfin/Bazarr start_period is 60s, then the first healthcheck.
 readonly WAIT_READY_SECONDS=180
 readonly IP_ENDPOINTS=(
     "https://ipinfo.io/ip"
@@ -98,92 +71,93 @@ readonly IP_ENDPOINTS=(
     "https://checkip.amazonaws.com"
     "https://tnedi.me"
     "https://api.myip.la"
-    "https://wtfismyip.com/text"
 )
 
-# Commands
-declare -A COMMANDS=(
-    ["--help"]="displays this help message"
-    ["restart"]="restarts services (can specify service names)"
-    ["stop"]="stops all services (can specify service names)"
-    ["start"]="starts services (can specify service names)"
-    ["status"]="service dashboard (URLs + health); --docker for raw compose ps"
-    ["destroy"]="destroys services so you can start from scratch (can specify service names)"
-    ["uninstall"]="completely removes the stack (keeps media unless confirmed) — see docs/uninstall.md"
-    ["check-vpn"]="checks if the VPN is working as expected"
-    ["backup"]="backs up to the destination location"
-    ["restore"]="restores from a backup archive"
-    ["update-containers"]="updates all containers"
-    ["upgrade"]="upgrade install files from git (or --from DIR); runs migrations"
-    ["logs"]="shows container logs (optionally specify service name)"
-    ["health"]="checks health status of all services"
-    ["config"]="configuration: show, edit (picker), or apply (re-wire)"
-    ["purge"]="delete one title from *arr, disk, and qBittorrent"
-)
+log_error_inline() { echo -e "${RED:-}$1${NC:-}"; }
 
-# log_error_inline — same as log_error but without exit (used by check_health)
-log_error_inline() { echo -e "${RED}$1${NC}"; }
+_cli_init() {
+    INSTALL_DIR=$(find_install_directory || true)
+    if [ -z "${INSTALL_DIR:-}" ]; then
+        log_error "Could not find ${APP_NAME:-assemblrr} installation. Run setup first."
+        return 1
+    fi
 
+    load_install_pointer || true
+    if [ -f "$INSTALL_DIR/.assemblrr-config" ]; then
+        safe_source "$INSTALL_DIR/.assemblrr-config"
+    elif [ -f "$INSTALL_DIR/.${APP_NAME:-assemblrr}-config" ]; then
+        safe_source "$INSTALL_DIR/.${APP_NAME:-assemblrr}-config"
+    fi
+    if [ -f "$INSTALL_DIR/.env" ]; then
+        set -a
+        safe_source "$INSTALL_DIR/.env"
+        set +a
+    fi
 
+    VPN_ENABLED="${VPN_ENABLED:-n}"
+    VPN_TYPE="${VPN_TYPE:-openvpn}"
+    MEDIA_SERVICE="${MEDIA_SERVICE:-jellyfin}"
+    MEDIA_DIRECTORY="${MEDIA_DIRECTORY:-${HOME}/assemblrr-media}"
+    TZ="${TZ:-UTC}"
 
-show_help() {
-    echo "${APP_DISPLAY_NAME} - ${APP_DESCRIPTION:-Your one-click media server}"
-    echo
-    echo "Usage: ${APP_CLI_NAME} [command] [options]"
-    echo
-    echo "Commands:"
-    for cmd in "${!COMMANDS[@]}"; do
-        printf "%-25s %s\n" "$cmd" "${COMMANDS[$cmd]}"
-    done
-    echo
-    echo "Examples:"
-    echo "  ${APP_CLI_NAME} start              # Start all services"
-    echo "  ${APP_CLI_NAME} start jellyfin     # Start the 'jellyfin' service"
-    echo "  ${APP_CLI_NAME} stop jellyfin      # Stop the 'jellyfin' service"
-    echo "  ${APP_CLI_NAME} restart jellyfin   # Restart the 'jellyfin' service"
-    echo "  ${APP_CLI_NAME} destroy jellyfin   # Destroy the 'jellyfin' service"
-    echo "  ${APP_CLI_NAME} backup /path/to/backup  # Backup to specified directory"
-    echo "  ${APP_CLI_NAME} restore /path/to/backup.tar.gz  # Restore from backup"
-    echo "  ${APP_CLI_NAME} uninstall          # Remove everything (asks before deleting data)"
-    echo "  ${APP_CLI_NAME} uninstall --force  # Remove without prompts (keeps media)"
-    echo "  ${APP_CLI_NAME} uninstall --force --media  # Remove everything including media"
-    echo "  ${APP_CLI_NAME} logs               # View all container logs"
-    echo "  ${APP_CLI_NAME} logs jellyfin       # View specific service logs"
-    echo "  ${APP_CLI_NAME} health              # Check health of all services"
-    echo "  ${APP_CLI_NAME} upgrade             # Upgrade from git main (backup first)"
-    echo "  ${APP_CLI_NAME} upgrade --from DIR  # Upgrade from a local source tree"
-    echo "  ${APP_CLI_NAME} upgrade --check     # Dry-run upgrade plan"
-    echo "  ${APP_CLI_NAME} upgrade --skip-stack  # Files + CLI only (no container restart)"
-    echo "  ${APP_CLI_NAME} status             # URLs + health for all services"
-    echo "  ${APP_CLI_NAME} status --docker    # Raw docker compose ps"
-    echo "  ${APP_CLI_NAME} config              # List config subcommands"
-    echo "  ${APP_CLI_NAME} config show         # Show current configuration"
-    echo "  ${APP_CLI_NAME} config edit         # Pick a setting to change"
-    echo "  ${APP_CLI_NAME} purge --movie-id N  # Full delete (*arr + disk + qB)"
-    echo "  ${APP_CLI_NAME} purge --path PATH   # Full delete by library path"
-    echo "  ${APP_CLI_NAME} purge --tmdb ID     # Full delete by TMDB id"
+    load_branding "$INSTALL_DIR" 2>/dev/null || load_branding "$_cli_self/.." 2>/dev/null || true
+
+    if [ -f "$INSTALL_DIR/compose/base.yaml" ]; then
+        build_compose_args "$INSTALL_DIR" "${VPN_ENABLED:-n}"
+        DC=(run_docker compose "${COMPOSE_ARGS[@]}")
+    else
+        DC=(run_docker compose)
+        COMPOSE_ARGS=()
+    fi
 }
 
-# Full media purge (*arr + qB + hardlinks). Thin wrapper around scripts/media-purge.sh
+show_help() {
+    load_branding "$_cli_self/.." 2>/dev/null || true
+    echo "${APP_DISPLAY_NAME:-assemblrr} - ${APP_DESCRIPTION:-Automated media stack}"
+    echo
+    echo "Usage: ${APP_CLI_NAME:-assemblrr} [command] [options]"
+    echo
+    echo "Lifecycle:"
+    printf "  %-26s %s\n" "start [service...]"   "Start all (or named) services and wait for readiness"
+    printf "  %-26s %s\n" "stop [service...]"    "Stop all (or named) services"
+    printf "  %-26s %s\n" "restart [service...]" "Restart all (or named) services"
+    printf "  %-26s %s\n" "destroy [service...]" "Stop and remove containers/network (keeps config + media)"
+    printf "  %-26s %s\n" "uninstall [--force] [--media]" "Remove containers, config, and CLI wrapper"
+    echo
+    echo "Configuration & Upgrades:"
+    printf "  %-26s %s\n" "status [--docker]"      "Operator service dashboard (URLs + health); --docker for raw compose ps"
+    printf "  %-26s %s\n" "health"               "Compact health pass/fail across expected stack services"
+    printf "  %-26s %s\n" "config [show|edit|apply]" "Inspect config, edit settings interactively, or re-wire APIs"
+    printf "  %-26s %s\n" "upgrade [options]"    "Apply managed files, migrations, compose rebuild, and wiring (--check, --from DIR, --ref REF)"
+    printf "  %-26s %s\n" "update-containers [-y]" "Rebuild local sidecars & pull unpinned custom overlay images"
+    echo
+    echo "Operations & Backups:"
+    printf "  %-26s %s\n" "logs [service]"       "Follow container logs"
+    printf "  %-26s %s\n" "check-vpn"            "Verify public exit IP vs VPN tunnel IP"
+    printf "  %-26s %s\n" "purge [options]"      "Remove one movie/series/season from *arr, library disk, and qB/SABnzbd"
+    printf "  %-26s %s\n" "backup <dir>"         "Create a 0600 backup archive in <dir>"
+    printf "  %-26s %s\n" "restore <archive>"    "Validate and restore stack config/secrets from <archive>"
+    echo
+    echo "Examples:"
+    echo "  ${APP_CLI_NAME:-assemblrr} status"
+    echo "  ${APP_CLI_NAME:-assemblrr} config edit"
+    echo "  ${APP_CLI_NAME:-assemblrr} upgrade --check"
+    echo "  ${APP_CLI_NAME:-assemblrr} purge --tmdb 10378 --dry-run"
+}
+
 purge_media() {
-    local install_dir script
-    install_dir=$(find_install_directory)
+    local install_dir="${INSTALL_DIR:-}"
+    local script
+    [ -n "$install_dir" ] || install_dir=$(find_install_directory || true)
     [ -n "$install_dir" ] || log_error "Could not find installation directory"
     script="$install_dir/scripts/media-purge.sh"
-    if [ ! -f "$script" ]; then
-        # Dev tree: repo scripts/
-        local self_dir
-        self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-        if [ -f "$self_dir/../scripts/media-purge.sh" ]; then
-            script="$self_dir/../scripts/media-purge.sh"
-        fi
+    if [ ! -f "$script" ] && [ -f "$_cli_self/../scripts/media-purge.sh" ]; then
+        script="$_cli_self/../scripts/media-purge.sh"
     fi
     [ -f "$script" ] || log_error "media-purge.sh not found — run upgrade or re-setup"
-    chmod +x "$script" 2>/dev/null || true
 
     set -a
-    # shellcheck disable=SC1091
-    [ -f "$install_dir/.env" ] && . "$install_dir/.env"
+    [ -f "$install_dir/.env" ] && safe_source "$install_dir/.env"
     set +a
     export API_HOST="${API_HOST:-127.0.0.1}"
     export CONFIG_DIR="$install_dir/config"
@@ -193,9 +167,14 @@ purge_media() {
         export AUTH_USERNAME_FILE="$install_dir/secrets/auth_username.txt"
         export AUTH_PASSWORD_FILE="$install_dir/secrets/auth_password.txt"
     fi
-    export QBITTORRENT_URL="${QBITTORRENT_URL:-http://127.0.0.1:8081}"
-    export RADARR_URL="${RADARR_URL:-http://127.0.0.1:7878}"
-    export SONARR_URL="${SONARR_URL:-http://127.0.0.1:8989}"
+    if [ -f "$install_dir/secrets/jellyfin_api_key.txt" ]; then
+        export JELLYFIN_API_KEY_FILE="$install_dir/secrets/jellyfin_api_key.txt"
+    fi
+    export QBITTORRENT_URL="${QBITTORRENT_URL:-http://${API_HOST}:8081}"
+    export SABNZBD_URL="${SABNZBD_URL:-http://${API_HOST}:8085}"
+    export RADARR_URL="${RADARR_URL:-http://${API_HOST}:7878}"
+    export SONARR_URL="${SONARR_URL:-http://${API_HOST}:8989}"
+    export JELLYFIN_URL="${JELLYFIN_URL:-http://${API_HOST}:8096}"
 
     bash "$script" "$@"
 }
@@ -229,119 +208,134 @@ wait_for_services() {
                 if type service_row_ready >/dev/null 2>&1 && service_row_ready "$state" "$health"; then
                     ready=$((ready + 1))
                 else
-                    waiting+=("$svc")
+                    waiting+=("${label} (${health:-${state:-missing}})")
                 fi
             done < <(list_service_catalog)
-        else
-            for svc in "${!st_state[@]}"; do
-                total=$((total + 1))
-                if [ "$(echo "${st_state[$svc]}" | tr '[:upper:]' '[:lower:]')" = "running" ]; then
-                    ready=$((ready + 1))
-                else
-                    waiting+=("$svc")
-                fi
-            done
         fi
 
         if [ "$total" -gt 0 ] && [ "$ready" -eq "$total" ]; then
-            printf '\r\033[K' >&2
-            log_success "All $total services are ready."
+            [ "$wait_time" -gt 0 ] && echo >&2
+            log_success "All ${total} services ready"
             return 0
         fi
 
-        if [ "${#waiting[@]}" -gt 0 ] && [ "${#waiting[@]}" -le 6 ]; then
-            wait_inline "Waiting for services ($ready/$total ready: ${waiting[*]})" "$wait_time"
-        else
-            wait_inline "Waiting for services ($ready/$total ready)" "$wait_time"
-        fi
-        sleep 1
-        wait_time=$((wait_time + 1))
+        wait_inline "Waiting for services: ${ready}/${total} ready" "$wait_time"
+        sleep 3
+        wait_time=$((wait_time + 3))
     done
 
-    printf '\r\033[K' >&2
-    log_error "Not all services became ready within ${timeout}s ($ready/$total ready${waiting[*]:+: ${waiting[*]}})"
+    echo >&2
+    if [ "${#waiting[@]}" -gt 0 ]; then
+        log_warning "Timed out after ${timeout}s — still starting: ${waiting[*]}"
+    else
+        log_warning "Timed out waiting for services after ${timeout}s"
+    fi
+    return 1
 }
 
 get_ip_with_retries() {
-    local context=$1
-    local cmd_prefix=""
+    local is_vpn=$1
+    local retry=0
+    local max_retries=5
+    local ip=""
 
-    if [ "$context" = "qbittorrent" ]; then
-        cmd_prefix="run_docker exec qbittorrent"
-    fi
-
-    for endpoint in "${IP_ENDPOINTS[@]}"; do
-        local ip
-        if [ "$context" = "local" ]; then
-            ip=$(curl -s --connect-timeout 5 "$endpoint")
-        else
-            ip=$($cmd_prefix curl -s --connect-timeout 5 "$endpoint")
-        fi
-
-        if [ -n "$ip" ] && [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "$ip"
-            return 0
-        fi
+    while [ $retry -lt $max_retries ]; do
+        for endpoint in "${IP_ENDPOINTS[@]}"; do
+            if [ "$is_vpn" = "true" ]; then
+                ip=$(run_docker exec gluetun curl -s --max-time 5 "$endpoint" 2>/dev/null || true)
+            else
+                ip=$(curl -s --max-time 5 "$endpoint" 2>/dev/null || true)
+            fi
+            if [[ $ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                echo "$ip"
+                return 0
+            fi
+        done
+        retry=$((retry + 1))
+        sleep 2
     done
     return 1
 }
 
 check_vpn() {
-    echo "Getting your IP..."
-    local your_ip
-    your_ip=$(get_ip_with_retries "local") || log_error "Failed to get your IP address from any endpoint"
-    echo "Your IP: $your_ip"
+    if [ "${VPN_ENABLED:-n}" != "y" ]; then
+        log_error "VPN is not enabled in your configuration."
+    fi
 
-    local country
-    country=$(curl -s --connect-timeout 5 "https://am.i.mullvad.net/country") || log_warning "Couldn't determine your country"
-    [ -n "$country" ] && echo "Your local IP country is $country"
+    echo "Checking VPN connection..."
+    local vpn_ip public_ip
+    vpn_ip=$(get_ip_with_retries "true")
+    public_ip=$(get_ip_with_retries "false")
 
-    echo -e "\nGetting your qBittorrent IP..."
-    local qbit_ip
-    qbit_ip=$(get_ip_with_retries "qbittorrent") || log_error "Failed to get qBittorrent IP from any endpoint"
-    echo "qBittorrent IP: $qbit_ip"
+    [ -z "$vpn_ip" ] && log_error "Failed to obtain VPN IP"
+    [ -z "$public_ip" ] && log_error "Failed to obtain public IP"
 
-    local qbit_country
-    qbit_country=$(run_docker exec qbittorrent curl -s --connect-timeout 5 "https://am.i.mullvad.net/country") || log_warning "Couldn't determine qBittorrent country"
-    [ -n "$qbit_country" ] && echo "qBittorrent country is $qbit_country"
+    echo
+    echo "IP check:"
+    echo "  Your real IP: $public_ip"
+    echo "  VPN exit IP:  $vpn_ip"
+    echo
 
-    if [ "$qbit_ip" == "$your_ip" ]; then
-        log_error "WARNING: Your IPs are the same! qBittorrent is exposing your IP!"
+    if [ "$vpn_ip" != "$public_ip" ]; then
+        log_success "VPN is active and routing traffic correctly!"
     else
-        log_success "Success: Your IPs are different. qBittorrent is masking your IP!"
+        log_warning "VPN IP matches your real IP — VPN may not be routing properly"
     fi
 }
 
 backup_app() {
-    local destination=$1
-    local backup_date
+    local destination="${1:-.}"
+    local backup_date backup_file tmp_file
     backup_date=$(date '+%Y-%m-%d-%s')
-    local backup_file="$destination/${APP_BACKUP_PREFIX}-$backup_date.tar.gz"
+    backup_file="${destination%/}/${APP_BACKUP_PREFIX:-assemblrr-backup}-$backup_date.tar.gz"
+    tmp_file="${backup_file}.tmp"
 
-    # Verify destination exists or create it
     if [ ! -d "$destination" ]; then
         log_info "Backup destination \"$destination\" does not exist. Creating it..."
         mkdir -p "$destination" || log_error "Failed to create backup destination directory"
     fi
 
-    echo "Stopping ${APP_DISPLAY_NAME} services..."
-    "${DC[@]}" stop > /dev/null 2>&1 || log_error "Failed to stop services"
+    echo "Stopping ${APP_DISPLAY_NAME:-assemblrr} services..."
+    "${DC[@]}" stop >/dev/null 2>&1 || log_warning "Some services were not running cleanly before backup"
 
-    echo -e "\nBacking up ${APP_DISPLAY_NAME} to $destination..."
-
-    # Run tar inside an alpine container bound to the INSTALL_DIR and the destination (excluding temp/cache and sockets)
-    if ! wait_while "Creating backup archive" run_docker run --rm \
-        -v "$INSTALL_DIR:/source" \
-        -v "$(dirname "$backup_file"):/backup" \
-        alpine tar --exclude='./transcoding-temp' --exclude='./config/jellyfin/cache' --exclude='ipc-socket' -czf "/backup/$(basename "$backup_file")" -C /source .; then
+    echo -e "\nBacking up ${APP_DISPLAY_NAME:-assemblrr} to $destination..."
+    if ! (umask 077 && wait_while "Creating backup archive" run_docker run --rm \
+        -v "$INSTALL_DIR:/source:ro" \
+        -v "$(dirname "$tmp_file"):/backup" \
+        "${UTILITY_ALPINE_IMAGE:-alpine:3.24.4}" \
+        tar --exclude='./transcoding-temp' --exclude='./config/jellyfin/cache' --exclude='ipc-socket' \
+        -czf "/backup/$(basename "$tmp_file")" -C /source .); then
+        rm -f "$tmp_file"
         log_error "Failed to create backup archive"
     fi
+    chmod 600 "$tmp_file"
+    mv "$tmp_file" "$backup_file"
 
-    echo -e "\nStarting ${APP_DISPLAY_NAME} services..."
-    "${DC[@]}" start > /dev/null 2>&1 || log_warning "Failed to restart services"
+    echo -e "\nStarting ${APP_DISPLAY_NAME:-assemblrr} services..."
+    "${DC[@]}" start >/dev/null 2>&1 || log_warning "Failed to restart services"
 
     log_success "Backup completed successfully!"
     echo "Backup file: $backup_file"
+}
+
+validate_backup_archive() {
+    local archive="$1"
+    [ -f "$archive" ] || return 1
+    gzip -t "$archive" 2>/dev/null || return 1
+
+    local listing has_env=0 bad_path=0 entry
+    listing=$(tar -tzf "$archive" 2>/dev/null) || return 1
+    while IFS= read -r entry; do
+        [ -z "$entry" ] && continue
+        case "$entry" in
+            .env|./.env) has_env=1 ;;
+        esac
+        case "$entry" in
+            /*|..|../*|*/../*|*/..) bad_path=1; break ;;
+        esac
+    done <<< "$listing"
+
+    [ "$bad_path" -eq 0 ] && [ "$has_env" -eq 1 ]
 }
 
 destroy_app() {
@@ -349,12 +343,12 @@ destroy_app() {
         echo -e "\nWARNING: This will destroy all your services, containers, volumes, and the custom network!"
         echo "This is not recoverable!"
         while true; do
-            read -p "Are you sure you want to continue? [y/N]: " -r
+            read_prompt "Are you sure you want to continue? [y/N]: "
             local reply=${REPLY:-n}
             if [[ ${reply,,} =~ ^y$ ]]; then
                 "${DC[@]}" down || log_error "Failed to destroy services"
-                docker network rm "$APP_NETWORK_NAME" 2>/dev/null || log_warning "Failed to remove $APP_NETWORK_NAME. It might not exist or was already removed."
-                echo -e "\n${APP_DISPLAY_NAME} services were destroyed. To restart, run: ${APP_CLI_NAME} start"
+                docker network rm "${APP_NETWORK_NAME:-assemblrr_network}" 2>/dev/null || true
+                echo -e "\n${APP_DISPLAY_NAME:-assemblrr} services were destroyed. To restart, run: ${APP_CLI_NAME:-assemblrr} start"
                 break
             elif [[ ${reply,,} =~ ^n$ ]]; then
                 log_info "Destroy cancelled."
@@ -365,15 +359,14 @@ destroy_app() {
         done
     else
         local target_label="$*"
-        echo -e "\nWARNING: This will destroy the service(s): \"${target_label}\". This includes their associated containers and volumes!"
-        echo "This is not recoverable!"
+        echo -e "\nWARNING: This will destroy the service(s): \"${target_label}\"."
         while true; do
-            read -p "Are you sure you want to continue? [y/N]: " -r
+            read_prompt "Are you sure you want to continue? [y/N]: "
             local reply=${REPLY:-n}
             if [[ ${reply,,} =~ ^y$ ]]; then
                 "${DC[@]}" stop "$@" || log_error "Failed to stop services"
                 "${DC[@]}" rm -f -v "$@" || log_error "Failed to destroy services"
-                echo -e "\n${APP_DISPLAY_NAME} service was destroyed. To restart, run: ${APP_CLI_NAME} start"
+                echo -e "\n${APP_DISPLAY_NAME:-assemblrr} service was destroyed. To restart, run: ${APP_CLI_NAME:-assemblrr} start"
                 break
             elif [[ ${reply,,} =~ ^n$ ]]; then
                 log_info "Destroy cancelled."
@@ -388,10 +381,12 @@ destroy_app() {
 uninstall_app() {
     local force=false
     local delete_media=false
+    local remove_config=true
     local removed_config=false
     local removed_media=false
     local -a extra_removed=()
     local -a extra_kept=()
+    local arg
     for arg in "$@"; do
         case "$arg" in
             -f|--force) force=true ;;
@@ -401,70 +396,94 @@ uninstall_app() {
 
     poke_wsl_automounts 2>/dev/null || true
 
-    # --force already opts out of confirmation; skip the inventory and preamble.
     if [ "$force" = false ]; then
         echo
         print_detected_locations "Detected installation:"
         echo
-        echo "WARNING: This will COMPLETELY remove ${APP_DISPLAY_NAME}!"
+        echo "WARNING: This will COMPLETELY remove ${APP_DISPLAY_NAME:-assemblrr}!"
         echo "This includes running containers, the Docker network, the CLI, and the config path above."
         if [ "$delete_media" = true ]; then
             echo "Media at $MEDIA_DIRECTORY will also be deleted."
         else
             echo "Media at $MEDIA_DIRECTORY is kept unless you confirm below (or pass --media)."
         fi
-        echo "Tip: run '${APP_CLI_NAME} backup <target-dir>' first if you want to keep your configuration."
+        echo "Tip: run '${APP_CLI_NAME:-assemblrr} backup <target-dir>' first if you want to keep your configuration."
         echo
         echo "This is not recoverable!"
-        read -p "Are you ABSOLUTELY sure? Type 'yes' to confirm: " -r
-        if [[ "$REPLY" != "yes" ]]; then
+        read_prompt "Uninstall ${APP_DISPLAY_NAME:-assemblrr}? [y/N]: "
+        if [[ ! "${REPLY:-}" =~ ^[Yy]$ ]]; then
             echo "Uninstall cancelled."
             return 0
         fi
+        read_prompt "Also delete config at $INSTALL_DIR? [Y/n]: "
+        if [[ "${REPLY:-}" =~ ^[Nn]$ ]]; then
+            remove_config=false
+        fi
+        if [ "$delete_media" = false ]; then
+            read_prompt "Also delete media at $MEDIA_DIRECTORY? [y/N]: "
+            if [[ "${REPLY:-}" =~ ^[Yy]$ ]]; then
+                read_prompt "Type 'delete media' to permanently erase $MEDIA_DIRECTORY: "
+                if [ "${REPLY:-}" = "delete media" ]; then
+                    delete_media=true
+                else
+                    log_info "Keeping media at $MEDIA_DIRECTORY."
+                fi
+            fi
+        fi
     fi
 
-    "${DC[@]}" down -v 2>/dev/null || log_warning "Failed to stop some services"
-
-    if run_docker network inspect "$APP_NETWORK_NAME" &>/dev/null; then
-        run_docker network rm "$APP_NETWORK_NAME" 2>/dev/null || log_warning "Failed to remove Docker network $APP_NETWORK_NAME"
+    if [ "$force" = false ] && type wait_while >/dev/null 2>&1; then
+        wait_while "Stopping containers" "${DC[@]}" down -v || log_warning "Failed to stop some services"
+    else
+        "${DC[@]}" down -v 2>/dev/null || log_warning "Failed to stop some services"
     fi
 
-    if [ "$force" = true ]; then
+    if run_docker network inspect "${APP_NETWORK_NAME:-assemblrr_network}" &>/dev/null; then
+        run_docker network rm "${APP_NETWORK_NAME:-assemblrr_network}" 2>/dev/null || true
+    fi
+
+    if [ "$force" = true ] || [ "$remove_config" = true ]; then
         safe_rm_rf "$INSTALL_DIR"
         removed_config=true
-    else
-        read -p "Also delete config at $INSTALL_DIR? Type the full path to confirm: " -r
-        if [[ "$REPLY" = "$INSTALL_DIR" ]]; then
-            safe_rm_rf "$INSTALL_DIR"
-            removed_config=true
-        fi
     fi
 
     if [ "$delete_media" = true ]; then
         safe_rm_rf "$MEDIA_DIRECTORY"
         removed_media=true
-    elif [ "$force" = false ]; then
-        read -p "Also delete media at $MEDIA_DIRECTORY? Type the full path to confirm: " -r
-        if [[ "$REPLY" = "$MEDIA_DIRECTORY" ]]; then
-            safe_rm_rf "$MEDIA_DIRECTORY"
-            removed_media=true
-        fi
     fi
 
-    # Path picker / hung setup can leave assemblrr trees on other mounts
-    # (e.g. /mnt/e) that the pointer never recorded.
-    local leftover_kind leftover_path
+    local leftover_kind leftover_path ans_left
     while IFS=$'\t' read -r leftover_kind leftover_path; do
         [ -n "$leftover_path" ] || continue
         case "$leftover_kind" in
             install)
-                safe_rm_rf "$leftover_path"
-                extra_removed+=("$leftover_path")
+                if [ "$force" = true ]; then
+                    safe_rm_rf "$leftover_path"
+                    extra_removed+=("$leftover_path")
+                else
+                    read_prompt "Also remove leftover install dir at $leftover_path? [y/N]: " ans_left
+                    if [[ ${ans_left:-n} =~ ^[Yy]$ ]]; then
+                        safe_rm_rf "$leftover_path"
+                        extra_removed+=("$leftover_path")
+                    else
+                        extra_kept+=("$leftover_path")
+                    fi
+                fi
                 ;;
             media)
                 if [ "$delete_media" = true ]; then
-                    safe_rm_rf "$leftover_path"
-                    extra_removed+=("$leftover_path")
+                    if [ "$force" = true ]; then
+                        safe_rm_rf "$leftover_path"
+                        extra_removed+=("$leftover_path")
+                    else
+                        read_prompt "Also remove leftover media dir at $leftover_path? [y/N]: " ans_left
+                        if [[ ${ans_left:-n} =~ ^[Yy]$ ]]; then
+                            safe_rm_rf "$leftover_path"
+                            extra_removed+=("$leftover_path")
+                        else
+                            extra_kept+=("$leftover_path")
+                        fi
+                    fi
                 else
                     extra_kept+=("$leftover_path")
                 fi
@@ -482,13 +501,10 @@ uninstall_app() {
         rmdir "$HOME/.local/bin/lib" 2>/dev/null || true
     fi
 
-    # Setup writes this cheat-sheet under $HOME (outside the install dir)
-    # Legacy setup wrote ~/assemblrr_services.txt — remove if present
     rm -f "$HOME/assemblrr_services.txt" 2>/dev/null || true
-    # Install discovery pointer (may live outside the install dir)
     rm -f "$HOME/.assemblrr-config" "$HOME/.${APP_NAME:-assemblrr}-config" 2>/dev/null || true
 
-    log_success "${APP_DISPLAY_NAME} uninstalled."
+    log_success "${APP_DISPLAY_NAME:-assemblrr} uninstalled."
     if [ "$removed_config" = true ]; then
         echo "  Config removed: $INSTALL_DIR"
     else
@@ -512,79 +528,70 @@ uninstall_app() {
     fi
 }
 
-# Load PUID/PGID from install .env when present (for prepare_install_dirs)
 _load_install_ids() {
-    local env_file="$INSTALL_DIR/.env"
-    if [ -f "$env_file" ]; then
-        # shellcheck disable=SC1090
-        set -a
-        safe_source "$env_file" 2>/dev/null || true
-        set +a
+    local puid="${PUID:-$(id -u)}"
+    local pgid="${PGID:-$(id -g)}"
+    if [ -f "$INSTALL_DIR/.env" ]; then
+        local _ep _eg
+        _ep=$(grep -E '^PUID=' "$INSTALL_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2 || true)
+        _eg=$(grep -E '^PGID=' "$INSTALL_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2 || true)
+        [[ "$_ep" =~ ^[0-9]+$ ]] && puid="$_ep"
+        [[ "$_eg" =~ ^[0-9]+$ ]] && pgid="$_eg"
     fi
-    _HOST_UID="${PUID:-$(id -u)}"
-    _HOST_GID="${PGID:-$(id -g)}"
+    echo "$puid $pgid"
 }
 
 start_app() {
-    _load_install_ids
-    prepare_install_dirs "$INSTALL_DIR" "$_HOST_UID" "$_HOST_GID"
-
-    # Validate VPN config before starting (if VPN is enabled)
-    if [ "${VPN_ENABLED:-n}" = "y" ]; then
-        if ! validate_vpn_secrets "$INSTALL_DIR" "${VPN_ENABLED:-n}" "${VPN_TYPE:-openvpn}"; then
-            log_error "Set VPN credentials in $INSTALL_DIR/secrets before starting services"
-        fi
-
-        # Test VPN connection by starting Gluetun first
-        if ! test_vpn_connection_shared "${DC[@]}"; then
-            log_error "VPN startup failed. Fix credentials in $INSTALL_DIR/secrets (and .env if needed), then retry."
-        fi
+    local _ids _puid _pgid
+    if [ -d "$INSTALL_DIR/compose" ] && type prepare_install_dirs >/dev/null 2>&1; then
+        read -r _puid _pgid < <(_load_install_ids)
+        prepare_install_dirs "$INSTALL_DIR" "$_puid" "$_pgid"
     fi
-
+    echo "Starting ${APP_DISPLAY_NAME:-assemblrr} services..."
+    if [ "$#" -gt 0 ]; then
+        "${DC[@]}" start "$@" || log_error "Failed to start $*"
+        log_success "Service(s) started: $*"
+    elif [ "${#COMPOSE_ARGS[@]}" -gt 0 ] && type compose_up_stack >/dev/null 2>&1; then
+        compose_up_stack "default" || log_error "Failed to start services"
+        wait_for_services || true
+    else
+        "${DC[@]}" up -d --remove-orphans || log_error "Failed to start services"
+        wait_for_services || true
+    fi
     if [ "$#" -eq 0 ]; then
-        compose_up_stack "${MEDIA_SERVICE:-jellyfin}" || log_error "Failed to start services"
-        wait_for_services
         echo
         check_status || true
-    else
-        compose_up_stack "${MEDIA_SERVICE:-jellyfin}" "$@" || log_error "Failed to start services"
     fi
+    echo "Manage anytime: ${APP_CLI_NAME:-assemblrr} status | logs | stop"
 }
 
 restart_app() {
-    _load_install_ids
-    prepare_install_dirs "$INSTALL_DIR" "$_HOST_UID" "$_HOST_GID"
-
+    echo "Restarting ${APP_DISPLAY_NAME:-assemblrr} services..."
+    "${DC[@]}" restart "$@" || log_error "Failed to restart services"
     if [ "$#" -eq 0 ]; then
-        wait_while "Stopping services" "${DC[@]}" stop || log_warning "Some services failed to stop"
-        compose_up_stack "${MEDIA_SERVICE:-jellyfin}" || log_error "Failed to start services"
-        wait_for_services
+        wait_for_services || true
         echo
         check_status || true
     else
-        "${DC[@]}" stop "$@" || log_warning "Some services failed to stop"
-        compose_up_stack "${MEDIA_SERVICE:-jellyfin}" "$@" || log_error "Failed to start services"
+        log_success "${APP_DISPLAY_NAME:-assemblrr} restarted: $*"
     fi
 }
 
 stop_app() {
-    if [ $# -eq 0 ]; then
-        "${DC[@]}" stop || log_error "Failed to stop services"
+    echo "Stopping ${APP_DISPLAY_NAME:-assemblrr} services..."
+    "${DC[@]}" stop "$@" || log_error "Failed to stop services"
+    if [ "$#" -gt 0 ]; then
+        log_success "${APP_DISPLAY_NAME:-assemblrr} stopped: $*"
     else
-        "${DC[@]}" stop "$@" || log_error "Failed to stop services: $*"
+        log_success "${APP_DISPLAY_NAME:-assemblrr} stopped successfully"
     fi
-    log_success "Services stopped successfully"
 }
 
-# Parse compose ps into associative-ish lines: service -> "state|health"
-# Uses Service name (compose key), not container name.
 _status_compose_rows() {
-    # format: service<TAB>state<TAB>health  (health may be empty)
-    "${DC[@]}" ps -a --format '{{.Service}}\t{{.State}}\t{{.Health}}' 2>/dev/null
+    "${DC[@]}" ps -a --format '{{.Service}}\t{{.State}}\t{{.Health}}' 2>/dev/null || true
 }
 
 _status_normalize() {
-    # stdin: state, health → stdout: short token + color category
     local state="${1:-}" health="${2:-}"
     state=$(echo "$state" | tr '[:upper:]' '[:lower:]')
     health=$(echo "$health" | tr '[:upper:]' '[:lower:]')
@@ -604,15 +611,28 @@ _status_normalize() {
     fi
 }
 
+_status_short_bg_label() {
+    case "${1:-}" in
+        "Seerr (internal)")  echo "Gateway" ;;
+        "Gluetun (VPN)")     echo "Gluetun" ;;
+        "Media purge watch") echo "Purge" ;;
+        "VPN watchdog")      echo "Watchdog" ;;
+        "Byparr (solver)")   echo "Byparr" ;;
+        *)                   echo "${1:-}" ;;
+    esac
+}
+
 check_status() {
-    local raw_docker=0
-    local arg
+    local raw_docker=0 show_all=0 compact=0 arg
     for arg in "$@"; do
         case "$arg" in
             --docker|-d) raw_docker=1 ;;
+            --all|-a)    show_all=1 ;;
+            --compact)   compact=1 ;;
             -h|--help)
-                echo "Usage: ${APP_CLI_NAME} status [--docker]"
-                echo "  Default: operator dashboard (name, state, URL)."
+                echo "Usage: ${APP_CLI_NAME:-assemblrr} status [--all | --docker]"
+                echo "  Default: operator dashboard (Web UIs + background summary)."
+                echo "  --all:    show every background/internal container individually."
                 echo "  --docker: raw docker compose ps table."
                 return 0
                 ;;
@@ -625,36 +645,51 @@ check_status() {
     fi
 
     if ! type list_service_catalog >/dev/null 2>&1; then
-        log_warning "Service catalog not loaded — falling back to docker compose ps"
         "${DC[@]}" ps || log_error "Failed to check services"
         return 0
     fi
 
-    # Load live state: service -> state|health
+    local rows_raw
+    rows_raw=$(_status_compose_rows)
+
     declare -A st_state=()
     declare -A st_health=()
-    local svc state health line
+    local svc state health
     while IFS=$'\t' read -r svc state health; do
         [ -z "$svc" ] && continue
         st_state["$svc"]="$state"
         st_health["$svc"]="$health"
-    done < <(_status_compose_rows)
+    done <<< "$rows_raw"
 
-    local media="${MEDIA_SERVICE:-jellyfin}"
-    local vpn="${VPN_ENABLED:-n}"
-    local vpn_label="off"
-    [ "$vpn" = "y" ] && vpn_label="on"
+    if [ "$compact" -eq 0 ]; then
+        local -a badges=()
+        if [ "${VPN_ENABLED:-n}" = "y" ]; then
+            badges+=("VPN on")
+        else
+            badges+=("VPN off")
+        fi
+        [ "${GPU_TRANSCODING:-none}" != "none" ] && badges+=("GPU ${GPU_TRANSCODING}")
+        [ "${VUETORRENT_ENABLED:-n}" = "y" ] && badges+=("VueTorrent")
+        [ "${BYPARR_ENABLED:-n}" = "y" ] && badges+=("Byparr")
+        [ "${USENET_ENABLED:-n}" = "y" ] && badges+=("Usenet")
+        local badge_str="" b
+        for b in "${badges[@]}"; do
+            [ -n "$badge_str" ] && badge_str+="  ·  "
+            badge_str+="$b"
+        done
+        echo "${APP_DISPLAY_NAME:-assemblrr}  ·  ${badge_str}"
+        ASSEMBLRR_SHOW_LEFTOVERS=0 print_detected_locations
+        echo
+    fi
 
-    echo "${APP_DISPLAY_NAME}  ·  media=${media}  ·  VPN ${vpn_label}"
-    print_detected_locations
-    echo
-    printf "  %-14s %-12s %s\n" "SERVICE" "STATE" "URL / NOTE"
-    printf "  %-14s %-12s %s\n" "--------------" "------------" "---------------------------"
+    printf "  %-18s %-12s %s\n" "SERVICE" "STATE" "URL"
+    printf "  %-18s %-12s %s\n" "------------------" "------------" "------------------------"
 
-    local label port path kind token url note
-    local seen=""
-    local unhealthy=0
-    local total=0
+    local label port path kind token url note seen="" unhealthy=0 total=0
+    local bg_total=0 bg_ok=0
+    local -a bg_names=()
+    local ui_host="${API_HOST:-localhost}"
+    [ "$ui_host" = "127.0.0.1" ] && ui_host="localhost"
 
     while IFS='|' read -r svc label port path kind; do
         [ -z "$svc" ] && continue
@@ -663,14 +698,24 @@ check_status() {
         state="${st_state[$svc]:-}"
         health="${st_health[$svc]:-}"
         token=$(_status_normalize "$state" "$health")
-        if [ "$token" = "unhealthy" ] || [ "$token" = "missing" ] || [ "$token" = "exited" ] || [ "$token" = "dead" ]; then
-            unhealthy=$((unhealthy + 1))
+        case "$token" in
+            unhealthy|missing|exited|dead) unhealthy=$((unhealthy + 1)) ;;
+        esac
+
+        if [ "$kind" = "internal" ]; then
+            bg_total=$((bg_total + 1))
+            if [ "$token" = "healthy" ] || [ "$token" = "running" ]; then
+                bg_ok=$((bg_ok + 1))
+            fi
+            bg_names+=("$(_status_short_bg_label "$label")")
+            if [ "$show_all" -eq 0 ] && { [ "$token" = "healthy" ] || [ "$token" = "running" ]; }; then
+                continue
+            fi
         fi
 
-        url=""
-        note=""
+        url="" note=""
         if [ "$kind" = "ui" ]; then
-            url=$(service_ui_url "$port" "$path" "localhost")
+            url=$(service_ui_url "$port" "$path" "$ui_host")
             if [ "$token" = "missing" ] || [ "$token" = "exited" ]; then
                 note="(down)"
             fi
@@ -678,16 +723,12 @@ check_status() {
             note="(internal)"
         fi
 
-        # STATE column without color for width, then rewrite — use plain token padded + color on same width
-        printf "  %-14s " "$label"
+        printf "  %-18s " "$label"
         case "$token" in
-            healthy)   printf "${GREEN}%-12s${NC}" "healthy" ;;
-            running)   printf "${GREEN}%-12s${NC}" "running" ;;
-            starting)  printf "${YELLOW}%-12s${NC}" "starting" ;;
-            unhealthy) printf "${RED}%-12s${NC}" "unhealthy" ;;
-            missing)   printf "${RED}%-12s${NC}" "missing" ;;
-            exited)    printf "${RED}%-12s${NC}" "exited" ;;
-            *)         printf "${YELLOW}%-12s${NC}" "$token" ;;
+            healthy|running)    printf "${GREEN:-}%-12s${NC:-}" "$token" ;;
+            starting)           printf "${YELLOW:-}%-12s${NC:-}" "$token" ;;
+            unhealthy|missing|exited) printf "${RED:-}%-12s${NC:-}" "$token" ;;
+            *)                  printf "${YELLOW:-}%-12s${NC:-}" "$token" ;;
         esac
         if [ -n "$url" ]; then
             printf " %s" "$url"
@@ -698,39 +739,57 @@ check_status() {
         fi
     done < <(list_service_catalog)
 
-    # Any compose services not in the catalog (custom overlays)
     while IFS=$'\t' read -r svc state health; do
         [ -z "$svc" ] && continue
         [[ "$seen" == *"|${svc}|"* ]] && continue
         total=$((total + 1))
         token=$(_status_normalize "$state" "$health")
-        if [ "$token" = "unhealthy" ] || [ "$token" = "missing" ] || [ "$token" = "exited" ] || [ "$token" = "dead" ]; then
-            unhealthy=$((unhealthy + 1))
-        fi
-        printf "  %-14s " "$svc"
         case "$token" in
-            healthy)   printf "${GREEN}%-12s${NC}" "healthy" ;;
-            running)   printf "${GREEN}%-12s${NC}" "running" ;;
-            starting)  printf "${YELLOW}%-12s${NC}" "starting" ;;
-            unhealthy) printf "${RED}%-12s${NC}" "unhealthy" ;;
-            *)         printf "${YELLOW}%-12s${NC}" "$token" ;;
+            unhealthy|missing|exited|dead) unhealthy=$((unhealthy + 1)) ;;
         esac
-        printf " (custom / unlisted)\n"
-    done < <(_status_compose_rows)
+        printf "  %-18s " "$svc"
+        case "$token" in
+            healthy|running) printf "${GREEN:-}%-12s${NC:-}" "$token" ;;
+            starting)        printf "${YELLOW:-}%-12s${NC:-}" "$token" ;;
+            unhealthy)       printf "${RED:-}%-12s${NC:-}" "$token" ;;
+            *)               printf "${YELLOW:-}%-12s${NC:-}" "$token" ;;
+        esac
+        printf " (custom)\n"
+    done <<< "$rows_raw"
 
-    echo
-    if [ "$unhealthy" -gt 0 ]; then
-        log_warning "${unhealthy} service(s) need attention (${total} listed)."
-        return 1
+    if [ "$show_all" -eq 0 ] && [ "$bg_total" -gt 0 ]; then
+        local bg_list="" n
+        for n in "${bg_names[@]}"; do
+            [ -n "$bg_list" ] && bg_list+=", "
+            bg_list+="$n"
+        done
+        echo
+        if [ "$bg_ok" -eq "$bg_total" ]; then
+            printf "  %-18s ${GREEN:-}%s${NC:-} (%s)\n" "Background:" "${bg_ok}/${bg_total} healthy" "$bg_list"
+        else
+            local bg_bad=$((bg_total - bg_ok))
+            printf "  %-18s ${YELLOW:-}%s healthy, %s need attention${NC:-}\n" "Background:" "${bg_ok}/${bg_total}" "$bg_bad"
+        fi
     fi
-    log_success "All ${total} listed services look good."
+
+    if [ "$compact" -eq 0 ]; then
+        echo
+        if [ "$unhealthy" -gt 0 ]; then
+            log_warning "${unhealthy} service(s) need attention (${total} listed)."
+            return 1
+        fi
+        log_success "All ${total} services look good."
+    else
+        [ "$unhealthy" -eq 0 ] || return 1
+    fi
     return 0
 }
 
 update_containers() {
     local skip_backup=false
     local assume_yes=false
-    
+    local arg
+
     for arg in "$@"; do
         case "$arg" in
             --skip-backup) skip_backup=true ;;
@@ -738,40 +797,50 @@ update_containers() {
         esac
     done
 
-    echo -e "\nWARNING: Updating containers may cause data loss or compatibility issues if new versions have breaking changes!"
-    
+    echo
+    log_info "Note: ${APP_DISPLAY_NAME:-assemblrr} pins core service image tags in compose/*.yaml to tested releases."
+    log_info "To receive newer upstream service releases + migrations + wiring, use: ${APP_CLI_NAME:-assemblrr} upgrade"
+    echo
+
     if [ "$skip_backup" = false ] && [ "$assume_yes" = false ]; then
-        read -p "Would you like to back up your current configuration first? [Y/n]: " -r
+        read_prompt "Create a backup before rebuilding sidecars / pulling custom overlay images? [Y/n]: "
         if [[ ! ${REPLY,,} =~ ^n$ ]]; then
-            local default_backup_dir="$HOME/assemblrr-backups"
+            local default_backup_dir="$HOME/${APP_NAME:-assemblrr}-backups"
             echo -e "\nStarting automatic backup to $default_backup_dir..."
             backup_app "$default_backup_dir"
-            echo -e "\nBackup complete. Proceeding with container update..."
         fi
     fi
 
     if [ "$assume_yes" = false ]; then
-        read -p "Are you sure you want to update all containers? [Y/n]: " -r
+        read_prompt "Rebuild local sidecars and pull any custom overlay images now? [Y/n]: "
         if [[ ${REPLY,,} =~ ^n$ ]]; then
             echo "Update aborted."
             return 0
         fi
     fi
 
-    echo "Pulling latest container images..."
-    "${DC[@]}" pull || log_error "Failed to pull containers"
-    echo "Restarting ${APP_DISPLAY_NAME} services..."
-    restart_app
-    log_success "Containers updated successfully!"
+    log_info "Pulling registry images (ignoring locally built sidecars)..."
+    "${DC[@]}" pull --ignore-buildable || log_warning "Some registry pulls failed"
+    log_info "Rebuilding sidecars and recreating stack..."
+    if [ "${#COMPOSE_ARGS[@]}" -gt 0 ] && type compose_up_stack >/dev/null 2>&1; then
+        compose_up_stack "default" --build || log_error "Failed to update containers"
+    else
+        "${DC[@]}" up -d --build --remove-orphans || log_error "Failed to update containers"
+    fi
+    log_success "Containers refreshed!"
 }
 
 show_config() {
-    echo "${APP_DISPLAY_NAME} Configuration:"
-    print_detected_locations
+    echo "${APP_DISPLAY_NAME:-assemblrr} Configuration:"
+    ASSEMBLRR_SHOW_LEFTOVERS=0 print_detected_locations
     echo "  Media service:      ${MEDIA_SERVICE:-jellyfin}"
     echo "  VPN enabled:        ${VPN_ENABLED:-n}"
     echo "  VPN type:           ${VPN_TYPE:-openvpn}"
     echo "  Timezone:           ${TZ:-UTC}"
+    echo "  VueTorrent:         ${VUETORRENT_ENABLED:-n}"
+    echo "  GPU transcoding:    ${GPU_TRANSCODING:-none}"
+    echo "  Byparr solver:      ${BYPARR_ENABLED:-n}"
+    echo "  SABnzbd / Usenet:   ${USENET_ENABLED:-n}"
     if type quality_tier >/dev/null 2>&1; then
         if [ "$(quality_tier)" = "any" ]; then
             echo "  Quality:            any"
@@ -785,7 +854,7 @@ show_config() {
     echo
     echo "Compose files:"
     local _prev="" _arg
-    for _arg in "${COMPOSE_ARGS[@]}"; do
+    for _arg in "${COMPOSE_ARGS[@]+"${COMPOSE_ARGS[@]}"}"; do
         if [ "$_prev" = "-f" ]; then
             echo "  $_arg"
         fi
@@ -794,7 +863,7 @@ show_config() {
 }
 
 show_config_help() {
-    echo "Usage: ${APP_CLI_NAME} config [subcommand]"
+    echo "Usage: ${APP_CLI_NAME:-assemblrr} config [subcommand]"
     echo
     echo "Subcommands:"
     printf "  %-12s %s\n" "show" "Show current configuration"
@@ -802,15 +871,15 @@ show_config_help() {
     printf "  %-12s %s\n" "apply" "Re-wire running services (no compose replace)"
     echo
     echo "Examples:"
-    echo "  ${APP_CLI_NAME} config                 # List config options"
-    echo "  ${APP_CLI_NAME} config show            # Show configuration"
-    echo "  ${APP_CLI_NAME} config apply           # Re-run service wiring only"
-    echo "  ${APP_CLI_NAME} config edit            # Pick a setting to change"
+    echo "  ${APP_CLI_NAME:-assemblrr} config                 # List config options"
+    echo "  ${APP_CLI_NAME:-assemblrr} config show            # Show configuration"
+    echo "  ${APP_CLI_NAME:-assemblrr} config apply           # Re-run service wiring only"
+    echo "  ${APP_CLI_NAME:-assemblrr} config edit            # Pick a setting to change"
 }
 
 config_apply() {
     if [ ! -f "$INSTALL_DIR/config.sh" ]; then
-        log_error "config.sh not found in $INSTALL_DIR. Run '${APP_CLI_NAME} upgrade' first."
+        log_error "config.sh not found in $INSTALL_DIR. Run '${APP_CLI_NAME:-assemblrr} upgrade' first."
     fi
     log_info "Re-wiring services (no compose replace)..."
     ASSEMBLRR_NONINTERACTIVE=1 bash "$INSTALL_DIR/config.sh"
@@ -823,7 +892,7 @@ _load_config_edit() {
     elif [ -f "$_lib_dir/config_edit.sh" ]; then
         src="$_lib_dir/config_edit.sh"
     else
-        log_error "config_edit.sh not found. Run '${APP_CLI_NAME} upgrade' to install modular config edit."
+        log_error "config_edit.sh not found. Run '${APP_CLI_NAME:-assemblrr} upgrade' to install modular config edit."
     fi
     # shellcheck source=/dev/null
     source "$src"
@@ -833,76 +902,80 @@ config_cmd() {
     local sub=${1:-}
     shift || true
     case "$sub" in
-        "")
-            show_config_help
-            ;;
-        show)
-            show_config
-            ;;
-        apply|wire)
-            config_apply
-            ;;
+        "") show_config_help ;;
+        show) show_config ;;
+        apply|wire) config_apply ;;
         edit)
             _load_config_edit
             config_edit_run "${1:-}"
             ;;
-        --help|-h|help)
-            show_config_help
-            ;;
-        *)
-            log_error "Unknown config subcommand: $sub\nRun '${APP_CLI_NAME} config' for usage"
-            ;;
+        --help|-h|help) show_config_help ;;
+        *) log_error "Unknown config subcommand: $sub\nRun '${APP_CLI_NAME:-assemblrr} config' for usage" ;;
     esac
 }
 
 restore_app() {
-    local backup_file="$1"
-
-    if [ ! -f "$backup_file" ]; then
-        log_error "Backup file not found: $backup_file"
+    local backup_file="${1:-}"
+    if ! validate_backup_archive "$backup_file"; then
+        log_error "Invalid or unsafe backup archive (must be a valid .tar.gz containing .env with safe relative paths): $backup_file"
     fi
 
     echo -e "\nWARNING: This will stop all services and overwrite the current installation!"
     echo "Backup file: $backup_file"
-    read -p "Are you sure you want to restore? [y/N]: " -r
+    read_prompt "Are you sure you want to restore? [y/N]: "
     if [[ ${REPLY,,} != "y" ]]; then
         echo "Restore cancelled."
         return 0
     fi
 
-    echo "Stopping ${APP_DISPLAY_NAME} services..."
+    echo "Stopping ${APP_DISPLAY_NAME:-assemblrr} services..."
     "${DC[@]}" down 2>/dev/null || log_warning "Failed to stop services"
 
-    echo "Restoring from backup..."
-    
-    # Safely clear the current configuration instead of blindly overwriting
-    local timestamp=$(date +%Y%m%d_%H%M%S)
-    local backup_dir="${INSTALL_DIR}_backup_${timestamp}"
-    
+    local timestamp backup_dir abs_backup_file
+    timestamp=$(date +%Y%m%d_%H%M%S)
+    backup_dir="${INSTALL_DIR}_backup_${timestamp}"
+
     echo "Creating safety snapshot of current state at ${backup_dir}..."
     wait_while "Creating safety snapshot" run_docker run --rm \
         -v "$(dirname "$INSTALL_DIR"):/target_parent" \
-        alpine cp -r "/target_parent/$(basename "$INSTALL_DIR")" "/target_parent/$(basename "$backup_dir")" \
+        "${UTILITY_ALPINE_IMAGE:-alpine:3.24.4}" \
+        cp -r "/target_parent/$(basename "$INSTALL_DIR")" "/target_parent/$(basename "$backup_dir")" \
         || log_warning "Failed to create safety snapshot"
 
     wait_while "Clearing install directory" run_docker run --rm \
         -v "$INSTALL_DIR:/target" \
-        alpine sh -c 'find /target -mindepth 1 -maxdepth 1 ! -name "media" ! -name "downloads" -exec rm -rf {} +'
+        "${UTILITY_ALPINE_IMAGE:-alpine:3.24.4}" \
+        sh -c 'find /target -mindepth 1 -maxdepth 1 ! -name "media" ! -name "downloads" -exec rm -rf {} +'
 
-    local abs_backup_file; abs_backup_file=$(realpath "$backup_file")
+    abs_backup_file=$(realpath "$backup_file")
     if ! wait_while "Restoring from backup" run_docker run --rm \
         -v "$INSTALL_DIR:/target" \
-        -v "$(dirname "$abs_backup_file"):/backup" \
-        alpine tar -xzf "/backup/$(basename "$abs_backup_file")" -C /target; then
+        -v "$(dirname "$abs_backup_file"):/backup:ro" \
+        "${UTILITY_ALPINE_IMAGE:-alpine:3.24.4}" \
+        tar --no-same-owner -xzf "/backup/$(basename "$abs_backup_file")" -C /target; then
         log_error "Failed to extract backup"
     fi
 
-    echo "Starting ${APP_DISPLAY_NAME} services..."
+    # Adapt restored config to current host INSTALL_DIRECTORY / PUID / PGID if moved
+    local host_uid host_gid f
+    host_uid=$(id -u)
+    host_gid=$(id -g)
+    for f in "$INSTALL_DIR/.env" "$INSTALL_DIR/.assemblrr-config"; do
+        [ -f "$f" ] || continue
+        sed -i -E "s|^INSTALL_DIRECTORY=.*|INSTALL_DIRECTORY=\"${INSTALL_DIR}\"|" "$f" 2>/dev/null || true
+    done
+    [ -f "$INSTALL_DIR/.env" ] && sed -i -E "s|^INSTALL_DIRECTORY=.*|INSTALL_DIRECTORY=${INSTALL_DIR}|" "$INSTALL_DIR/.env" 2>/dev/null || true
+    if [ -d "$INSTALL_DIR/secrets" ]; then
+        chmod 700 "$INSTALL_DIR/secrets"
+        chmod 600 "$INSTALL_DIR/secrets/"* 2>/dev/null || true
+    fi
+    prepare_install_dirs "$INSTALL_DIR" "$host_uid" "$host_gid" 2>/dev/null || true
+
+    echo "Starting ${APP_DISPLAY_NAME:-assemblrr} services..."
     "${DC[@]}" up -d --remove-orphans || log_warning "Failed to start services"
 
     echo "Cleaning up old safety snapshots (keeping last 3)..."
-    # Keep only the 3 most recent backups, remove the rest
-    ls -dt "${INSTALL_DIR}_backup_"* 2>/dev/null | tail -n +4 | while read -r old_backup; do
+    ls -dt "${INSTALL_DIR}_backup_"* 2>/dev/null | tail -n +4 | while IFS= read -r old_backup; do
         rm -rf "$old_backup" 2>/dev/null || true
     done
 
@@ -919,35 +992,47 @@ show_logs() {
 }
 
 check_health() {
-    # Compact pass/fail over compose health (exit 1 if any unhealthy/missing expected UI service)
-    echo "${APP_DISPLAY_NAME} Health Check:"
+    echo "${APP_DISPLAY_NAME:-assemblrr} Health Check:"
     echo
-    local unhealthy=0
-    local svc state health token
+    local rows_raw svc state health token label port path kind seen="" unhealthy=0
+    rows_raw=$(_status_compose_rows)
+
+    declare -A st_state=() st_health=()
+    while IFS=$'\t' read -r svc state health; do
+        [ -z "$svc" ] && continue
+        st_state["$svc"]="$state"
+        st_health["$svc"]="$health"
+    done <<< "$rows_raw"
+
+    if type list_service_catalog >/dev/null 2>&1; then
+        while IFS='|' read -r svc label port path kind; do
+            [ -z "$svc" ] && continue
+            seen="${seen}|${svc}|"
+            token=$(_status_normalize "${st_state[$svc]:-}" "${st_health[$svc]:-}")
+            case "$token" in
+                healthy) log_success "  $svc: healthy" ;;
+                running) log_warning "  $svc: running (no healthcheck)" ;;
+                starting) log_warning "  $svc: starting..." ;;
+                *) log_error_inline "  $svc: $token"; unhealthy=$((unhealthy + 1)) ;;
+            esac
+        done < <(list_service_catalog)
+    fi
 
     while IFS=$'\t' read -r svc state health; do
         [ -z "$svc" ] && continue
+        [[ "$seen" == *"|${svc}|"* ]] && continue
         token=$(_status_normalize "$state" "$health")
         case "$token" in
-            healthy)
-                log_success "  $svc: healthy"
-                ;;
-            running)
-                log_warning "  $svc: running (no healthcheck)"
-                ;;
-            starting)
-                log_warning "  $svc: starting..."
-                ;;
-            *)
-                log_error_inline "  $svc: $token"
-                unhealthy=$((unhealthy + 1))
-                ;;
+            healthy) log_success "  $svc: healthy (custom)" ;;
+            running) log_warning "  $svc: running (custom)" ;;
+            starting) log_warning "  $svc: starting..." ;;
+            *) log_error_inline "  $svc: $token (custom)"; unhealthy=$((unhealthy + 1)) ;;
         esac
-    done < <(_status_compose_rows)
+    done <<< "$rows_raw"
 
     echo
     if [ "$unhealthy" -gt 0 ]; then
-        log_warning "$unhealthy service(s) are unhealthy"
+        log_warning "$unhealthy service(s) need attention"
         return 1
     fi
     log_success "All services are healthy"
@@ -955,74 +1040,53 @@ check_health() {
 }
 
 main() {
-    local command=${1:-"--help"}
-    local destination=${2:-.}
+    local command="${1:---help}"
+    case "$command" in
+        --help|-h|help)
+            show_help
+            return 0
+            ;;
+    esac
 
+    _cli_init
+
+    local destination="${2:-.}"
     if [ "$command" = "backup" ]; then
         destination=$(realpath "$destination" 2>/dev/null || echo "$destination") || log_error "Invalid backup destination path"
     fi
 
     case "$command" in
-        --help)
-            show_help
-            ;;
-        restart)
-            restart_app "${@:2}"
-            ;;
-        stop)
-            stop_app "${@:2}"
-            ;;
-        start)
-            start_app "${@:2}"
-            ;;
-        status)
-            check_status "${@:2}"
-            ;;
-        check-vpn)
-            check_vpn
-            ;;
-        destroy)
-            destroy_app "${@:2}"
-            ;;
-        uninstall)
-            uninstall_app "${@:2}"
-            ;;
-        backup)
-            backup_app "$destination"
-            ;;
+        restart) restart_app "${@:2}" ;;
+        stop) stop_app "${@:2}" ;;
+        start) start_app "${@:2}" ;;
+        status) check_status "${@:2}" ;;
+        check-vpn) check_vpn ;;
+        destroy) destroy_app "${@:2}" ;;
+        uninstall) uninstall_app "${@:2}" ;;
+        backup) backup_app "$destination" ;;
         restore)
-            [ -z "${2:-}" ] && log_error "Usage: ${APP_CLI_NAME} restore /path/to/backup.tar.gz"
+            [ -z "${2:-}" ] && log_error "Usage: ${APP_CLI_NAME:-assemblrr} restore /path/to/backup.tar.gz"
             restore_app "${2}"
             ;;
-        update-containers)
-            update_containers "${@:2}"
-            ;;
-        update-cli)
-            log_info "The CLI is ${INSTALL_DIR}/cli.sh. Update with: ${APP_CLI_NAME} upgrade"
-            ;;
+        update-containers) update_containers "${@:2}" ;;
+        update-cli) log_info "The CLI is ${INSTALL_DIR}/cli.sh. Update with: ${APP_CLI_NAME:-assemblrr} upgrade" ;;
         upgrade)
             if ! type upgrade_app >/dev/null 2>&1; then
                 log_error "Upgrade engine not found. Update CLI from a current checkout: bash /path/to/repo/bin/cli.sh upgrade --from /path/to/repo"
             fi
             upgrade_app "${@:2}"
             ;;
-        logs)
-            show_logs "$@"
-            ;;
-        health)
-            check_health
-            ;;
-        config)
-            config_cmd "${@:2}"
-            ;;
+        logs) show_logs "$@" ;;
+        health) check_health ;;
+        config) config_cmd "${@:2}" ;;
         purge)
-            [ $# -lt 2 ] && log_error "Usage: ${APP_CLI_NAME} purge --movie-id N | --series-id N | --path PATH | --tmdb ID | --tvdb ID"
+            [ $# -lt 2 ] && log_error "Usage: ${APP_CLI_NAME:-assemblrr} purge --movie-id N | --series-id N | --path PATH | --tmdb ID | --tvdb ID"
             purge_media "${@:2}"
             ;;
-        *)
-            log_error "Unknown command: $command\nRun '${APP_CLI_NAME} --help' for usage information"
-            ;;
+        *) log_error "Unknown command: $command\nRun '${APP_CLI_NAME:-assemblrr} --help' for usage information" ;;
     esac
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

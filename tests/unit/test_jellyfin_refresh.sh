@@ -48,19 +48,28 @@ sonarr_eventtype=""
 
 test_suite "jf_refresh_dir_has_video"
 _jf_tmp=$(mktemp -d)
-assert_false "missing dir" "jf_refresh_dir_has_video /no/such/loki"
+assert_false "missing dir" "jf_refresh_dir_has_video /no/such/sample-show"
 assert_false "empty dir" "jf_refresh_dir_has_video $_jf_tmp"
 mkdir -p "$_jf_tmp/Season 1"
 : >"$_jf_tmp/Season 1/notes.txt"
 assert_false "only txt" "jf_refresh_dir_has_video $_jf_tmp"
-: >"$_jf_tmp/Season 1/Show - S01E01.mkv"
+: >"$_jf_tmp/Season 1/Sample Show - S01E01.mkv"
 assert_true "has mkv" "jf_refresh_dir_has_video $_jf_tmp"
 rm -rf "$_jf_tmp"
 
 test_suite "jf_refresh_empty_series_ids"
 assert_eq "aa11" \
-    "$(jf_refresh_empty_series_ids '{"Items":[{"Id":"aa11","Path":"/data/media/tv/Loki"}]}')" \
+    "$(jf_refresh_empty_series_ids '{"Items":[{"Id":"aa11","Path":"/data/media/tv/Sample Show"}]}')" \
     "extracts series id"
+
+test_suite "jf_refresh uses bash, MediaBrowser header, and avoids env key leak"
+_jf_script=$(cat "$REPO_ROOT/scripts/jellyfin-refresh.sh")
+assert_contains "$_jf_script" '#!/usr/bin/env bash' "shebang uses bash"
+assert_contains "$_jf_script" 'Authorization: MediaBrowser' "uses MediaBrowser auth header"
+assert_not_contains "$_jf_script" 'X-Emby-Token' "no legacy X-Emby-Token header"
+assert_contains "$_jf_script" '_JF_KEY_FROM_SECRET' "avoids passing secret-file key through nohup env"
+JF_API_KEY="tok-123"
+assert_contains "$(jf_refresh_auth_header)" 'Token="tok-123"' "auth header formats Token"
 
 test_suite "jellyfin refresh notif payload"
 _sonarr_schema='[{"implementation":"CustomScript","fields":[{"name":"path","value":""}],"onDownload":false,"onUpgrade":false,"onImportComplete":false}]'

@@ -1,9 +1,8 @@
 # Custom services overlay — NOT officially supported.
 # Rename this file to custom.yaml to add extra containers. They join assemblrr_network
-# but are not wired, upgraded, or bugfixed by assemblrr. Express/default support is
-# Jellyfin + qBittorrent + Sonarr/Radarr/Prowlarr/Bazarr/Seerr/Recyclarr (+ optional VPN).
-#
-# Usage: docker compose -f base.yaml -f [direct-access|vpn].yaml -f custom.yaml --profile <media_service> up -d
+# (.30+ IPs reserved for custom services) and are left untouched by assemblrr upgrades.
+# Official core stack: Jellyfin + qBittorrent + Sonarr/Radarr/Prowlarr/Bazarr/Seerr/Recyclarr
+# + optional overlays (vuetorrent, gpu-intel/gpu-nvidia, byparr, usenet, vpn).
 
 networks:
   default:
@@ -12,11 +11,48 @@ networks:
 
 services:
 
+  # --- Emby (optional self-managed custom service; conflicts with Jellyfin 8096 unless remapped) ---
+  # Web UI: http://<host>:8097
+  # emby:
+  #   image: lscr.io/linuxserver/emby:4.9.3.0
+  #   container_name: emby
+  #   environment:
+  #     - PUID=${PUID}
+  #     - PGID=${PGID}
+  #     - TZ=${TZ}
+  #   volumes:
+  #     - /etc/localtime:/etc/localtime:ro
+  #     - ${MEDIA_DIRECTORY}:/data
+  #     - ${INSTALL_DIRECTORY}/config/emby:/config
+  #   ports:
+  #     - 8097:8096
+  #   restart: unless-stopped
+  #   networks:
+  #     assemblrr_network:
+  #       ipv4_address: 172.60.0.30
+
+  # --- Plex (optional self-managed custom service; uses host networking for DLNA/claim) ---
+  # Web UI: http://<host>:32400/web
+  # plex:
+  #   image: lscr.io/linuxserver/plex:1.43.0
+  #   container_name: plex
+  #   network_mode: host
+  #   environment:
+  #     - PUID=${PUID}
+  #     - PGID=${PGID}
+  #     - TZ=${TZ}
+  #     - VERSION=docker
+  #   volumes:
+  #     - /etc/localtime:/etc/localtime:ro
+  #     - ${MEDIA_DIRECTORY}:/data
+  #     - ${INSTALL_DIRECTORY}/config/plex:/config
+  #   restart: unless-stopped
+
   # --- Lidarr — Music management and automation ---
-  # Requires: Prowlarr indexer, qBittorrent download client (configure manually)
+  # Requires: Prowlarr indexer + download client (configure manually in Lidarr UI)
   # Web UI: http://<host>:8686
   # lidarr:
-  #   image: lscr.io/linuxserver/lidarr:3.1.0.4875-ls39
+  #   image: lscr.io/linuxserver/lidarr:3.1.0
   #   container_name: lidarr
   #   environment:
   #     - PUID=${PUID}
@@ -31,68 +67,20 @@ services:
   #   restart: unless-stopped
   #   networks:
   #     assemblrr_network:
-  #       ipv4_address: 172.60.0.20
+  #       ipv4_address: 172.60.0.32
 
-  # --- SABnzbd — Usenet downloader ---
-  # Requires: A paid Usenet provider (Newshosting, Eweka, etc.)
-  # Note: Routes through VPN if enabled (same as qBittorrent)
-  # Web UI: http://<host>:8080
-  # sabnzbd:
-  #   image: lscr.io/linuxserver/sabnzbd:5.1.0-ls267
-  #   container_name: sabnzbd
+  # --- Komodo Periphery — connect this host to a Komodo dashboard (see docs/komodo.md) ---
+  # periphery:
+  #   image: ghcr.io/moghtech/komodo-periphery:1.19
+  #   container_name: komodo-periphery
   #   environment:
-  #     - PUID=${PUID}
-  #     - PGID=${PGID}
   #     - TZ=${TZ}
-  #   volumes:
-  #     - /etc/localtime:/etc/localtime:ro
-  #     - ${MEDIA_DIRECTORY}:/data
-  #     - ${INSTALL_DIRECTORY}/config/sabnzbd:/config
-  #   restart: unless-stopped
-  #   networks:
-  #     assemblrr_network:
-  #       ipv4_address: 172.60.0.21
-
-  # --- Bazarr ---
-  # Bazarr ships in compose/base.yaml (auto-wired by config.sh). Do not re-add it here.
-
-  # --- Portainer — optional Docker UI (not part of the default stack; prefer assemblrr CLI) ---
-  # Web UI: http://localhost:9000
-  # portainer:
-  #   image: portainer/portainer-ce
-  #   container_name: portainer
-  #   ports:
-  #     - 9000:9000
-  #   volumes:
-  #     - /etc/localtime:/etc/localtime:ro
-  #     - /var/run/docker.sock:/var/run/docker.sock:ro
-  #     - ${INSTALL_DIRECTORY}/config/portainer:/data
-  #   restart: unless-stopped
-  #   networks:
-  #     assemblrr_network:
-  #       ipv4_address: 172.60.0.16
-
-  # --- Watchtower — Automatic container update notifications ---
-  # MONITOR_ONLY=true: Notifies when updates are available, does NOT auto-update
-  # To enable notifications, set WATCHTOWER_NOTIFICATION_URL (see: https://containrrr.dev/shoutrrr/v0.5/services/)
-  #   Examples:
-  #     Discord:  discord://token@id
-  #     Telegram: telegram://bottoken@ChatID
-  #     Slack:    slack://token@channel
-  #     Email:    smtp://user:pass@host:port/?from=addr&to=addr
-  # watchtower:
-  #   image: nickfedor/watchtower
-  #   container_name: watchtower
-  #   environment:
-  #     - WATCHTOWER_CLEANUP=true
-  #     - TZ=${TZ}
-  #     - WATCHTOWER_SCHEDULE=0 0 4 * * *
-  #     - WATCHTOWER_MONITOR_ONLY=true
-  #     - WATCHTOWER_NOTIFICATIONS=shoutrrr
-  #     - WATCHTOWER_NOTIFICATION_URL=discord://token@id
   #   volumes:
   #     - /var/run/docker.sock:/var/run/docker.sock
+  #     - ${INSTALL_DIRECTORY}:${INSTALL_DIRECTORY}
+  #   ports:
+  #     - 8120:8120
   #   restart: unless-stopped
   #   networks:
   #     assemblrr_network:
-  #       ipv4_address: 172.60.0.23
+  #       ipv4_address: 172.60.0.33

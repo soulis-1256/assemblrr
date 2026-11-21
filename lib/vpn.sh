@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # assemblrr VPN helpers — sourced by entry points that handle VPN orchestration
 # Requires: lib/core.sh (for logging, safe_source)
 
@@ -68,10 +69,11 @@ validate_vpn_secrets() {
         return 0
     fi
 
-    # Source .env for WIREGUARD_ADDRESSES
+    # Read WIREGUARD_ADDRESSES from .env without polluting caller exports
+    local WIREGUARD_ADDRESSES="${WIREGUARD_ADDRESSES:-}"
     local _env_file="$_install_dir/.env"
-    if [ -f "$_env_file" ]; then
-        set -a; safe_source "$_env_file"; set +a
+    if [ -f "$_env_file" ] && grep -qE '^WIREGUARD_ADDRESSES=' "$_env_file" 2>/dev/null; then
+        WIREGUARD_ADDRESSES=$(_pointer_get "$_env_file" "WIREGUARD_ADDRESSES")
     fi
 
     local _secrets_dir="$_install_dir/secrets"

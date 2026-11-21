@@ -13,7 +13,7 @@ root-owned; plain `rm -rf` then fails — use the Docker removal step in Option 
 
 | Component | Default location |
 |---|---|
-| Containers | `jellyfin`/`emby`/`plex` (your choice), `qbittorrent`, `sonarr`, `radarr`, `prowlarr`, `bazarr`, `seerr`, `seerr-gateway`, `media-purge-watch`, `recyclarr` — plus `gluetun`, `deunhealth`, `vpn-watchdog` when VPN is enabled; older installs may still have `portainer` |
+| Containers | `jellyfin`, `qbittorrent`, `sonarr`, `radarr`, `prowlarr`, `bazarr`, `seerr`, `seerr-gateway`, `media-purge-watch`, `recyclarr` — plus `sabnzbd` (`usenet`), `byparr` (`byparr`), and `gluetun`/`deunhealth`/`vpn-watchdog` (`vpn`) when enabled; older installs may have `portainer`/`emby`/`plex` |
 | Docker network | `assemblrr_network` |
 | Install directory (config, secrets, compose files) | `~/assemblrr` (or the path you chose) |
 | Media directory (your movies/TV/downloads) | `~/assemblrr-media` (or the path you chose) |
@@ -93,7 +93,7 @@ you deliberately remove it in step 3.
 **1. Remove containers and the network:**
 
 ```bash
-docker rm -f jellyfin emby plex qbittorrent sonarr radarr prowlarr bazarr \
+docker rm -f jellyfin sabnzbd byparr qbittorrent sonarr radarr prowlarr bazarr \
     seerr seerr-gateway media-purge-watch recyclarr portainer \
     gluetun deunhealth vpn-watchdog 2>/dev/null
 # portainer: only if an older install still has it
@@ -141,12 +141,11 @@ rm -f ~/.assemblrr-config 2>/dev/null        # discovery pointer
 **5. Optional — remove the Docker images:**
 
 ```bash
-# VPN mode also pulls qmcgaw/gluetun and qmcgaw/deunhealth;
-# swap jellyfin for emby/plex if you chose a different media server
 docker rmi lscr.io/linuxserver/jellyfin lscr.io/linuxserver/qbittorrent \
     lscr.io/linuxserver/sonarr lscr.io/linuxserver/radarr \
-    lscr.io/linuxserver/prowlarr \
-    ghcr.io/seerr-team/seerr ghcr.io/recyclarr/recyclarr alpine:3
+    lscr.io/linuxserver/prowlarr lscr.io/linuxserver/bazarr \
+    lscr.io/linuxserver/sabnzbd ghcr.io/thephaseless/byparr \
+    ghcr.io/seerr-team/seerr ghcr.io/recyclarr/recyclarr alpine:3.24.4
 # older installs: docker rmi portainer/portainer-ce
 ```
 
