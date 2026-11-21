@@ -432,8 +432,8 @@ uninstall_app() {
         fi
     fi
 
-    if [ "$force" = false ] && type wait_while >/dev/null 2>&1; then
-        wait_while "Stopping containers" "${DC[@]}" down -v || log_warning "Failed to stop some services"
+    if type wait_while >/dev/null 2>&1; then
+        wait_while "Stopping and removing containers" "${DC[@]}" down -v || log_warning "Failed to stop some services"
     else
         "${DC[@]}" down -v 2>/dev/null || log_warning "Failed to stop some services"
     fi
@@ -443,12 +443,20 @@ uninstall_app() {
     fi
 
     if [ "$force" = true ] || [ "$remove_config" = true ]; then
-        safe_rm_rf "$INSTALL_DIR"
+        if type wait_while >/dev/null 2>&1; then
+            wait_while "Removing configuration files" safe_rm_rf "$INSTALL_DIR"
+        else
+            safe_rm_rf "$INSTALL_DIR"
+        fi
         removed_config=true
     fi
 
     if [ "$delete_media" = true ]; then
-        safe_rm_rf "$MEDIA_DIRECTORY"
+        if type wait_while >/dev/null 2>&1; then
+            wait_while "Removing media files" safe_rm_rf "$MEDIA_DIRECTORY"
+        else
+            safe_rm_rf "$MEDIA_DIRECTORY"
+        fi
         removed_media=true
     fi
 
