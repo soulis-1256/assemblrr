@@ -1163,6 +1163,8 @@ offer_leftover_cleanup() {
     echo
     if [ "$has_incomplete" = true ]; then
         log_warning "Found an incomplete ${APP_DISPLAY_NAME:-assemblrr} setup from an earlier attempt:"
+    elif [ "$has_install" = false ] && [ "$has_media" = true ]; then
+        log_info "Existing media library found (kept from a previous install):"
     else
         log_warning "Found leftover ${APP_DISPLAY_NAME:-assemblrr} files from an earlier attempt:"
     fi
@@ -1170,7 +1172,13 @@ offer_leftover_cleanup() {
         [ -n "$path" ] || continue
         case "$kind" in
             install) log_warning "  Install: $path" ;;
-            media)   log_warning "  Media:   $path" ;;
+            media)
+                if [ "$has_install" = false ]; then
+                    log_info "  Media:   $path"
+                else
+                    log_warning "  Media:   $path"
+                fi
+                ;;
             *)       log_warning "  $path" ;;
         esac
     done <<< "$leftover"
@@ -1195,9 +1203,9 @@ offer_leftover_cleanup() {
 
     leftover=$(list_assemblrr_leftovers || true)
     if echo "$leftover" | grep -q $'^media\t'; then
-        local prompt_media="Remove leftover media directories? (y/N) [Default = n]: "
+        local prompt_media="Delete existing media library and start fresh? (y/N) [Default = n, keep media]: "
         if [ "$has_install" = true ]; then
-            prompt_media="Also remove leftover media directories? (y/N) [Default = n]: "
+            prompt_media="Also delete existing media directories? (y/N) [Default = n, keep media]: "
         fi
         read_prompt "$prompt_media" ans
         ans=${ans:-n}
