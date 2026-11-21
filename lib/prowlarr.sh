@@ -318,7 +318,7 @@ _prowlarr_enable_disabled_indexers_with_byparr() {
     indexers=$(api_get "9696" "/api/v1/indexer" "$apikey" || echo "[]")
     [ -n "$indexers" ] && [ "$indexers" != "[]" ] || return 0
 
-    local row idx_id idx_name updated_payload res
+    local row idx_id idx_name updated_payload res enabled_count=0
     while IFS= read -r row; do
         [ -z "$row" ] && continue
         idx_id=$(printf '%s' "$row" | jq -r '.id // empty')
@@ -332,8 +332,13 @@ _prowlarr_enable_disabled_indexers_with_byparr() {
         res=$(api_put_force "9696" "/api/v1/indexer/${idx_id}" "$apikey" "$updated_payload" || echo "")
         if jq_json_has_key "$res" "id"; then
             log_step "Prowlarr: enabled ${idx_name} indexer via Byparr"
+            enabled_count=$((enabled_count + 1))
         fi
     done < <(printf '%s' "$indexers" | jq -c '.[] | select(.enable == false)' 2>/dev/null || true)
+
+    if [ "$enabled_count" -gt 0 ]; then
+        api_post "9696" "/api/v1/command" "$apikey" '{"name":"ApplicationIndexerSync"}' >/dev/null 2>&1 || true
+    fi
 }
 
 apply_selected_indexers() {

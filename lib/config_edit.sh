@@ -740,6 +740,11 @@ _config_edit_byparr() {
     if [ -n "${PROWLARR_API_KEY:-}" ]; then
         wait_for_api "Prowlarr" "9696" "$PROWLARR_API_KEY" "/api/v1/system/status" || true
         prowlarr_sync_byparr_proxy "$PROWLARR_API_KEY" || true
+        if [ "${BYPARR_ENABLED,,}" = "y" ]; then
+            [ -n "${RADARR_API_KEY:-}" ] && wait_for_arr_indexer_sync "$RADARR_API_KEY" || true
+            [ -n "${RADARR_API_KEY:-}" ] && arr_set_indexer_min_seeders "Radarr" "7878" "$RADARR_API_KEY" || true
+            [ -n "${SONARR_API_KEY:-}" ] && arr_set_indexer_min_seeders "Sonarr" "8989" "$SONARR_API_KEY" || true
+        fi
     fi
 }
 
