@@ -36,6 +36,7 @@ configure_recyclarr() {
     # Write with 0600 (contains Radarr/Sonarr API keys)
     if ! (
         umask 077
+        # shellcheck disable=SC2016
         envsubst '${RADARR_API_KEY} ${SONARR_API_KEY}' \
             < "$template_root/recyclarr.yml" \
             > "$recyclarr_config_dir/recyclarr.yml"

@@ -34,7 +34,7 @@ purge_watch_is_ignored() {
     local base="${p##*/}"
     case "$base" in
         ""|.|..|.DS_Store|Thumbs.db) return 0 ;;
-        *write_test*|*_write_test.txt|radarr_write_test.txt|sonarr_write_test.txt) return 0 ;;
+        *write_test*) return 0 ;;
         .nfs*|.tmp*|*.tmp|*.partial|*.!qB|*.part) return 0 ;;
     esac
     case "$p" in
@@ -237,6 +237,7 @@ purge_watch_arr_hold() {
 
 # --- sourced by unit tests: stop here ---
 if [ "${PURGE_WATCH_SOURCE_ONLY:-0}" = "1" ]; then
+    # shellcheck disable=SC2317
     return 0 2>/dev/null || exit 0
 fi
 

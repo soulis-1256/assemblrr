@@ -67,6 +67,7 @@ safe_source() {
             val="${BASH_REMATCH[1]}"
         elif [[ "$raw" =~ ^\"(([^\"\\]|\\.)*)\"$ ]]; then
             val="${BASH_REMATCH[1]}"
+            # shellcheck disable=SC2016
             if [[ "$val" == *'$('* ]] || [[ "$val" == *'`'* ]]; then
                 log_error_inline "Rejecting command substitution in $file: $line"
                 return 1
@@ -77,6 +78,7 @@ safe_source() {
             val=$(_safe_expand_vars "$val")
         else
             # Unquoted value: reject whitespace, shell metacharacters, or quotes
+            # shellcheck disable=SC2016
             case "$raw" in
                 *[[:space:]]*|*'$('*|*'`'*|*';'*|*'|'*|*'&'*|*'>'*|*'<'*|*'('*|*')'*|*\"*|*\'*)
                     log_error_inline "Rejecting unsafe value in $file: $line"
@@ -91,7 +93,7 @@ safe_source() {
         # Make earlier assignments visible to subsequent lines (e.g. branding.conf)
         printf -v "$key" '%s' "$val"
         if [ "$do_export" -eq 1 ]; then
-            export "$key"
+            export "${key?}"
         fi
     done < "$file"
     return 0
@@ -133,7 +135,7 @@ _pointer_get() {
     local line
     [ -f "$file" ] || return 0
     line=$(grep -E "^${key}=" "$file" 2>/dev/null | tail -1) || true
-    line="${line#${key}=}"
+    line="${line#"${key}"=}"
     line="${line%$'\r'}"
     line="${line#\"}"
     line="${line%\"}"
@@ -485,6 +487,7 @@ probe_writable_path() {
     start=$(date +%s)
 
     export ASSEMBLRR_PROBE_FILE="$probe"
+    # shellcheck disable=SC2016
     run_with_timeout "$secs" bash -c \
         'printf ok > "$ASSEMBLRR_PROBE_FILE" && grep -qx ok "$ASSEMBLRR_PROBE_FILE" && rm -f "$ASSEMBLRR_PROBE_FILE"' \
         || rc=$?

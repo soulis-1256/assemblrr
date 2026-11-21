@@ -155,13 +155,16 @@ _config_edit_load() {
 
     CONFIGURE_LOG="${CONFIGURE_LOG:-/tmp/${APP_NAME:-assemblrr}-config-edit-$(date '+%Y%m%d-%H%M%S').log}"
     if ! type _cfg_log_info >/dev/null 2>&1; then
+        # shellcheck disable=SC2329
         _cfg_log_info() { echo "  $1" | tee -a "$CONFIGURE_LOG"; }
     fi
     if ! type log_step >/dev/null 2>&1; then
         _configure_total=0
         _configure_ok=0
         _configure_fail=0
+        # shellcheck disable=SC2329
         log_step() { printf ' %b✓%b %s\n' "${GREEN:-}" "${NC:-}" "$1"; printf ' ✓ %s\n' "$1" >> "$CONFIGURE_LOG"; _configure_ok=$((_configure_ok + 1)); _configure_total=$((_configure_total + 1)); }
+        # shellcheck disable=SC2329
         log_step_fail() { printf ' %b✗%b %s\n' "${RED:-}" "${NC:-}" "$1"; printf ' ✗ %s\n' "$1" >> "$CONFIGURE_LOG"; _configure_fail=$((_configure_fail + 1)); _configure_total=$((_configure_total + 1)); }
     fi
 
@@ -599,6 +602,7 @@ _config_edit_vpn() {
     local prev_vpn="${VPN_ENABLED:-n}"
     configure_vpn || return $?
     local enabled="n"
+    setup_vpn="${setup_vpn:-n}"
     [ "${setup_vpn,,}" = "y" ] && enabled="y"
     if [ "$enabled" = "n" ] && [ "${prev_vpn,,}" != "y" ]; then
         log_info "VPN already disabled — no restart needed."

@@ -978,6 +978,7 @@ restore_app() {
     "${DC[@]}" up -d --remove-orphans || log_warning "Failed to start services"
 
     echo "Cleaning up old safety snapshots (keeping last 3)..."
+    # shellcheck disable=SC2012
     ls -dt "${INSTALL_DIR}_backup_"* 2>/dev/null | tail -n +4 | while IFS= read -r old_backup; do
         rm -rf "$old_backup" 2>/dev/null || true
     done

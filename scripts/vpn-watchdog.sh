@@ -89,32 +89,17 @@ watchdog_should_restart_vpn() {
     return 0
 }
 
-if [ "${WATCHDOG_SOURCE_ONLY:-0}" = "1" ]; then
-    return 0 2>/dev/null || exit 0
-fi
-
-COOKIE_JAR=$(mktemp "${WATCHDOG_STATE_DIR%/}/qbit_watchdog_cookie.XXXXXX")
-LOGIN_BODY=$(mktemp "${WATCHDOG_STATE_DIR%/}/qbit_watchdog_login.XXXXXX")
+# Reuse a persistent session cookie jar across ticks so qBittorrent 5.3's 15-session LRU
+# cap does not evict interactive WebUI tabs; only log in again if missing or rejected.
+# shellcheck disable=SC2329
 cleanup_watchdog() {
-    rm -f "${COOKIE_JAR:-}" "${LOGIN_BODY:-}"
+    rm -f "${LOGIN_BODY:-}" "${TORRENTS_BODY:-}"
 }
-trap cleanup_watchdog EXIT INT TERM
-
-if [ ! -r "$AUTH_USERNAME_FILE" ] || [ ! -r "$AUTH_PASSWORD_FILE" ]; then
-    log_watchdog ERROR "Watchdog credentials not readable ($AUTH_USERNAME_FILE / $AUTH_PASSWORD_FILE)."
-    exit 1
-fi
-
-QBIT_USER=$(tr -d '\r\n' < "$AUTH_USERNAME_FILE")
-QBIT_PASS=$(tr -d '\r\n' < "$AUTH_PASSWORD_FILE")
-
-if [ ! -f "${WATCHDOG_STATE_DIR%/}/qbit_watchdog_started" ]; then
-    log_watchdog INFO "VPN Watchdog active. Monitoring qBittorrent at ${QBIT_HOST} (Interval: ${WATCHDOG_INTERVAL}s, Heartbeat: ${HEARTBEAT_INTERVAL}s, Cooldown: ${WATCHDOG_COOLDOWN_SEC}s)."
-    touch "${WATCHDOG_STATE_DIR%/}/qbit_watchdog_started"
-fi
 
 login_qbit() {
     local http_code
+    (umask 077; : > "$COOKIE_JAR")
+    chmod 600 "$COOKIE_JAR" 2>/dev/null || true
     http_code=$(curl -sS -o "$LOGIN_BODY" -w "%{http_code}" --connect-timeout 5 --max-time 15 \
         -c "$COOKIE_JAR" \
         -H "Referer: http://${QBIT_HOST}" \
@@ -129,6 +114,15 @@ login_qbit() {
     watchdog_cookie_has_sid "$COOKIE_JAR"
 }
 
+qbit_watchdog_fetch() {
+    local endpoint="$1"
+    local out_file="$2"
+    curl -sS -o "$out_file" -w "%{http_code}" --connect-timeout 5 --max-time 15 \
+        -b "$COOKIE_JAR" \
+        -H "Referer: http://${QBIT_HOST}" \
+        "http://${QBIT_HOST}${endpoint}" 2>/dev/null || echo "000"
+}
+
 qbit_watchdog_get() {
     local endpoint="$1"
     curl -sS --connect-timeout 5 --max-time 15 \
@@ -137,102 +131,142 @@ qbit_watchdog_get() {
         "http://${QBIT_HOST}${endpoint}" 2>/dev/null || true
 }
 
-if ! login_qbit; then
-    log_watchdog ERROR "Failed to authenticate to qBittorrent API."
-    echo "auth_failed" > "${WATCHDOG_STATE_DIR%/}/qbit_watchdog_last_status"
-    exit 1
-fi
+watchdog_main() {
+    COOKIE_JAR="${WATCHDOG_STATE_DIR%/}/qbit_watchdog_cookie.txt"
+    LOGIN_BODY=$(mktemp "${WATCHDOG_STATE_DIR%/}/qbit_watchdog_login.XXXXXX")
+    TORRENTS_BODY=$(mktemp "${WATCHDOG_STATE_DIR%/}/qbit_watchdog_torrents.XXXXXX")
+    trap cleanup_watchdog EXIT INT TERM
 
-TORRENTS=$(qbit_watchdog_get "/api/v2/torrents/info")
-if [ -z "$TORRENTS" ] || ! printf '%s' "$TORRENTS" | jq -e 'type == "array"' >/dev/null 2>&1; then
-    log_watchdog ERROR "Failed to fetch valid torrent list from qBittorrent API."
-    echo "api_failed" > "${WATCHDOG_STATE_DIR%/}/qbit_watchdog_last_status"
-    exit 1
-fi
+    if [ ! -r "$AUTH_USERNAME_FILE" ] || [ ! -r "$AUTH_PASSWORD_FILE" ]; then
+        log_watchdog ERROR "Watchdog credentials not readable ($AUTH_USERNAME_FILE / $AUTH_PASSWORD_FILE)."
+        exit 1
+    fi
 
-last_status=""
-if [ -f "${WATCHDOG_STATE_DIR%/}/qbit_watchdog_last_status" ]; then
-    last_status=$(cat "${WATCHDOG_STATE_DIR%/}/qbit_watchdog_last_status")
-fi
-if [ -n "$last_status" ] && [ "$last_status" != "success" ]; then
-    log_watchdog INFO "Watchdog recovered: Connection to qBittorrent API restored."
-fi
-echo "success" > "${WATCHDOG_STATE_DIR%/}/qbit_watchdog_last_status"
+    QBIT_USER=$(tr -d '\r\n' < "$AUTH_USERNAME_FILE")
+    QBIT_PASS=$(tr -d '\r\n' < "$AUTH_PASSWORD_FILE")
 
-num_torrents=$(printf '%s' "$TORRENTS" | jq 'length' 2>/dev/null || echo 0)
-[[ "$num_torrents" =~ ^[0-9]+$ ]] || num_torrents=0
+    if [ ! -f "${WATCHDOG_STATE_DIR%/}/qbit_watchdog_started" ]; then
+        log_watchdog INFO "VPN Watchdog active. Monitoring qBittorrent at ${QBIT_HOST} (Interval: ${WATCHDOG_INTERVAL}s, Heartbeat: ${HEARTBEAT_INTERVAL}s, Cooldown: ${WATCHDOG_COOLDOWN_SEC}s)."
+        touch "${WATCHDOG_STATE_DIR%/}/qbit_watchdog_started"
+    fi
 
-current_time=$(date +%s)
-last_heartbeat=0
-if [ -f "${WATCHDOG_STATE_DIR%/}/qbit_watchdog_last_heartbeat" ]; then
-    last_heartbeat=$(cat "${WATCHDOG_STATE_DIR%/}/qbit_watchdog_last_heartbeat" 2>/dev/null || echo 0)
-    [[ "$last_heartbeat" =~ ^[0-9]+$ ]] || last_heartbeat=0
-fi
+    if ! watchdog_cookie_has_sid "$COOKIE_JAR"; then
+        if ! login_qbit; then
+            log_watchdog ERROR "Failed to authenticate to qBittorrent API."
+            echo "auth_failed" > "${WATCHDOG_STATE_DIR%/}/qbit_watchdog_last_status"
+            exit 1
+        fi
+    fi
 
-time_diff=$((current_time - last_heartbeat))
-if [ "$time_diff" -ge "$HEARTBEAT_INTERVAL" ]; then
-    log_watchdog INFO "Heartbeat: Watchdog is active. Connected to qBittorrent. Monitoring ${num_torrents} torrent(s). VPN routing is healthy."
-    echo "$current_time" > "${WATCHDOG_STATE_DIR%/}/qbit_watchdog_last_heartbeat"
-fi
+    local torrents_http torrents
+    torrents_http=$(qbit_watchdog_fetch "/api/v2/torrents/info" "$TORRENTS_BODY")
+    torrents=$(cat "$TORRENTS_BODY" 2>/dev/null || true)
+    if [ "$torrents_http" = "403" ] || [ "$torrents_http" = "401" ] || \
+       [ -z "$torrents" ] || ! printf '%s' "$torrents" | jq -e 'type == "array"' >/dev/null 2>&1; then
+        if ! login_qbit; then
+            log_watchdog ERROR "Failed to authenticate to qBittorrent API."
+            echo "auth_failed" > "${WATCHDOG_STATE_DIR%/}/qbit_watchdog_last_status"
+            exit 1
+        fi
+        torrents_http=$(qbit_watchdog_fetch "/api/v2/torrents/info" "$TORRENTS_BODY")
+        torrents=$(cat "$TORRENTS_BODY" 2>/dev/null || true)
+    fi
 
-if [ "$num_torrents" -eq 0 ]; then
-    log_debug "No torrents found to check. Watchdog check completed silently."
+    if [ -z "$torrents" ] || ! printf '%s' "$torrents" | jq -e 'type == "array"' >/dev/null 2>&1; then
+        log_watchdog ERROR "Failed to fetch valid torrent list from qBittorrent API (HTTP ${torrents_http})."
+        echo "api_failed" > "${WATCHDOG_STATE_DIR%/}/qbit_watchdog_last_status"
+        exit 1
+    fi
+
+    local last_status=""
+    if [ -f "${WATCHDOG_STATE_DIR%/}/qbit_watchdog_last_status" ]; then
+        last_status=$(cat "${WATCHDOG_STATE_DIR%/}/qbit_watchdog_last_status")
+    fi
+    if [ -n "$last_status" ] && [ "$last_status" != "success" ]; then
+        log_watchdog INFO "Watchdog recovered: Connection to qBittorrent API restored."
+    fi
+    echo "success" > "${WATCHDOG_STATE_DIR%/}/qbit_watchdog_last_status"
+
+    local num_torrents current_time last_heartbeat time_diff
+    num_torrents=$(printf '%s' "$torrents" | jq 'length' 2>/dev/null || echo 0)
+    [[ "$num_torrents" =~ ^[0-9]+$ ]] || num_torrents=0
+
+    current_time=$(date +%s)
+    last_heartbeat=0
+    if [ -f "${WATCHDOG_STATE_DIR%/}/qbit_watchdog_last_heartbeat" ]; then
+        last_heartbeat=$(cat "${WATCHDOG_STATE_DIR%/}/qbit_watchdog_last_heartbeat" 2>/dev/null || echo 0)
+        [[ "$last_heartbeat" =~ ^[0-9]+$ ]] || last_heartbeat=0
+    fi
+
+    time_diff=$((current_time - last_heartbeat))
+    if [ "$time_diff" -ge "$HEARTBEAT_INTERVAL" ]; then
+        log_watchdog INFO "Heartbeat: Watchdog is active. Connected to qBittorrent. Monitoring ${num_torrents} torrent(s). VPN routing is healthy."
+        echo "$current_time" > "${WATCHDOG_STATE_DIR%/}/qbit_watchdog_last_heartbeat"
+    fi
+
+    if [ "$num_torrents" -eq 0 ]; then
+        log_debug "No torrents found to check. Watchdog check completed silently."
+        exit 0
+    fi
+
+    local -a DETECTED_TORRENTS=()
+    local working_count=0 hash name properties trackers is_broken is_working
+
+    while IFS=$'\t' read -r hash name; do
+        [ -z "$hash" ] && continue
+
+        properties=$(qbit_watchdog_get "/api/v2/torrents/properties?hash=${hash}")
+        trackers=$(qbit_watchdog_get "/api/v2/torrents/trackers?hash=${hash}")
+
+        read -r is_broken is_working < <(watchdog_classify_torrent "$properties" "$trackers")
+        if [ "$is_working" -eq 1 ]; then
+            working_count=$((working_count + 1))
+        fi
+        if [ "$is_broken" -eq 1 ]; then
+            DETECTED_TORRENTS+=("$name")
+        fi
+    done < <(printf '%s' "$torrents" | jq -r '.[] | [(.hash // ""), (.name // "")] | @tsv' 2>/dev/null || true)
+
+    local broken_count=${#DETECTED_TORRENTS[@]}
+    if [ "$broken_count" -gt 0 ]; then
+        local last_restart=0 gluetun_status remaining torrent_name
+        if [ -f "${WATCHDOG_STATE_DIR%/}/qbit_watchdog_last_restart" ]; then
+            last_restart=$(cat "${WATCHDOG_STATE_DIR%/}/qbit_watchdog_last_restart" 2>/dev/null || echo 0)
+            [[ "$last_restart" =~ ^[0-9]+$ ]] || last_restart=0
+        fi
+
+        if [ "$working_count" -gt 0 ]; then
+            log_debug "Ignoring ${broken_count} stalled torrent(s): ${working_count} torrent(s) have active peers/trackers (not a global VPN failure)."
+            exit 0
+        fi
+
+        # Optional: check Gluetun's local control endpoint if open without blocking on auth
+        gluetun_status=$(curl -sS --connect-timeout 2 --max-time 5 "${GLUETUN_CONTROL_URL}/v1/openvpn/status" 2>/dev/null | jq -r '.status // empty' 2>/dev/null || true)
+        if [ -n "$gluetun_status" ] && [ "$gluetun_status" != "running" ]; then
+            log_watchdog DETECTED "Gluetun reported VPN status '${gluetun_status}'."
+        fi
+
+        if ! watchdog_should_restart_vpn "$broken_count" "$working_count" "$current_time" "$last_restart" "$WATCHDOG_COOLDOWN_SEC"; then
+            remaining=$((WATCHDOG_COOLDOWN_SEC - (current_time - last_restart)))
+            log_watchdog INFO "VPN restart cooldown active (${remaining}s remaining); skipping restart for ${broken_count} stalled torrent(s)."
+            exit 0
+        fi
+
+        log_watchdog DETECTED "VPN routing failure! Torrents with broken-network symptoms found:"
+        for torrent_name in "${DETECTED_TORRENTS[@]}"; do
+            log_watchdog DETECTED "$torrent_name"
+        done
+        log_watchdog ACTION "Triggering Gluetun restart to fetch a new VPN IP..."
+        echo "routing_failed" > "${WATCHDOG_STATE_DIR%/}/qbit_watchdog_last_status"
+        echo "$current_time" > "${WATCHDOG_STATE_DIR%/}/qbit_watchdog_last_restart"
+        docker restart gluetun
+        exit 1
+    fi
+
+    log_debug "Watchdog check completed successfully. Monitored ${num_torrents} torrents. All healthy."
     exit 0
+}
+
+if [ "${WATCHDOG_SOURCE_ONLY:-0}" != "1" ]; then
+    watchdog_main "$@"
 fi
-
-DETECTED_TORRENTS=()
-working_count=0
-
-while IFS=$'\t' read -r hash name; do
-    [ -z "$hash" ] && continue
-
-    PROPERTIES=$(qbit_watchdog_get "/api/v2/torrents/properties?hash=${hash}")
-    TRACKERS=$(qbit_watchdog_get "/api/v2/torrents/trackers?hash=${hash}")
-
-    read -r is_broken is_working < <(watchdog_classify_torrent "$PROPERTIES" "$TRACKERS")
-    if [ "$is_working" -eq 1 ]; then
-        working_count=$((working_count + 1))
-    fi
-    if [ "$is_broken" -eq 1 ]; then
-        DETECTED_TORRENTS+=("$name")
-    fi
-done < <(printf '%s' "$TORRENTS" | jq -r '.[] | [(.hash // ""), (.name // "")] | @tsv' 2>/dev/null || true)
-
-broken_count=${#DETECTED_TORRENTS[@]}
-if [ "$broken_count" -gt 0 ]; then
-    last_restart=0
-    if [ -f "${WATCHDOG_STATE_DIR%/}/qbit_watchdog_last_restart" ]; then
-        last_restart=$(cat "${WATCHDOG_STATE_DIR%/}/qbit_watchdog_last_restart" 2>/dev/null || echo 0)
-        [[ "$last_restart" =~ ^[0-9]+$ ]] || last_restart=0
-    fi
-
-    if [ "$working_count" -gt 0 ]; then
-        log_debug "Ignoring ${broken_count} stalled torrent(s): ${working_count} torrent(s) have active peers/trackers (not a global VPN failure)."
-        exit 0
-    fi
-
-    # Optional: check Gluetun's local control endpoint if open without blocking on auth
-    gluetun_status=$(curl -sS --connect-timeout 2 --max-time 5 "${GLUETUN_CONTROL_URL}/v1/openvpn/status" 2>/dev/null | jq -r '.status // empty' 2>/dev/null || true)
-    if [ -n "$gluetun_status" ] && [ "$gluetun_status" != "running" ]; then
-        log_watchdog DETECTED "Gluetun reported VPN status '${gluetun_status}'."
-    fi
-
-    if ! watchdog_should_restart_vpn "$broken_count" "$working_count" "$current_time" "$last_restart" "$WATCHDOG_COOLDOWN_SEC"; then
-        remaining=$((WATCHDOG_COOLDOWN_SEC - (current_time - last_restart)))
-        log_watchdog INFO "VPN restart cooldown active (${remaining}s remaining); skipping restart for ${broken_count} stalled torrent(s)."
-        exit 0
-    fi
-
-    log_watchdog DETECTED "VPN routing failure! Torrents with broken-network symptoms found:"
-    for torrent_name in "${DETECTED_TORRENTS[@]}"; do
-        log_watchdog DETECTED "$torrent_name"
-    done
-    log_watchdog ACTION "Triggering Gluetun restart to fetch a new VPN IP..."
-    echo "routing_failed" > "${WATCHDOG_STATE_DIR%/}/qbit_watchdog_last_status"
-    echo "$current_time" > "${WATCHDOG_STATE_DIR%/}/qbit_watchdog_last_restart"
-    docker restart gluetun
-    exit 1
-fi
-
-log_debug "Watchdog check completed successfully. Monitored ${num_torrents} torrents. All healthy."
-exit 0

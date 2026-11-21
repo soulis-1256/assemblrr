@@ -110,6 +110,7 @@ _append_path_line() {
 
 ensure_local_bin_on_path() {
     export PATH="$HOME/.local/bin:$PATH"
+    # shellcheck disable=SC2016
     local line='export PATH="$HOME/.local/bin:$PATH"'
     local marker='.local/bin'
     _append_path_line "$HOME/.profile" "$line" "$marker"
@@ -121,6 +122,7 @@ ensure_local_bin_on_path() {
         _append_path_line "$HOME/.zshrc" "$line" "$marker"
     fi
     if command -v fish >/dev/null 2>&1 || [ -d "$HOME/.config/fish" ]; then
+        # shellcheck disable=SC2016
         _append_path_line "$HOME/.config/fish/config.fish" 'fish_add_path $HOME/.local/bin' "$marker"
     fi
 }
@@ -131,18 +133,18 @@ _canonical_path() {
         realpath -m "$p" 2>/dev/null && return 0
     fi
     # Pure-bash fallback normalizing /./ and /../ segments
-    local -a segs=() out=()
+    local -a _cp_segs=() _cp_out=()
     local s
-    IFS='/' read -ra segs <<< "$p"
-    for s in "${segs[@]}"; do
+    IFS='/' read -ra _cp_segs <<< "$p"
+    for s in "${_cp_segs[@]}"; do
         case "$s" in
             ""|".") continue ;;
-            "..") [ "${#out[@]}" -gt 0 ] && unset 'out[${#out[@]}-1]' ;;
-            *) out+=("$s") ;;
+            "..") [ "${#_cp_out[@]}" -gt 0 ] && unset '_cp_out[${#_cp_out[@]}-1]' ;;
+            *) _cp_out+=("$s") ;;
         esac
     done
     local joined
-    joined=$(IFS=/; echo "${out[*]}")
+    joined=$(IFS=/; echo "${_cp_out[*]}")
     echo "/$joined"
 }
 

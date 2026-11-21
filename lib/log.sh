@@ -72,6 +72,7 @@ wait_while() {
     ) &
     ticker=$!
 
+    # shellcheck disable=SC2329
     _wait_while_cleanup() {
         kill "$ticker" 2>/dev/null || true
         wait "$ticker" 2>/dev/null || true

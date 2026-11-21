@@ -54,18 +54,6 @@ jf_refresh_auth_header() {
         "${JF_API_KEY:-}"
 }
 
-if [ "${JF_REFRESH_SOURCE_ONLY:-0}" = "1" ]; then
-    return 0 2>/dev/null || exit 0
-fi
-
-_JF_KEY_FROM_SECRET=0
-if [ -f "/run/secrets/jellyfin_api_key.txt" ]; then
-    JF_API_KEY=$(tr -d '\r\n' < /run/secrets/jellyfin_api_key.txt)
-    _JF_KEY_FROM_SECRET=1
-else
-    JF_API_KEY="${JELLYFIN_API_KEY:-}"
-fi
-
 jf_refresh_curl() {
     curl -sS --connect-timeout 5 --max-time 30 \
         -H "$(jf_refresh_auth_header)" \
@@ -143,67 +131,82 @@ jf_refresh_acquire_lock() {
     return 1
 }
 
-if [ "${1:-}" = "--heal-only" ]; then
+jf_refresh_main() {
+    _JF_KEY_FROM_SECRET=0
+    if [ -f "/run/secrets/jellyfin_api_key.txt" ]; then
+        JF_API_KEY=$(tr -d '\r\n' < /run/secrets/jellyfin_api_key.txt)
+        _JF_KEY_FROM_SECRET=1
+    else
+        JF_API_KEY="${JELLYFIN_API_KEY:-}"
+    fi
+
+    if [ "${1:-}" = "--heal-only" ]; then
+        if [ -z "$JF_API_KEY" ]; then
+            echo "Jellyfin refresh: JELLYFIN_API_KEY not set" >&2
+            exit 1
+        fi
+        if jf_refresh_acquire_lock; then
+            trap 'rm -rf "$JF_HEAL_LOCK_DIR"' EXIT
+            jf_refresh_heal_after_scan
+        fi
+        exit 0
+    fi
+
+    if jf_refresh_is_test_event; then
+        echo "Jellyfin refresh: test event received, skipping"
+        exit 0
+    fi
+
     if [ -z "$JF_API_KEY" ]; then
         echo "Jellyfin refresh: JELLYFIN_API_KEY not set" >&2
         exit 1
     fi
-    if jf_refresh_acquire_lock; then
-        trap 'rm -rf "$JF_HEAL_LOCK_DIR"' EXIT
-        jf_refresh_heal_after_scan
-    fi
-    exit 0
-fi
 
-if jf_refresh_is_test_event; then
-    echo "Jellyfin refresh: test event received, skipping"
-    exit 0
-fi
+    local tasks_json scan_state http_code script_path
+    tasks_json=$(jf_refresh_curl "http://${JF_HOST}:${JF_PORT}/ScheduledTasks" || echo "")
+    scan_state=$(jf_refresh_scan_state "$tasks_json")
 
-if [ -z "$JF_API_KEY" ]; then
-    echo "Jellyfin refresh: JELLYFIN_API_KEY not set" >&2
-    exit 1
-fi
-
-TASKS_JSON=$(jf_refresh_curl "http://${JF_HOST}:${JF_PORT}/ScheduledTasks" || echo "")
-SCAN_STATE=$(jf_refresh_scan_state "$TASKS_JSON")
-
-if jf_refresh_scan_busy "$SCAN_STATE"; then
-    echo "Jellyfin refresh: scan already ${SCAN_STATE}, not cancelling"
-else
-    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 15 \
-        -X POST \
-        -H "$(jf_refresh_auth_header)" \
-        "http://${JF_HOST}:${JF_PORT}/Library/Refresh" 2>/dev/null || echo "000")
-
-    if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
-        echo "Jellyfin refresh: triggered successfully (HTTP ${HTTP_CODE})"
+    if jf_refresh_scan_busy "$scan_state"; then
+        echo "Jellyfin refresh: scan already ${scan_state}, not cancelling"
     else
-        echo "Jellyfin refresh: failed (HTTP ${HTTP_CODE})" >&2
-        exit 1
+        http_code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 15 \
+            -X POST \
+            -H "$(jf_refresh_auth_header)" \
+            "http://${JF_HOST}:${JF_PORT}/Library/Refresh" 2>/dev/null || echo "000")
+
+        if [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]; then
+            echo "Jellyfin refresh: triggered successfully (HTTP ${http_code})"
+        else
+            echo "Jellyfin refresh: failed (HTTP ${http_code})" >&2
+            exit 1
+        fi
     fi
+
+    # Sonarr/Radarr wait on this process; heal in the background so we do not
+    # block their notification pipeline. nohup survives the parent exiting.
+    script_path="$0"
+    case "$script_path" in
+        /*) ;;
+        *) script_path="$(pwd)/$script_path" ;;
+    esac
+
+    local -a _env_args=(
+        "JELLYFIN_HOST=$JF_HOST"
+        "JELLYFIN_PORT=$JF_PORT"
+        "JF_REFRESH_HEAL_POLL_SEC=$JF_REFRESH_HEAL_POLL_SEC"
+        "JF_REFRESH_HEAL_MAX_POLLS=$JF_REFRESH_HEAL_MAX_POLLS"
+        "JF_HEAL_LOCK_DIR=$JF_HEAL_LOCK_DIR"
+    )
+    # Only pass API key via env when the mounted secret file is absent (never expose secret in ps/environ)
+    if [ "$_JF_KEY_FROM_SECRET" -eq 0 ]; then
+        _env_args+=("JELLYFIN_API_KEY=$JF_API_KEY")
+    fi
+
+    nohup env "${_env_args[@]}" \
+        "$script_path" --heal-only >/tmp/assemblrr-jf-heal.log 2>&1 &
+    exit 0
+}
+
+if [ "${JF_REFRESH_SOURCE_ONLY:-0}" != "1" ]; then
+    jf_refresh_main "$@"
 fi
-
-# Sonarr/Radarr wait on this process; heal in the background so we do not
-# block their notification pipeline. nohup survives the parent exiting.
-SCRIPT_PATH="$0"
-case "$SCRIPT_PATH" in
-    /*) ;;
-    *) SCRIPT_PATH="$(pwd)/$SCRIPT_PATH" ;;
-esac
-
-_env_args=(
-    "JELLYFIN_HOST=$JF_HOST"
-    "JELLYFIN_PORT=$JF_PORT"
-    "JF_REFRESH_HEAL_POLL_SEC=$JF_REFRESH_HEAL_POLL_SEC"
-    "JF_REFRESH_HEAL_MAX_POLLS=$JF_REFRESH_HEAL_MAX_POLLS"
-    "JF_HEAL_LOCK_DIR=$JF_HEAL_LOCK_DIR"
-)
-# Only pass API key via env when the mounted secret file is absent (never expose secret in ps/environ)
-if [ "$_JF_KEY_FROM_SECRET" -eq 0 ]; then
-    _env_args+=("JELLYFIN_API_KEY=$JF_API_KEY")
-fi
-
-nohup env "${_env_args[@]}" \
-    "$SCRIPT_PATH" --heal-only >/tmp/assemblrr-jf-heal.log 2>&1 &
-exit 0

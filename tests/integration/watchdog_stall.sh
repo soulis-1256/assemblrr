@@ -41,6 +41,7 @@ EOF
 
 require_live_opt_in
 
+# shellcheck disable=SC2329
 cleanup() {
     [ "$CLEANED_UP" -eq 1 ] && return 0
     CLEANED_UP=1
@@ -155,7 +156,7 @@ set +e
 watchdog_out=$(bash "$watchdog" 2>&1)
 watchdog_rc=$?
 set -e
-echo "$watchdog_out" | sed 's/^/    /'
+printf '    %s\n' "${watchdog_out//$'\n'/$'\n    '}"
 
 echo ""
 echo ">>> Assertions <<<"

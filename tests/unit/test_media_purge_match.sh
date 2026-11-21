@@ -167,6 +167,7 @@ assert_false "The Horizon usenet complete dir removed" "[ -d '$MEDIA_ROOT/usenet
 assert_true "Horizon Chapter Two leftover left alone" "[ -d '$MEDIA_ROOT/torrents/movies/Horizon Chapter Two 2015 1080p' ]"
 
 _mp_src=$(cat "$REPO_ROOT/scripts/media-purge.sh")
+# shellcheck disable=SC2016
 assert_not_contains "$_mp_src" 'exec "$0"' "--tmdb / --tvdb do not re-exec and drop --dry-run"
 assert_contains "$_mp_src" 'Authorization: MediaBrowser' "notify_jellyfin uses MediaBrowser header"
 assert_not_contains "$_mp_src" 'X-Emby-Token' "notify_jellyfin does not use legacy X-Emby-Token"

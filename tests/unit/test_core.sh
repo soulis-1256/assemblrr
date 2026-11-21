@@ -49,6 +49,7 @@ assert_eq "3" "$rc" "propagates exit status"
 
 # --- expand_path ---
 test_suite "expand_path"
+# shellcheck disable=SC2088
 assert_eq "$HOME/foo" "$(expand_path "~/foo")" "expands leading tilde"
 assert_eq "/abs/path" "$(expand_path "/abs/path")" "leaves absolute paths alone"
 assert_eq "relative/path" "$(expand_path "relative/path")" "leaves relative paths alone"

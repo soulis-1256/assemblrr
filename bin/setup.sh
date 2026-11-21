@@ -269,8 +269,8 @@ generate_env_file() {
 
     if [ "${setup_vpn,,}" = "y" ]; then
         VPN_ENABLED="y"
-        VPN_SERVICE="$vpn_service"
-        VPN_TYPE="$vpn_type"
+        VPN_SERVICE="${vpn_service:-}"
+        VPN_TYPE="${vpn_type:-openvpn}"
         WIREGUARD_ADDRESSES="${wireguard_addresses:-}"
         if [ "${enable_port_forwarding,,}" = "y" ]; then
             PORT_FORWARD_ONLY="on"
@@ -299,7 +299,11 @@ generate_env_file() {
     export WIREGUARD_ADDRESSES
     export PORT_FORWARD_ONLY VPN_PORT_FORWARDING
     export QBIT_UI="${qbit_ui:-vuetorrent}"
-    [ "$QBIT_UI" = "vuetorrent" ] && export VUETORRENT_ENABLED="y" || export VUETORRENT_ENABLED="n"
+    if [ "$QBIT_UI" = "vuetorrent" ]; then
+        export VUETORRENT_ENABLED="y"
+    else
+        export VUETORRENT_ENABLED="n"
+    fi
     export GPU_TRANSCODING="${gpu_transcoding:-none}"
     export BYPARR_ENABLED="${byparr_enabled:-n}"
     export USENET_ENABLED="${usenet_enabled:-n}"
@@ -310,6 +314,7 @@ generate_env_file() {
         log_error "Failed to locate .env.example"
     fi
     # Explicit key list matching .env.example 1-to-1
+    # shellcheck disable=SC2016
     envsubst '${PUID} ${PGID} ${MEDIA_DIRECTORY} ${INSTALL_DIRECTORY} ${MEDIA_SERVICE} ${TZ} ${VPN_ENABLED} ${VPN_SERVICE} ${VPN_TYPE} ${WIREGUARD_ADDRESSES} ${PORT_FORWARD_ONLY} ${VPN_PORT_FORWARDING} ${QBIT_UI} ${VUETORRENT_ENABLED} ${GPU_TRANSCODING} ${BYPARR_ENABLED} ${USENET_ENABLED} ${API_HOST}' \
         < "$env_template" | tr -d '\r' > "$env_file" || \
         log_error "Failed to generate .env file"
@@ -872,8 +877,10 @@ main() {
     echo "  User:              $username (PUID=$puid, PGID=$pgid)"
     echo "  Install directory: $install_directory"
     echo "  Media directory:   $media_directory"
+    setup_vpn="${setup_vpn:-n}"
+    enable_port_forwarding="${enable_port_forwarding:-n}"
     if [ "${setup_vpn,,}" = "y" ]; then
-        echo "  VPN:               ENABLED ($vpn_service, $vpn_type)"
+        echo "  VPN:               ENABLED (${vpn_service:-}, ${vpn_type:-wireguard})"
         echo "  Port forwarding:   ${enable_port_forwarding:-n}"
     else
         echo "  VPN:               DISABLED"
@@ -886,7 +893,7 @@ main() {
     if [ "$QUALITY_TIER" = "any" ]; then
         echo "  Quality profile:   any"
     else
-        echo "  Quality profile:   $QUALITY_TIER / ${QUALITY_SOURCE:-bluray} (4K=$seerr_is_4k)"
+        echo "  Quality profile:   $QUALITY_TIER / ${QUALITY_SOURCE:-bluray} (4K=${seerr_is_4k:-false})"
     fi
     if [ -n "${subtitle_languages:-}" ] && [ "${subtitle_languages}" != "${subtitle_language:-}" ]; then
         echo "  Subtitle languages: ${subtitle_language} (preferred), ${subtitle_languages#*,}"

@@ -155,6 +155,7 @@ configure_seerr_profile() {
 
 configure_subtitle_language() {
     local iso639_url="https://raw.githubusercontent.com/jellyfin/jellyfin/master/Emby.Server.Implementations/Localization/iso6392.txt"
+    # shellcheck disable=SC2016
     local awk_filter='$4 != "" {print $1 "\t" $4}'
 
     SELECTED_SUBTITLE_LANGUAGES=()

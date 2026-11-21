@@ -225,7 +225,7 @@ qbit_login() {
 }
 
 qbit_torrents_info() {
-    qbit_login
+    qbit_login ""
     curl -s --connect-timeout 10 -b "$QBIT_JAR" -H "Referer: ${QBIT_BASE}/" \
         "${QBIT_BASE}/api/v2/torrents/info" 2>/dev/null || echo "[]"
 }
@@ -233,7 +233,7 @@ qbit_torrents_info() {
 qbit_delete_hashes() {
     local hashes=("$@")
     [ "${#hashes[@]}" -gt 0 ] || return 0
-    qbit_login
+    qbit_login ""
     local csv="" h
     for h in "${hashes[@]}"; do
         h=$(echo "$h" | tr 'A-F' 'a-f' | tr -d '[:space:]')
@@ -949,6 +949,7 @@ run_series_purge() {
 
 # --- sourced by unit tests: stop here ---
 if [ "${MEDIA_PURGE_SOURCE_ONLY:-0}" = "1" ]; then
+    # shellcheck disable=SC2317
     return 0 2>/dev/null || exit 0
 fi
 

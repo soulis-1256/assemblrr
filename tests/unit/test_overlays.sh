@@ -39,10 +39,10 @@ assert_contains "$cat_on" "byparr|Byparr (solver)|||internal" "lists byparr when
 assert_contains "$cat_on" "gluetun|Gluetun (VPN)|||internal" "lists gluetun when VPN_ENABLED=y"
 
 test_suite "qbit_ui_mode & qui payload"
-assert_eq "vuetorrent" "$(QBIT_UI= VUETORRENT_ENABLED=y qbit_ui_mode)" "legacy VUETORRENT_ENABLED=y -> vuetorrent"
+assert_eq "vuetorrent" "$(QBIT_UI='' VUETORRENT_ENABLED=y qbit_ui_mode)" "legacy VUETORRENT_ENABLED=y -> vuetorrent"
 assert_eq "qui" "$(QBIT_UI=qui VUETORRENT_ENABLED=y qbit_ui_mode)" "explicit QBIT_UI=qui overrides legacy flag"
 assert_eq "stock" "$(QBIT_UI=stock VUETORRENT_ENABLED=y qbit_ui_mode)" "explicit QBIT_UI=stock"
-assert_eq "stock" "$(QBIT_UI= VUETORRENT_ENABLED=n qbit_ui_mode)" "empty QBIT_UI + n -> stock"
+assert_eq "stock" "$(QBIT_UI='' VUETORRENT_ENABLED=n qbit_ui_mode)" "empty QBIT_UI + n -> stock"
 
 qui_json=$(qui_build_instance_payload "http://gluetun:8081" "alice" 'p"q')
 assert_eq "http://gluetun:8081" "$(printf '%s' "$qui_json" | jq -r '.host')" "qui payload sets host"
@@ -76,14 +76,14 @@ assert_not_contains "${COMPOSE_ARGS[*]}" "gpu-intel.yaml" "intel overlay exclude
 test_suite "configure_qbit_ui defaults & picker selection"
 # shellcheck source=/dev/null
 source "$REPO_ROOT/lib/prompts.sh"
-SETUP_MODE=express QBIT_UI= VUETORRENT_ENABLED= configure_qbit_ui
+SETUP_MODE=express QBIT_UI='' VUETORRENT_ENABLED='' configure_qbit_ui
 assert_eq "vuetorrent" "${qbit_ui:-}" "express mode defaults qbit_ui=vuetorrent"
 assert_eq "y" "${vuetorrent_enabled:-}" "express mode syncs vuetorrent_enabled=y"
 
 # Non-TTY fallback preserves selection cleanly
 # shellcheck source=/dev/null
 source "$REPO_ROOT/lib/fzf-tui.sh"
-SETUP_MODE=manual QBIT_UI= VUETORRENT_ENABLED= configure_qbit_ui <<< "qui"
+SETUP_MODE=manual QBIT_UI='' VUETORRENT_ENABLED='' configure_qbit_ui <<< "qui"
 assert_eq "qui" "${qbit_ui:-}" "manual picker selects qui"
 assert_eq "n" "${vuetorrent_enabled:-}" "selecting qui clears vuetorrent_enabled"
 
@@ -97,9 +97,9 @@ log_step() { :; }
 log_step_fail() { echo "fail: $1" >&2; }
 
 mkdir -p "$tmp/secrets"
-assert_eq "fallback" "$(INSTALL_DIR="$tmp" QUI_PASSWORD= AUTH_PASSWORD=fallback _qui_login_password)" "falls back to AUTH_PASSWORD when no qui_password.txt"
+assert_eq "fallback" "$(INSTALL_DIR="$tmp" QUI_PASSWORD='' AUTH_PASSWORD=fallback _qui_login_password)" "falls back to AUTH_PASSWORD when no qui_password.txt"
 printf '%s' 'from-secret-file' > "$tmp/secrets/qui_password.txt"
-assert_eq "from-secret-file" "$(INSTALL_DIR="$tmp" QUI_PASSWORD= AUTH_PASSWORD=fallback _qui_login_password)" "prefers secrets/qui_password.txt over AUTH_PASSWORD"
+assert_eq "from-secret-file" "$(INSTALL_DIR="$tmp" QUI_PASSWORD='' AUTH_PASSWORD=fallback _qui_login_password)" "prefers secrets/qui_password.txt over AUTH_PASSWORD"
 assert_eq "from-env" "$(INSTALL_DIR="$tmp" QUI_PASSWORD=from-env AUTH_PASSWORD=fallback _qui_login_password)" "prefers QUI_PASSWORD env over secret file"
 
 rm -f "$tmp/secrets/qui_password.txt"

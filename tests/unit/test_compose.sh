@@ -19,7 +19,7 @@ touch "$tmp/compose/base.yaml" "$tmp/compose/vpn.yaml" "$tmp/compose/direct-acce
       "$tmp/compose/vuetorrent.yaml" "$tmp/compose/qui.yaml" "$tmp/compose/gpu-intel.yaml" "$tmp/compose/gpu-nvidia.yaml" \
       "$tmp/compose/byparr.yaml" "$tmp/compose/usenet.yaml"
 
-QBIT_UI= VUETORRENT_ENABLED=n GPU_TRANSCODING=none BYPARR_ENABLED=n USENET_ENABLED=n
+QBIT_UI='' VUETORRENT_ENABLED=n GPU_TRANSCODING=none BYPARR_ENABLED=n USENET_ENABLED=n
 
 test_suite "build_compose_args (VPN enabled)"
 build_compose_args "$tmp" "y"
@@ -56,7 +56,7 @@ build_compose_args "$tmp" "y"
 assert_contains "${COMPOSE_ARGS[*]}" "-f $tmp/compose/qui.yaml" "includes qui.yaml when QBIT_UI=qui"
 assert_not_contains "${COMPOSE_ARGS[*]}" "vuetorrent.yaml" "excludes vuetorrent.yaml when QBIT_UI=qui"
 
-QBIT_UI= VUETORRENT_ENABLED=n GPU_TRANSCODING=none BYPARR_ENABLED=n USENET_ENABLED=n
+QBIT_UI='' VUETORRENT_ENABLED=n GPU_TRANSCODING=none BYPARR_ENABLED=n USENET_ENABLED=n
 rm -f "$tmp/compose/custom.yaml"
 
 test_suite "build_compose_args (case-insensitive VPN flag)"

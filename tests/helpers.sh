@@ -122,6 +122,7 @@ assert_false() {
 
 # core.sh log_error exits; unit tests need a non-fatal stub
 stub_log_error_no_exit() {
+    # shellcheck disable=SC2329
     log_error() {
         echo -e "${RED:-}$1${NC:-}" >&2
         return 1

@@ -50,6 +50,7 @@ assert_true "sibling exists" "[ -d \"$tmp/config/__test_sibling\" ]"
 test_suite "ensure_owned prefers Docker chown before sudo"
 mkdir -p "$tmp/root_owned_sim"
 (
+    # shellcheck disable=SC2032
     chown() { return 1; }
     run_docker() {
         printf '%s\n' "$*" > "$tmp/docker_called"

@@ -35,6 +35,11 @@ assert_success "cooldown elapsed allows restart" watchdog_should_restart_vpn 2 0
 _wd_src=$(cat "$REPO_ROOT/scripts/vpn-watchdog.sh")
 assert_not_contains "$_wd_src" 'api_get()' "renamed api_get to avoid collision"
 assert_contains "$_wd_src" 'WATCHDOG_COOLDOWN_SEC' "cooldown wired"
+assert_contains "$_wd_src" 'qbit_watchdog_cookie.txt' "uses persistent cookie jar across ticks"
+# shellcheck disable=SC2016
+assert_not_contains "$_wd_src" 'mktemp "${WATCHDOG_STATE_DIR%/}/qbit_watchdog_cookie' "does not allocate a fresh cookie jar every tick"
+# shellcheck disable=SC2016
+assert_contains "$_wd_src" 'if ! watchdog_cookie_has_sid "$COOKIE_JAR"' "reuses existing SID cookie before logging in"
 
 _jar=$(mktemp)
 printf '# Netscape HTTP Cookie File\n#HttpOnly_gluetun\tFALSE\t/\tFALSE\t1795288207\tQBT_SID_8081\tabc123\n' > "$_jar"

@@ -31,10 +31,12 @@ assert_true "main calls restore_from_backup_wizard" "grep -q 'restore_from_backu
 mock_archive="$tmp/mock-backup.tar.gz"
 mock_src="$tmp/mock_src"
 mkdir -p "$mock_src/config/jellyfin" "$mock_src/secrets" "$mock_src/compose"
-echo "INSTALL_DIRECTORY=\"/opt/test-assemblrr\"" > "$mock_src/.env"
-echo "MEDIA_DIRECTORY=\"/data/test-media\"" >> "$mock_src/.env"
-echo "MEDIA_SERVICE=\"jellyfin\"" >> "$mock_src/.env"
-echo "VPN_ENABLED=\"n\"" >> "$mock_src/.env"
+{
+    echo "INSTALL_DIRECTORY=\"/opt/test-assemblrr\""
+    echo "MEDIA_DIRECTORY=\"/data/test-media\""
+    echo "MEDIA_SERVICE=\"jellyfin\""
+    echo "VPN_ENABLED=\"n\""
+} > "$mock_src/.env"
 tar -czf "$mock_archive" -C "$mock_src" .
 
 mock_dest="$tmp/mock_dest"

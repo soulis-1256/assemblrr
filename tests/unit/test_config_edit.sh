@@ -101,6 +101,7 @@ assert_contains "$profile_fn" "configure_recyclarr" "resyncs Recyclarr so WEB pa
 
 test_suite "vpn edit chmods only vpn secret files"
 vpn_fn=$(sed -n '/^_config_edit_vpn()/,/^}/p' "$REPO_ROOT/lib/config_edit.sh")
+# shellcheck disable=SC2016
 assert_not_contains "$vpn_fn" 'chmod 600 "$secrets_dir"/*.txt' "vpn edit does not chmod every secret"
 assert_contains "$vpn_fn" "openvpn_user.txt" "vpn chmod names openvpn_user"
 assert_contains "$vpn_fn" "wireguard_private_key.txt" "vpn chmod names wireguard key"
@@ -108,6 +109,7 @@ assert_contains "$vpn_fn" "wireguard_private_key.txt" "vpn chmod names wireguard
 test_suite "auth edit writes secrets only after every UI succeeds"
 auth_fn=$(sed -n '/^_config_edit_auth()/,/^}/p' "$REPO_ROOT/lib/config_edit.sh")
 fail_at=$(echo "$auth_fn" | grep -n 'fail" -ne 0' | head -1 | cut -d: -f1)
+# shellcheck disable=SC2016
 write_at=$(echo "$auth_fn" | grep -n 'echo -n "$AUTH_PASSWORD"' | head -1 | cut -d: -f1)
 assert_true "fail check exists" "[ -n \"$fail_at\" ]"
 assert_true "password write exists" "[ -n \"$write_at\" ]"
@@ -123,6 +125,7 @@ assert_contains "$(grep 'config apply' "$REPO_ROOT/README.md" || true)" "config 
 
 test_suite "uninstall --force is quiet"
 un=$(sed -n '/^uninstall_app()/,/^}/p' "$REPO_ROOT/bin/cli.sh")
+# shellcheck disable=SC2016
 assert_contains "$un" 'if [ "$force" = false ]; then' "inventory only when not --force"
 assert_not_contains "$un" "Stopping all services" "no step-by-step stop line"
 assert_not_contains "$un" "Removing config at" "no Removing-config play-by-play"
@@ -132,15 +135,21 @@ assert_contains "$un" "Config removed:" "removed config is labeled removed"
 assert_contains "$un" "Media removed:" "removed media is labeled removed"
 assert_contains "$un" "Config kept:" "kept config is labeled kept"
 assert_contains "$un" "Media kept:" "kept media is labeled kept"
+# shellcheck disable=SC2016
 assert_not_contains "$un" 'echo "  Config: $INSTALL_DIR"' "does not print a status-style Config path"
+# shellcheck disable=SC2016
 assert_not_contains "$un" 'echo "  Media:  $MEDIA_DIRECTORY"' "does not print a status-style Media path"
 
 test_suite "config show survives missing VPN_TYPE/TZ"
 cli="$REPO_ROOT/bin/cli.sh"
+# shellcheck disable=SC2016
 assert_contains "$(grep -n 'VPN_TYPE=' "$cli" | head -5)" 'VPN_TYPE="${VPN_TYPE:-openvpn}"' "CLI defaults VPN_TYPE"
+# shellcheck disable=SC2016
 assert_contains "$(grep -n 'TZ=' "$cli" | head -5)" 'TZ="${TZ:-UTC}"' "CLI defaults TZ"
 show_fn=$(sed -n '/^show_config()/,/^}/p' "$cli")
+# shellcheck disable=SC2016
 assert_contains "$show_fn" '${VPN_TYPE:-openvpn}' "show_config defaults VPN type"
+# shellcheck disable=SC2016
 assert_contains "$show_fn" '${TZ:-UTC}' "show_config defaults timezone"
 
 # Reproduce the old set -u crash: print those fields with vars unset.

@@ -54,6 +54,7 @@ assert_eq "sabkey-2" "$(echo "$schema_json" | jq -r '.fields[] | select(.name=="
 assert_eq "false" "$(echo "$schema_json" | jq -r '.fields[] | select(.name=="useSsl") | .value')" "disables internal TLS on bridge network"
 
 USENET_ENABLED=y
+# shellcheck disable=SC2016
 assert_success "0-arg arr_configure_sabnzbd handles missing API keys cleanly" \
     env -u RADARR_API_KEY -u SONARR_API_KEY bash -c 'source "$1/lib/core.sh"; source "$1/lib/api.sh"; source "$1/lib/usenet.sh"; USENET_ENABLED=y; INSTALL_DIR="$2"; arr_configure_sabnzbd' _ "$REPO_ROOT" "$tmp/install"
 

@@ -134,14 +134,16 @@ assert_not_contains "$recyc" "grep -vE" "does not drop HD or WEB movie packs"
 assert_contains "$(cat "$REPO_ROOT/templates/recyclarr/recyclarr.yml")" "radarr-1080p-bluray.yml" "root still includes 1080p Bluray + WEB"
 assert_contains "$(cat "$REPO_ROOT/templates/recyclarr/recyclarr.yml")" "radarr-1080p-web.yml" "root still includes 1080p WEB"
 
-test_suite "sonarr and seerr follow the same flag"
+test_suite "sonarr and seerr follow the tier profile while routing single-instance requests"
 assert_contains "$(sed -n '/^lookup_sonarr_profile()/,/^}/p' "$REPO_ROOT/lib/arr_quality.sh")" \
     "lookup_arr_quality_profile" "sonarr uses shared lookup"
 assert_not_contains "$(cat "$REPO_ROOT/lib/arr_quality.sh")" \
     "movies 4K choice does not change this" "old TV hardcode is gone"
-sonarr_connect=$(grep -n 'seerr_connect_service "sonarr"' -A2 "$REPO_ROOT/lib/seerr.sh")
-assert_not_contains "$sonarr_connect" '"false"' "seerr sonarr is4k is not hardcoded false"
-assert_contains "$(cat "$REPO_ROOT/lib/seerr.sh")" 'is_4k=$(quality_seerr_is_4k)' \
-    "seerr derives is4k from the tier"
+seerr_src=$(cat "$REPO_ROOT/lib/seerr.sh")
+assert_contains "$seerr_src" 'is_4k="false"' \
+    "single-instance Radarr/Sonarr registers as default non-4K server in Seerr"
+# shellcheck disable=SC2016
+assert_not_contains "$seerr_src" 'is_4k=$(quality_seerr_is_4k)' \
+    "seerr does not lock sole Radarr/Sonarr behind dual-server is4k flag"
 
 test_summary

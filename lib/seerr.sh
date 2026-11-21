@@ -163,8 +163,9 @@ configure_seerr() {
             return 1
         fi
 
-        local connect_errors=0 is_4k
-        is_4k=$(quality_seerr_is_4k)
+        # Single-instance setup: Seerr treats is4k=true as a secondary 4K-only server and fails
+        # default requests when no non-4K server exists; 4K quality is governed by activeProfileName.
+        local connect_errors=0 is_4k="false"
         if [ -n "${RADARR_API_KEY:-}" ]; then
             local radarr_id
             radarr_id=$(seerr_service_id "radarr" "$seerr_cookie_jar" || true)
@@ -253,8 +254,9 @@ configure_seerr() {
         return 1
     fi
 
-    local connect_errors=0 is_4k
-    is_4k=$(quality_seerr_is_4k)
+    # Single-instance setup: Seerr treats is4k=true as a secondary 4K-only server and fails
+    # default requests when no non-4K server exists; 4K quality is governed by activeProfileName.
+    local connect_errors=0 is_4k="false"
     if [ -n "${RADARR_API_KEY:-}" ]; then
         if ! seerr_connect_service "radarr" 7878 "$RADARR_API_KEY" "lookup_radarr_profile" \
             "/data/media/movies" "$is_4k" "$seerr_cookie_jar"; then
