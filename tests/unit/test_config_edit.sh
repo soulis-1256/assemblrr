@@ -21,7 +21,7 @@ assert_contains "$ids" "providers" "lists providers"
 assert_contains "$ids" "language" "lists language"
 assert_contains "$ids" "profile" "lists profile"
 assert_contains "$ids" "vpn" "lists vpn"
-assert_contains "$ids" "vuetorrent" "lists vuetorrent"
+assert_contains "$ids" "qbit-ui" "lists qbit-ui"
 assert_contains "$ids" "gpu" "lists gpu"
 assert_contains "$ids" "byparr" "lists byparr"
 assert_contains "$ids" "usenet" "lists usenet"
@@ -30,6 +30,8 @@ assert_contains "$ids" "all" "lists all (full wizard)"
 test_suite "config_edit_resolve"
 assert_eq "indexers" "$(config_edit_resolve indexers)" "resolves indexers"
 assert_eq "all" "$(config_edit_resolve ALL)" "case-insensitive"
+assert_eq "qbit-ui" "$(config_edit_resolve vuetorrent)" "legacy vuetorrent alias -> qbit-ui"
+assert_eq "qbit-ui" "$(config_edit_resolve qui)" "qui alias -> qbit-ui"
 assert_failure "unknown section" config_edit_resolve not-a-section
 assert_failure "old CLI alias is not a shortcut" config_edit_resolve subtitles
 
@@ -174,5 +176,123 @@ perm=$(stat -c '%a' "$sec_f" 2>/dev/null || stat -f '%Lp' "$sec_f")
 assert_eq "600" "$perm" "preserves 0600 permissions after atomic update"
 picked=$(_config_edit_pick <<< "1" 2>/dev/null)
 assert_eq "indexers" "$picked" "non-fzf _config_edit_pick emits only the section id on stdout"
+
+test_suite "config_edit Esc returns to previous menu and skips no-op restarts"
+loop_res=$(bash -c '
+set -euo pipefail
+tmp_l=$(mktemp -d)
+trap "rm -rf \"\$tmp_l\"" EXIT
+source "'"$SCRIPT_DIR"'/../helpers.sh"
+source "'"$REPO_ROOT"'/lib/core.sh"
+stub_log_error_no_exit
+source "'"$REPO_ROOT"'/lib/config_edit.sh"
+printf "0\n" > "$tmp_l/picks"
+sec_calls=0
+_config_edit_pick() {
+    local c
+    c=$(cat "$tmp_l/picks")
+    c=$((c + 1))
+    printf "%s\n" "$c" > "$tmp_l/picks"
+    if [ "$c" -eq 1 ]; then
+        echo "qbit-ui"
+    else
+        echo ""
+    fi
+}
+_config_edit_qbit_ui() {
+    sec_calls=$((sec_calls + 1))
+    return 2
+}
+rc=0
+config_edit_run >"$tmp_l/out" || rc=$?
+echo "rc=$rc pick_calls=$(cat "$tmp_l/picks") sec_calls=$sec_calls"
+cat "$tmp_l/out"
+')
+assert_contains "$loop_res" "rc=0 pick_calls=2 sec_calls=1" "Esc (rc=2) inside section loops back to main picker then exits cleanly"
+assert_contains "$loop_res" "Cancelled." "Exiting main picker prints Cancelled."
+
+noop_res=$(bash -c '
+set -euo pipefail
+tmp_e=$(mktemp -d)
+trap "rm -rf \"\$tmp_e\"" EXIT
+mkdir -p "$tmp_e/secrets" "$tmp_e/compose"
+cat > "$tmp_e/.env" <<EOF
+VPN_ENABLED=n
+TZ=UTC
+QBIT_UI=vuetorrent
+VUETORRENT_ENABLED=y
+GPU_TRANSCODING=amd
+BYPARR_ENABLED=n
+EOF
+cat > "$tmp_e/.assemblrr-config" <<EOF
+INSTALL_DIRECTORY="$tmp_e"
+MEDIA_DIRECTORY="$tmp_e/media"
+VPN_ENABLED="n"
+TZ="UTC"
+QBIT_UI="vuetorrent"
+VUETORRENT_ENABLED="y"
+GPU_TRANSCODING="amd"
+BYPARR_ENABLED="n"
+EOF
+source "'"$SCRIPT_DIR"'/../helpers.sh"
+source "'"$REPO_ROOT"'/lib/core.sh"
+stub_log_error_no_exit
+source "'"$REPO_ROOT"'/lib/config_edit.sh"
+INSTALL_DIR="$tmp_e"
+_lib_dir="'"$REPO_ROOT"'/lib"
+RADARR_API_KEY=dummy SONARR_API_KEY=dummy PROWLARR_API_KEY=dummy
+ln -s "'"$REPO_ROOT"'/lib" "$tmp_e/lib"
+_config_edit_load_picker
+_config_edit_load
+restarts=0
+_config_edit_restart_stack() { restarts=$((restarts + 1)); }
+write_qbittorrent_config() { :; }
+qbit_set_credentials() { :; }
+
+_config_edit_qbit_ui <<< "vuetorrent" >/dev/null
+_config_edit_byparr <<< "n" >/dev/null
+_config_edit_gpu <<< "2" >/dev/null
+_config_edit_timezone <<< "UTC" >/dev/null
+
+# Simulate Esc cancel in fzf_single_select_data during _config_edit_qbit_ui
+fzf_single_select_data() { return 2; }
+qbit_rc=0
+_config_edit_qbit_ui >/dev/null || qbit_rc=$?
+echo "restarts=$restarts qbit_cancel_rc=$qbit_rc"
+')
+assert_contains "$noop_res" "restarts=0 qbit_cancel_rc=2" "unchanged settings & Esc cancel trigger 0 stack restarts"
+
+test_suite "_config_edit_current_status shows active state for every section"
+st_dir="$tmp/status-install"
+mkdir -p "$st_dir/secrets"
+printf '%s' 'alice' > "$st_dir/secrets/auth_username.txt"
+printf '%s' 'os_user' > "$st_dir/secrets/opensubtitles_username.txt"
+cat > "$st_dir/.env" <<'EOF'
+VPN_ENABLED=y
+VPN_SERVICE=surfshark
+TZ=Europe/Athens
+EOF
+cat > "$st_dir/.assemblrr-config" <<'EOF'
+QBIT_UI="vuetorrent"
+GPU_TRANSCODING="amd"
+BYPARR_ENABLED="y"
+USENET_ENABLED="y"
+USENET_HOST="news.example"
+QUALITY_TIER="uhd"
+QUALITY_SOURCE="bluray"
+SUBTITLE_LANGUAGE="eng"
+SUBTITLE_LANGUAGES="eng,ell"
+TZ="Europe/Athens"
+EOF
+assert_eq "on|vuetorrent" "$(INSTALL_DIR="$st_dir" _config_edit_current_status qbit-ui)" "qbit-ui shows vuetorrent"
+assert_eq "on|amd" "$(INSTALL_DIR="$st_dir" _config_edit_current_status gpu)" "gpu shows amd"
+assert_eq "on|on" "$(INSTALL_DIR="$st_dir" _config_edit_current_status byparr)" "byparr shows on"
+assert_eq "on|on · surfshark" "$(INSTALL_DIR="$st_dir" _config_edit_current_status vpn)" "vpn shows provider"
+assert_eq "on|on · news.example" "$(INSTALL_DIR="$st_dir" _config_edit_current_status usenet)" "usenet shows host"
+assert_eq "on|4K Bluray+WEB" "$(INSTALL_DIR="$st_dir" _config_edit_current_status profile)" "profile shows 4K Bluray+WEB"
+assert_eq "on|eng,ell" "$(INSTALL_DIR="$st_dir" _config_edit_current_status language)" "language shows list"
+assert_eq "on|Europe/Athens" "$(INSTALL_DIR="$st_dir" _config_edit_current_status timezone)" "timezone shows TZ"
+assert_eq "on|alice" "$(INSTALL_DIR="$st_dir" _config_edit_current_status auth)" "auth shows username"
+assert_eq "on|set (os_user)" "$(INSTALL_DIR="$st_dir" _config_edit_current_status opensubtitles)" "opensubtitles shows configured user"
 
 test_summary

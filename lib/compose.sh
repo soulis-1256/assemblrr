@@ -10,7 +10,7 @@ readonly _ASSEMBLRR_COMPOSE_SOURCED=1
 
 # Builds the docker compose arguments array (COMPOSE_ARGS) based on VPN & feature flags.
 # Usage: build_compose_args "$install_dir" "$vpn_enabled"
-# Reads optional env flags: VUETORRENT_ENABLED, GPU_TRANSCODING, BYPARR_ENABLED, USENET_ENABLED.
+# Reads optional env flags: QBIT_UI (or legacy VUETORRENT_ENABLED), GPU_TRANSCODING, BYPARR_ENABLED, USENET_ENABLED.
 # custom.yaml is always appended last so user overrides win.
 build_compose_args() {
     local _install_dir="$1"
@@ -25,11 +25,14 @@ build_compose_args() {
         COMPOSE_ARGS+=("-f" "$_install_dir/compose/direct-access.yaml")
     fi
 
-    if [ "${VUETORRENT_ENABLED:-n}" = "y" ] || [ "${VUETORRENT_ENABLED:-n}" = "Y" ]; then
-        if [ -f "$_install_dir/compose/vuetorrent.yaml" ]; then
-            COMPOSE_ARGS+=("-f" "$_install_dir/compose/vuetorrent.yaml")
-        fi
-    fi
+    case "$(qbit_ui_mode)" in
+        vuetorrent)
+            [ -f "$_install_dir/compose/vuetorrent.yaml" ] && COMPOSE_ARGS+=("-f" "$_install_dir/compose/vuetorrent.yaml")
+            ;;
+        qui)
+            [ -f "$_install_dir/compose/qui.yaml" ] && COMPOSE_ARGS+=("-f" "$_install_dir/compose/qui.yaml")
+            ;;
+    esac
 
     case "${GPU_TRANSCODING:-none}" in
         intel|INTEL|amd|AMD|vaapi|VAAPI)

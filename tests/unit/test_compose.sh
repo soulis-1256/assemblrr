@@ -16,10 +16,10 @@ trap 'rm -rf "$tmp"' EXIT
 
 mkdir -p "$tmp/compose"
 touch "$tmp/compose/base.yaml" "$tmp/compose/vpn.yaml" "$tmp/compose/direct-access.yaml" \
-      "$tmp/compose/vuetorrent.yaml" "$tmp/compose/gpu-intel.yaml" "$tmp/compose/gpu-nvidia.yaml" \
+      "$tmp/compose/vuetorrent.yaml" "$tmp/compose/qui.yaml" "$tmp/compose/gpu-intel.yaml" "$tmp/compose/gpu-nvidia.yaml" \
       "$tmp/compose/byparr.yaml" "$tmp/compose/usenet.yaml"
 
-VUETORRENT_ENABLED=n GPU_TRANSCODING=none BYPARR_ENABLED=n USENET_ENABLED=n
+QBIT_UI= VUETORRENT_ENABLED=n GPU_TRANSCODING=none BYPARR_ENABLED=n USENET_ENABLED=n
 
 test_suite "build_compose_args (VPN enabled)"
 build_compose_args "$tmp" "y"
@@ -51,7 +51,12 @@ GPU_TRANSCODING=nvidia
 build_compose_args "$tmp" "n"
 assert_contains "${COMPOSE_ARGS[*]}" "-f $tmp/compose/gpu-nvidia.yaml" "includes gpu-nvidia.yaml"
 
-VUETORRENT_ENABLED=n GPU_TRANSCODING=none BYPARR_ENABLED=n USENET_ENABLED=n
+QBIT_UI=qui VUETORRENT_ENABLED=n GPU_TRANSCODING=none BYPARR_ENABLED=n USENET_ENABLED=n
+build_compose_args "$tmp" "y"
+assert_contains "${COMPOSE_ARGS[*]}" "-f $tmp/compose/qui.yaml" "includes qui.yaml when QBIT_UI=qui"
+assert_not_contains "${COMPOSE_ARGS[*]}" "vuetorrent.yaml" "excludes vuetorrent.yaml when QBIT_UI=qui"
+
+QBIT_UI= VUETORRENT_ENABLED=n GPU_TRANSCODING=none BYPARR_ENABLED=n USENET_ENABLED=n
 rm -f "$tmp/compose/custom.yaml"
 
 test_suite "build_compose_args (case-insensitive VPN flag)"
@@ -69,7 +74,8 @@ images=$(grep -E '^\s+image:' \
     "$REPO_ROOT/compose/base.yaml" \
     "$REPO_ROOT/compose/vpn.yaml" \
     "$REPO_ROOT/compose/byparr.yaml" \
-    "$REPO_ROOT/compose/usenet.yaml")
+    "$REPO_ROOT/compose/usenet.yaml" \
+    "$REPO_ROOT/compose/qui.yaml")
 assert_not_contains "$images" ":latest" "no :latest in any compose file"
 assert_contains "$images" "linuxserver/jellyfin:12.4ubu2604-ls60" "jellyfin 12.4 pinned"
 assert_contains "$images" "linuxserver/qbittorrent:5.3.0" "qbittorrent 5.3.0 pinned"
@@ -78,6 +84,7 @@ assert_contains "$images" "linuxserver/radarr:7.0.3.10918-ls328" "radarr pinned"
 assert_contains "$images" "linuxserver/prowlarr:3.0.2.5780-ls169" "prowlarr pinned"
 assert_contains "$images" "linuxserver/bazarr:1.6.2" "bazarr 1.6.2 pinned"
 assert_contains "$images" "linuxserver/sabnzbd:5.1.3" "sabnzbd 5.1.3 pinned"
+assert_contains "$images" "autobrr/qui:v1.36.0" "qui v1.36.0 pinned"
 assert_contains "$images" "seerr-team/seerr:v3.5.2" "seerr v3.5.2 pinned"
 assert_contains "$images" "python:3.12.16-alpine" "gateway python pinned"
 assert_contains "$images" "gluetun:v3.41.3" "gluetun v3.41.3 pinned"

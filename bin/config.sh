@@ -142,6 +142,10 @@ main() {
         run_critical qbit_set_credentials
     fi
 
+    if type qbit_qui_enabled >/dev/null 2>&1 && qbit_qui_enabled; then
+        run_optional configure_qui
+    fi
+
     if [ "${USENET_ENABLED:-n}" = "y" ] || [ "${USENET_ENABLED:-n}" = "Y" ]; then
         run_critical configure_sabnzbd
     fi
@@ -233,8 +237,13 @@ main() {
     _cfg_log_info "  1. Open Jellyfin at http://${ui_host}:8096"
     _cfg_log_info "  2. Open Seerr at http://${ui_host}:5055 and request a movie or show"
     _cfg_log_info "  3. qBittorrent UI: http://${ui_host}:8081  |  Bazarr UI: http://${ui_host}:6767"
+    local step_num=4
+    if type qbit_qui_enabled >/dev/null 2>&1 && qbit_qui_enabled; then
+        _cfg_log_info "  ${step_num}. qui UI:         http://${ui_host}:7476"
+        step_num=$((step_num + 1))
+    fi
     if [ "${USENET_ENABLED:-n}" = "y" ] || [ "${USENET_ENABLED:-n}" = "Y" ]; then
-        _cfg_log_info "  4. SABnzbd UI:     http://${ui_host}:8085"
+        _cfg_log_info "  ${step_num}. SABnzbd UI:     http://${ui_host}:8085"
     fi
     echo
     if [ -n "$AUTH_USERNAME" ]; then

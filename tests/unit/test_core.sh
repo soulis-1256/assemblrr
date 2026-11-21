@@ -358,4 +358,51 @@ assert_contains "$setup_src" "setup_on_interrupt()" "setup defines graceful inte
 assert_contains "$setup_src" "trap 'setup_on_interrupt' INT TERM" "main installs INT/TERM trap"
 assert_contains "$(cat "$REPO_ROOT/lib/tty.sh")" "trap -p INT" "read_masked preserves outer INT trap"
 
+test_suite "PTY bare Esc cancel & arrow-key handling in read_prompt / read_masked"
+pty_esc=$(python3 - "$REPO_ROOT/lib/tty.sh" <<'PY'
+import os, pty, select, subprocess, sys, time
+
+tty_lib = sys.argv[1]
+
+def run_pty(cmd, send_bytes):
+    master, slave = pty.openpty()
+    p = subprocess.Popen(
+        ["bash", "-c", f"source '{tty_lib}'; {cmd}"],
+        stdin=slave, stdout=slave, stderr=slave,
+        start_new_session=True, close_fds=True,
+    )
+    os.close(slave)
+    # Wait briefly for prompt to be printed, then send keystrokes
+    time.sleep(0.15)
+    os.write(master, send_bytes)
+    out = b""
+    deadline = time.time() + 3.0
+    while time.time() < deadline:
+        r, _, _ = select.select([master], [], [], 0.1)
+        if r:
+            try:
+                chunk = os.read(master, 4096)
+                if not chunk:
+                    break
+                out += chunk
+            except OSError:
+                break
+        elif p.poll() is not None:
+            break
+    os.close(master)
+    rc = p.wait(timeout=3)
+    return rc, out.decode("utf-8", "replace")
+
+r1, o1 = run_pty('PROMPT_ALLOW_ESC=1 read_prompt "P: " v; rc=$?; echo "RESULT:$rc:$PROMPT_CANCELLED:$v"', b'\x1b')
+print("ESC_PROMPT=" + (o1.strip().splitlines()[-1] if o1.strip() else ""))
+r2, o2 = run_pty('PROMPT_ALLOW_ESC=1 read_prompt "P: " v; rc=$?; echo "RESULT:$rc:$PROMPT_CANCELLED:$v"', b'\x1b[A\x1b[Bhello\n')
+print("ARROW_PROMPT=" + (o2.strip().splitlines()[-1] if o2.strip() else ""))
+r3, o3 = run_pty('PROMPT_ALLOW_ESC=1 read_masked "M: " v; rc=$?; echo "RESULT:$rc:$PROMPT_CANCELLED:$v"', b'\x1b')
+print("ESC_MASKED=" + (o3.strip().splitlines()[-1] if o3.strip() else ""))
+PY
+)
+assert_contains "$pty_esc" "ESC_PROMPT=RESULT:2:1:" "PTY bare Esc cancels read_prompt with rc=2"
+assert_contains "$pty_esc" "ARROW_PROMPT=RESULT:0:0:hello" "PTY arrow keys do not false-cancel read_prompt"
+assert_contains "$pty_esc" "ESC_MASKED=RESULT:2:1:" "PTY bare Esc cancels read_masked with rc=2"
+
 test_summary

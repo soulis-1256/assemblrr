@@ -27,6 +27,35 @@ _fzf_can_render() {
     command -v fzf &>/dev/null && echo "test" | timeout 1 fzf --height=5 --no-mouse --filter="test" &>/dev/null
 }
 
+_fzf_is_interactive() {
+    _fzf_can_render && _fzf_has_tty
+}
+
+# Pad plain text to fixed width before optionally wrapping in an ANSI SGR color code.
+_tui_pad_ansi() {
+    local text="$1"
+    local width="$2"
+    local code="${3:-}"
+    local padded
+    printf -v padded '%-*s' "$width" "$text"
+    if [ -n "$code" ] && [ -n "$text" ]; then
+        printf '\033[%sm%s\033[0m' "$code" "$padded"
+    else
+        printf '%s' "$padded"
+    fi
+}
+
+# Single-select fzf submenu with embedded 2-line header so Esc leaves zero scrollback lines.
+_tui_edit_select() {
+    local prompt="$1"
+    local title="$2"
+    local default="$3"
+    local rows="$4"
+    local header
+    header="${title}"$'\n'"↑↓=navigate  Enter=confirm  Esc=back"
+    fzf_single_select_data "$rows" "$prompt" "$header" "$default" "2"
+}
+
 # True when installed fzf >= major.minor (handles older distro fzf like 0.29 on Ubuntu 22.04).
 _fzf_version_ge() {
     local req_maj="${1:-0}" req_min="${2:-0}" ver maj min
@@ -249,11 +278,13 @@ pick_storage_paths() {
 }
 
 # Single-select from TSV rows (first column is the value).
+# Optional $5 overrides fzf --with-nth (default: 1..2).
 fzf_single_select_data() {
     local data="$1"
     local prompt="${2:-Select> }"
     local header="${3:-↑↓=navigate  Enter=confirm  Esc=default}"
     local default="${4:-}"
+    local with_nth="${5:-1..2}"
 
     if [ -z "$data" ]; then
         echo "$default"
@@ -273,7 +304,9 @@ fzf_single_select_data() {
     if ! _fzf_can_render || ! _fzf_has_tty; then
         echo "$data" | head -25 >&2
         local input=""
-        read_prompt "Enter selection (default: ${default:-first}): " input
+        if ! read_prompt "Enter selection (default: ${default:-first}): " input; then
+            return "${PROMPT_CANCEL_RC:-2}"
+        fi
         if [ -z "$input" ]; then
             if [ -n "$default" ]; then
                 echo "$default"
@@ -286,22 +319,23 @@ fzf_single_select_data() {
         return 0
     fi
 
-    local selected
+    local selected fzf_rc=0
     selected=$(echo "$data" | fzf \
+        --ansi \
         --prompt="$prompt" \
         --height=40% \
         --reverse \
         --border \
         --header="$header" \
         --delimiter=$'\t' \
-        --with-nth=1..2 \
-        2>/dev/null | cut -f1) || true
-
-    if [ -z "$selected" ]; then
-        echo "$default"
-    else
-        echo "$selected"
+        --with-nth="$with_nth" \
+        2>/dev/null) || fzf_rc=$?
+    flush_tty_input
+    if [ "$fzf_rc" -ne 0 ] || [ -z "$selected" ]; then
+        return "${PROMPT_CANCEL_RC:-2}"
     fi
+    printf '%s\n' "$selected" | cut -f1
+    return 0
 }
 
 # Format Prowlarr schema JSON + existing-name JSON array into TSV menu rows:
@@ -374,6 +408,7 @@ fzf_multi_select() {
     if _fzf_can_render && $has_tty; then
         local selected fzf_rc=0
         local -a fzf_args=(
+            --ansi
             --multi
             --prompt="$prompt"
             --delimiter=$'\t'
@@ -437,10 +472,15 @@ configure_indexers() {
         log_info "Skipping Prowlarr indexer picker (non-interactive)."
         return 0
     fi
-    ui_intro \
-        "Optional: pick Prowlarr indexers now, or skip and use the Prowlarr UI later." \
-        "Add or remove Prowlarr indexers. Esc keeps the current set."
-    log_info "Only enable sources you are authorized to use."
+    local interactive_edit=0
+    if ui_is_edit && _fzf_is_interactive; then
+        interactive_edit=1
+    else
+        ui_intro \
+            "Optional: pick Prowlarr indexers now, or skip and use the Prowlarr UI later." \
+            "Add or remove Prowlarr indexers. Esc keeps the current set."
+        log_info "Only enable sources you are authorized to use."
+    fi
 
     local prowlarr_key="${provided_key:-}"
     local indexer_data=""
@@ -469,7 +509,11 @@ configure_indexers() {
         local prompt header
         if ui_is_edit; then
             prompt="Prowlarr indexers> "
-            header="TAB=toggle  Enter=save  Esc=cancel  [P]=private"
+            if [ "$interactive_edit" -eq 1 ]; then
+                header=$'Add or remove Prowlarr indexers (authorized sources only)\nTAB=toggle  Enter=save  Esc=back  [P]=private'
+            else
+                header="TAB=toggle  Enter=save  Esc=back  [P]=private"
+            fi
         else
             prompt="Prowlarr indexers (optional)> "
             header="TAB=toggle  Enter=confirm  Esc=skip  [P]=private"
@@ -481,7 +525,9 @@ configure_indexers() {
             "indexer" \
             "$preselect_names" \
             1 || true
-        ui_picker_done "indexers"
+        if ! ui_is_edit || ! ui_picker_cancelled; then
+            ui_picker_done "indexers"
+        fi
     else
         if ui_is_edit; then
             log_info "Prowlarr is not responding — cannot edit indexers."
@@ -523,14 +569,19 @@ configure_subtitle_providers() {
         log_info "Skipping Bazarr provider picker (non-interactive)."
         return 0
     fi
-    ui_intro \
-        "Optional: pick Bazarr subtitle providers now, or skip and use the Bazarr UI later." \
-        "Choose which Bazarr subtitle providers to enable. Esc keeps the current set."
-    ui_note \
-        "Catalog comes from the running Bazarr image. OpenSubtitles.com is enabled automatically only if you saved credentials." \
-        "Catalog comes from the running Bazarr image."
+    local interactive_edit=0
+    if ui_is_edit && _fzf_is_interactive; then
+        interactive_edit=1
+    else
+        ui_intro \
+            "Optional: pick Bazarr subtitle providers now, or skip and use the Bazarr UI later." \
+            "Choose which Bazarr subtitle providers to enable. Esc keeps the current set."
+        ui_note \
+            "Catalog comes from the running Bazarr image. OpenSubtitles.com is enabled automatically only if you saved credentials." \
+            "Catalog comes from the running Bazarr image."
+    fi
 
-    local names formatted
+    local names formatted preselect_names=""
     if ! names=$(_list_bazarr_providers_from_container); then
         if ui_is_edit; then
             log_info "Bazarr is not running — cannot edit providers."
@@ -545,23 +596,35 @@ configure_subtitle_providers() {
         return 0
     fi
 
-    formatted=$(echo "$names" | awk '{print $1 "\t"}')
-    local prompt header preselect_names=""
+    if ui_is_edit && type _bazarr_config_file >/dev/null 2>&1 && type _bazarr_extract_apikey >/dev/null 2>&1; then
+        local bcfg bkey=""
+        bcfg=$(_bazarr_config_file 2>/dev/null || true)
+        [ -n "$bcfg" ] && bkey=$(_bazarr_extract_apikey "$bcfg")
+        if [ -n "$bkey" ]; then
+            preselect_names=$(curl -s --connect-timeout 5 \
+                -H "X-API-KEY: ${bkey}" \
+                "http://${host}:${BAZARR_PORT:-6767}/api/system/settings" \
+                2>/dev/null | jq -r '.general.enabled_providers[]? // empty' 2>/dev/null || true)
+        fi
+    fi
+
+    formatted=$(awk -v active="$preselect_names" '
+        BEGIN {
+            n = split(active, a, /\n/)
+            for (k = 1; k <= n; k++) if (a[k] != "") act[a[k]] = 1
+        }
+        {
+            if ($1 in act) printf "%s\t\033[32m[active]\033[0m\n", $1
+            else printf "%s\t\n", $1
+        }' <<< "$names")
+
+    local prompt header
     if ui_is_edit; then
         prompt="Bazarr providers> "
-        header="TAB=toggle  Enter=save  Esc=cancel"
-        if type _bazarr_config_file >/dev/null 2>&1 && type _bazarr_extract_apikey >/dev/null 2>&1; then
-            local bcfg bkey
-            bcfg=$(_bazarr_config_file 2>/dev/null || true)
-            if [ -n "$bcfg" ]; then
-                bkey=$(_bazarr_extract_apikey "$bcfg")
-            fi
-            if [ -n "${bkey:-}" ]; then
-                preselect_names=$(curl -s --connect-timeout 5 \
-                    -H "X-API-KEY: ${bkey}" \
-                    "http://${host}:${BAZARR_PORT:-6767}/api/system/settings" \
-                    2>/dev/null | jq -r '.general.enabled_providers[]? // empty' 2>/dev/null || true)
-            fi
+        if [ "$interactive_edit" -eq 1 ]; then
+            header=$'Choose Bazarr subtitle providers to enable\nTAB=toggle  Enter=save  Esc=back'
+        else
+            header="TAB=toggle  Enter=save  Esc=back"
         fi
     else
         prompt="Bazarr providers (optional)> "
@@ -573,5 +636,7 @@ configure_subtitle_providers() {
         SELECTED_SUBTITLE_PROVIDERS \
         "provider" \
         "$preselect_names" || true
-    ui_picker_done "providers"
+    if ! ui_is_edit || ! ui_picker_cancelled; then
+        ui_picker_done "providers"
+    fi
 }

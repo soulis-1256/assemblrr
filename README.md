@@ -47,7 +47,8 @@ Enable during `Manual` setup or toggle anytime via `assemblrr config edit`:
 
 | Overlay File | Env Key | Description |
 |---|---|---|
-| [`compose/vuetorrent.yaml`](compose/vuetorrent.yaml) | `VUETORRENT_ENABLED=y` | Modern VueTorrent WebUI theme mod for qBittorrent *(default: enabled)* |
+| [`compose/vuetorrent.yaml`](compose/vuetorrent.yaml) | `QBIT_UI=vuetorrent` | Modern VueTorrent theme inside qBittorrent (:8081) *(default)* |
+| [`compose/qui.yaml`](compose/qui.yaml) | `QBIT_UI=qui` | Fast Go+React standalone qBittorrent WebUI (`7476`, leaves stock qBit on `8081`) |
 | [`compose/gpu-intel.yaml`](compose/gpu-intel.yaml) | `GPU_TRANSCODING=amd` / `intel` | AMD VAAPI / Intel QSV (`/dev/dri`) hardware transcoding + Jellyfin auto-wiring |
 | [`compose/gpu-nvidia.yaml`](compose/gpu-nvidia.yaml) | `GPU_TRANSCODING=nvidia` | NVIDIA NVENC/NVDEC GPU reservation + Jellyfin auto-wiring *(auto-enabled when detected)* |
 | [`compose/byparr.yaml`](compose/byparr.yaml) | `BYPARR_ENABLED=y` | Byparr Cloudflare solver wired into Prowlarr (`byparr` tag) |

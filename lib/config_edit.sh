@@ -24,7 +24,7 @@ opensubtitles|OpenSubtitles.com username and password
 auth|Shared login for every service UI
 timezone|Container timezone
 vpn|VPN on/off, provider, and credentials (restarts stack)
-vuetorrent|qBittorrent VueTorrent WebUI theme (restarts stack)
+qbit-ui|qBittorrent WebUI: VueTorrent, qui, or stock (restarts stack)
 gpu|Jellyfin hardware GPU transcoding: Intel/AMD or NVIDIA (restarts stack)
 byparr|Byparr Cloudflare solver for Prowlarr (restarts stack)
 usenet|SABnzbd Usenet downloader and NNTP provider (restarts stack)
@@ -54,6 +54,9 @@ config_edit_resolve() {
     local want="${1:-}"
     want=$(echo "$want" | tr '[:upper:]' '[:lower:]')
     [ -z "$want" ] && return 1
+    case "$want" in
+        vuetorrent|vue|qui) want="qbit-ui" ;;
+    esac
     local id
     while IFS='|' read -r id _; do
         [ -z "$id" ] && continue
@@ -202,33 +205,187 @@ _config_edit_restart_stack() {
     log_success "Stack restarted"
 }
 
+_config_edit_kv() {
+    local key="$1" f_main="$2" envf="$3"
+    local v=""
+    [ -n "$f_main" ] && [ -f "$f_main" ] && v=$(_pointer_get "$f_main" "$key")
+    [ -z "$v" ] && [ -n "$envf" ] && [ -f "$envf" ] && v=$(_pointer_get "$envf" "$key")
+    printf '%s' "$v"
+}
+
+_config_edit_current_status() {
+    local id="$1"
+    local inst="${INSTALL_DIR:-}"
+    [ -n "$inst" ] && [ -d "$inst" ] || return 0
+    local cfg="" envf="$inst/.env"
+    [ -f "$inst/.assemblrr-config" ] && cfg="$inst/.assemblrr-config"
+    [ -z "$cfg" ] && [ -f "$inst/.${APP_NAME:-assemblrr}-config" ] && cfg="$inst/.${APP_NAME:-assemblrr}-config"
+    local f_main="${cfg:-$envf}"
+
+    local val="" val2=""
+    case "$id" in
+        qbit-ui)
+            val=$(_config_edit_kv "QBIT_UI" "$f_main" "$envf")
+            if [ -z "$val" ]; then
+                val2=$(_config_edit_kv "VUETORRENT_ENABLED" "$f_main" "$envf")
+                case "${val2,,}" in
+                    y|yes) val="vuetorrent" ;;
+                    *) val="stock" ;;
+                esac
+            fi
+            case "${val,,}" in
+                vuetorrent|vue) echo "on|vuetorrent" ;;
+                qui) echo "on|qui" ;;
+                *) echo "off|stock" ;;
+            esac
+            ;;
+        gpu)
+            val=$(_config_edit_kv "GPU_TRANSCODING" "$f_main" "$envf")
+            val="${val:-none}"
+            case "${val,,}" in
+                ""|none) echo "off|none" ;;
+                *) echo "on|${val}" ;;
+            esac
+            ;;
+        byparr)
+            val=$(_config_edit_kv "BYPARR_ENABLED" "$f_main" "$envf")
+            case "${val,,}" in
+                y|yes) echo "on|on" ;;
+                *) echo "off|off" ;;
+            esac
+            ;;
+        usenet)
+            val=$(_config_edit_kv "USENET_ENABLED" "$f_main" "$envf")
+            case "${val,,}" in
+                y|yes)
+                    val2=$(_config_edit_kv "USENET_HOST" "$f_main" "$envf")
+                    if [ -n "$val2" ]; then
+                        echo "on|on · ${val2}"
+                    else
+                        echo "on|on"
+                    fi
+                    ;;
+                *) echo "off|off" ;;
+            esac
+            ;;
+        vpn)
+            val=$(_config_edit_kv "VPN_ENABLED" "$f_main" "$envf")
+            case "${val,,}" in
+                y|yes)
+                    val2=$(_config_edit_kv "VPN_SERVICE" "$f_main" "$envf")
+                    if [ -n "$val2" ]; then
+                        echo "on|on · ${val2}"
+                    else
+                        echo "on|on"
+                    fi
+                    ;;
+                *) echo "off|off" ;;
+            esac
+            ;;
+        profile)
+            val=$(_config_edit_kv "QUALITY_TIER" "$f_main" "$envf")
+            val2=$(_config_edit_kv "QUALITY_SOURCE" "$f_main" "$envf")
+            case "${val,,}" in
+                uhd) [ "${val2,,}" = "web" ] && echo "on|4K WEB" || echo "on|4K Bluray+WEB" ;;
+                hd)  [ "${val2,,}" = "web" ] && echo "on|1080p WEB" || echo "on|1080p Bluray+WEB" ;;
+                any) echo "dim|Any" ;;
+                *)   echo "dim|default" ;;
+            esac
+            ;;
+        language)
+            val=$(_config_edit_kv "SUBTITLE_LANGUAGES" "$f_main" "$envf")
+            [ -z "$val" ] && val=$(_config_edit_kv "SUBTITLE_LANGUAGE" "$f_main" "$envf")
+            if [ -n "$val" ]; then
+                echo "on|${val}"
+            else
+                echo "dim|default (en)"
+            fi
+            ;;
+        timezone)
+            val=$(_config_edit_kv "TZ" "$f_main" "$envf")
+            echo "on|${val:-UTC}"
+            ;;
+        opensubtitles)
+            if [ -s "$inst/secrets/opensubtitles_username.txt" ]; then
+                val=$(cat "$inst/secrets/opensubtitles_username.txt" 2>/dev/null || true)
+                echo "on|set (${val})"
+            else
+                echo "off|not set"
+            fi
+            ;;
+        auth)
+            if [ -s "$inst/secrets/auth_username.txt" ]; then
+                val=$(cat "$inst/secrets/auth_username.txt" 2>/dev/null || true)
+                echo "on|${val}"
+            else
+                echo "dim|unset"
+            fi
+            ;;
+        indexers)  echo "dim|in Prowlarr" ;;
+        providers) echo "dim|in Bazarr" ;;
+        all)       echo "dim|full wizard" ;;
+    esac
+}
+
 _config_edit_pick() {
-    local data selected
-    data=$(_config_edit_catalog | awk -F'|' '{printf "%s\t%s\n", $1, $2}')
-    if type _fzf_can_render >/dev/null 2>&1 && _fzf_can_render && _fzf_has_tty; then
-        selected=$(echo "$data" | fzf \
+    local interactive=0
+    if type _fzf_is_interactive >/dev/null 2>&1 && _fzf_is_interactive; then
+        interactive=1
+    fi
+
+    if [ "$interactive" -eq 1 ]; then
+        local data="" id desc st kind label col_id col_st line
+        while IFS='|' read -r id desc; do
+            [ -z "$id" ] && continue
+            st=$(_config_edit_current_status "$id" || true)
+            kind="${st%%|*}"
+            label="${st#*|}"
+            [ "$st" = "$kind" ] && label=""
+            col_id=$(_tui_pad_ansi "$id" 14)
+            if [ -n "$label" ]; then
+                case "$kind" in
+                    on)  col_st=$(_tui_pad_ansi "[$label]" 20 "32") ;;
+                    *)   col_st=$(_tui_pad_ansi "[$label]" 20 "2") ;;
+                esac
+            else
+                col_st=$(_tui_pad_ansi "" 20)
+            fi
+            line=$(printf '%s\t%s  %s  %s' "$id" "$col_id" "$col_st" "$desc")
+            data+="${line}"$'\n'
+        done < <(_config_edit_catalog)
+
+        local selected fzf_rc=0
+        selected=$(printf '%s' "$data" | fzf \
+            --ansi \
             --prompt="Edit which setting> " \
-            --delimiter='\t' \
-            --with-nth=1,2 \
-            --header='↑↓=navigate  Enter=confirm  Esc=cancel' \
+            --delimiter=$'\t' \
+            --with-nth=2 \
+            --header='↑↓=navigate  Enter=confirm  Esc=exit' \
             --height=60% \
             --layout=reverse \
             --border \
-            2>/dev/null | cut -f1 || true)
+            2>/dev/null) || fzf_rc=$?
         flush_tty_input
-        echo "$selected"
+        [ "$fzf_rc" -ne 0 ] && return 0
+        printf '%s\n' "$selected" | cut -f1
         return 0
     fi
     # Non-fzf fallback prints all UI/prompts to stderr so stdout returns ONLY the chosen section id
     echo >&2
     log_info "What do you want to change?" >&2
-    local i=1 id desc
+    local i=1 id desc st label tag=""
     while IFS='|' read -r id desc; do
-        printf "  %2d) %-14s %s\n" "$i" "$id" "$desc" >&2
+        st=$(_config_edit_current_status "$id" || true)
+        label="${st#*|}"
+        [ -n "$st" ] && [ "$st" != "$label" ] && tag=" [$label]" || tag=""
+        printf "  %2d) %-14s %-18s %s\n" "$i" "$id" "$tag" "$desc" >&2
         i=$((i + 1))
     done < <(_config_edit_catalog)
     local choice=""
-    read_prompt "Choose a section [1]: " choice
+    if ! read_prompt "Choose a section [1]: " choice; then
+        echo ""
+        return 0
+    fi
     choice=${choice:-1}
     if [[ "$choice" =~ ^[0-9]+$ ]]; then
         sed -n "${choice}p" < <(config_edit_section_ids)
@@ -252,14 +409,14 @@ _config_edit_indexers() {
     SELECTED_INDEXERS=()
     configure_indexers "$PROWLARR_API_KEY"
     if ui_picker_cancelled; then
-        return 0
+        return "${PROMPT_CANCEL_RC:-2}"
     fi
     if [ "${#SELECTED_INDEXERS[@]}" -eq 0 ]; then
         local wipe="n"
         if [ -t 0 ] && [ "${ASSEMBLRR_NONINTERACTIVE:-0}" != "1" ]; then
             echo
             log_warning "No indexers selected."
-            read_prompt "Remove ALL Prowlarr indexers? (y/N) [Default = n]: " wipe
+            read_prompt "Remove ALL Prowlarr indexers? (y/N) [Default = n]: " wipe || return "${PROMPT_CANCEL_RC:-2}"
             wipe=${wipe:-n}
         fi
         if [ "${wipe,,}" != "y" ]; then
@@ -278,14 +435,14 @@ _config_edit_providers() {
     SELECTED_SUBTITLE_PROVIDERS=()
     configure_subtitle_providers
     if ui_picker_cancelled; then
-        return 0
+        return "${PROMPT_CANCEL_RC:-2}"
     fi
     if [ "${#SELECTED_SUBTITLE_PROVIDERS[@]}" -eq 0 ]; then
         local wipe="n"
         if [ -t 0 ] && [ "${ASSEMBLRR_NONINTERACTIVE:-0}" != "1" ]; then
             echo
             log_warning "No subtitle providers selected."
-            read_prompt "Disable ALL Bazarr providers? (y/N) [Default = n]: " wipe
+            read_prompt "Disable ALL Bazarr providers? (y/N) [Default = n]: " wipe || return "${PROMPT_CANCEL_RC:-2}"
             wipe=${wipe:-n}
         fi
         if [ "${wipe,,}" != "y" ]; then
@@ -298,8 +455,14 @@ _config_edit_providers() {
 
 _config_edit_language() {
     _config_edit_load
-    configure_subtitle_language
-    if ui_picker_cancelled; then
+    local rc=0
+    configure_subtitle_language || rc=$?
+    if [ "$rc" -eq "${PROMPT_CANCEL_RC:-2}" ] || ui_picker_cancelled; then
+        return "${PROMPT_CANCEL_RC:-2}"
+    fi
+    if [ "${subtitle_language:-}" = "${SUBTITLE_LANGUAGE:-}" ] && \
+       [ "${subtitle_languages:-}" = "${SUBTITLE_LANGUAGES:-}" ]; then
+        log_info "Subtitle languages unchanged."
         return 0
     fi
     config_set_kv "$(_config_edit_runtime_file)" "SUBTITLE_LANGUAGE" "${subtitle_language:-}"
@@ -312,8 +475,13 @@ _config_edit_language() {
 
 _config_edit_profile() {
     _config_edit_load
-    configure_quality_profile
+    local prev_tier="${QUALITY_TIER:-}" prev_source="${QUALITY_SOURCE:-}"
+    configure_quality_profile || return $?
     quality_sync_exports
+    if [ "$QUALITY_TIER" = "$prev_tier" ] && [ "$QUALITY_SOURCE" = "$prev_source" ]; then
+        log_info "Quality profile unchanged."
+        return 0
+    fi
     config_set_kv "$(_config_edit_runtime_file)" "QUALITY_TIER" "$QUALITY_TIER"
     config_set_kv "$(_config_edit_runtime_file)" "QUALITY_SOURCE" "$QUALITY_SOURCE"
     config_set_kv "$(_config_edit_runtime_file)" "SEERR_IS_4K" "$SEERR_IS_4K"
@@ -330,7 +498,12 @@ _config_edit_profile() {
 
 _config_edit_opensubtitles() {
     _config_edit_load
-    configure_opensubtitles
+    local rc=0
+    configure_opensubtitles || rc=$?
+    if [ "$rc" -eq "${PROMPT_CANCEL_RC:-2}" ]; then
+        log_info "Cancelled."
+        return "${PROMPT_CANCEL_RC:-2}"
+    fi
     local secrets_dir="$INSTALL_DIR/secrets"
     mkdir -p "$secrets_dir"
     if [ "${opensubtitles_enabled:-n}" = "y" ] && [ -n "${opensubtitles_username:-}" ]; then
@@ -344,6 +517,7 @@ _config_edit_opensubtitles() {
         return 0
     fi
     log_info "Cancelled."
+    return "${PROMPT_CANCEL_RC:-2}"
 }
 
 _config_edit_auth() {
@@ -352,7 +526,7 @@ _config_edit_auth() {
     old_user=$(cat "$INSTALL_DIR/secrets/auth_username.txt" 2>/dev/null || echo "${AUTH_USERNAME:-}")
     old_pass=$(cat "$INSTALL_DIR/secrets/auth_password.txt" 2>/dev/null || echo "${AUTH_PASSWORD:-}")
 
-    configure_auth
+    configure_auth || return $?
     local secrets_dir="$INSTALL_DIR/secrets"
     AUTH_USERNAME="${auth_username:-admin}"
     AUTH_PASSWORD="${auth_password:-}"
@@ -384,6 +558,9 @@ _config_edit_auth() {
     if sabnzbd_enabled 2>/dev/null; then
         sabnzbd_change_credentials "$AUTH_USERNAME" "$AUTH_PASSWORD" || fail=1
     fi
+    if type qbit_qui_enabled >/dev/null 2>&1 && qbit_qui_enabled; then
+        qui_change_credentials "$old_user" "$old_pass" "$AUTH_USERNAME" "$AUTH_PASSWORD" || fail=1
+    fi
 
     if type seerr_verify_login >/dev/null 2>&1; then
         seerr_verify_login || true
@@ -405,7 +582,12 @@ _config_edit_auth() {
 
 _config_edit_timezone() {
     _config_edit_load
-    configure_timezone
+    local prev_tz="${TZ:-UTC}"
+    configure_timezone || return $?
+    if [ "${tz:-UTC}" = "$prev_tz" ]; then
+        log_info "Timezone unchanged (${prev_tz}) — no restart needed."
+        return 0
+    fi
     config_set_kv "$(_config_edit_runtime_file)" "TZ" "${tz:-UTC}"
     config_set_kv "$INSTALL_DIR/.env" "TZ" "${tz:-UTC}" 0
     TZ="${tz:-UTC}"
@@ -414,9 +596,14 @@ _config_edit_timezone() {
 
 _config_edit_vpn() {
     _config_edit_load
-    configure_vpn
+    local prev_vpn="${VPN_ENABLED:-n}"
+    configure_vpn || return $?
     local enabled="n"
     [ "${setup_vpn,,}" = "y" ] && enabled="y"
+    if [ "$enabled" = "n" ] && [ "${prev_vpn,,}" != "y" ]; then
+        log_info "VPN already disabled — no restart needed."
+        return 0
+    fi
     VPN_ENABLED="$enabled"
     VPN_TYPE="${vpn_type:-openvpn}"
     VPN_SERVICE="${vpn_service:-}"
@@ -474,22 +661,54 @@ _config_edit_vpn() {
         wait_for_api "Prowlarr" "9696" "$PROWLARR_API_KEY" "/api/v1/system/status" || true
         prowlarr_sync_gluetun_proxy "$PROWLARR_API_KEY" || true
     fi
+    if type qbit_qui_enabled >/dev/null 2>&1 && qbit_qui_enabled; then
+        configure_qui || true
+    fi
+}
+
+_config_edit_qbit_ui() {
+    _config_edit_load
+    local prev_ui
+    prev_ui=$(qbit_ui_mode)
+    configure_qbit_ui || return $?
+    if ui_picker_cancelled; then
+        return "${PROMPT_CANCEL_RC:-2}"
+    fi
+    QBIT_UI="${qbit_ui:-vuetorrent}"
+    if [ "$QBIT_UI" = "$prev_ui" ]; then
+        log_info "qBittorrent UI unchanged (${prev_ui}) — no restart needed."
+        return 0
+    fi
+    [ "$QBIT_UI" = "vuetorrent" ] && VUETORRENT_ENABLED="y" || VUETORRENT_ENABLED="n"
+    config_set_kv "$(_config_edit_runtime_file)" "QBIT_UI" "$QBIT_UI"
+    config_set_kv "$(_config_edit_runtime_file)" "VUETORRENT_ENABLED" "$VUETORRENT_ENABLED"
+    config_set_kv "$INSTALL_DIR/.env" "QBIT_UI" "$QBIT_UI" 0
+    config_set_kv "$INSTALL_DIR/.env" "VUETORRENT_ENABLED" "$VUETORRENT_ENABLED" 0
+    if [ "$QBIT_UI" = "qui" ]; then
+        mkdir -p "$INSTALL_DIR/config/qui"
+        ensure_owned "$INSTALL_DIR/config/qui" "${PUID:-$(id -u)}" "${PGID:-$(id -g)}" 2>/dev/null || true
+    fi
+    install_directory="$INSTALL_DIR" write_qbittorrent_config
+    _config_edit_restart_stack
+    qbit_set_credentials || true
+    if qbit_qui_enabled; then
+        configure_qui || true
+    fi
 }
 
 _config_edit_vuetorrent() {
-    _config_edit_load
-    configure_vuetorrent
-    VUETORRENT_ENABLED="${vuetorrent_enabled:-n}"
-    config_set_kv "$(_config_edit_runtime_file)" "VUETORRENT_ENABLED" "$VUETORRENT_ENABLED"
-    config_set_kv "$INSTALL_DIR/.env" "VUETORRENT_ENABLED" "$VUETORRENT_ENABLED" 0
-    _config_edit_restart_stack
-    qbit_set_credentials || true
+    _config_edit_qbit_ui "$@"
 }
 
 _config_edit_gpu() {
     _config_edit_load
-    configure_gpu_transcoding
+    local prev_gpu="${GPU_TRANSCODING:-none}"
+    configure_gpu_transcoding || return $?
     GPU_TRANSCODING="${gpu_transcoding:-none}"
+    if [ "$GPU_TRANSCODING" = "$prev_gpu" ]; then
+        log_info "GPU transcoding unchanged (${prev_gpu}) — no restart needed."
+        return 0
+    fi
     config_set_kv "$(_config_edit_runtime_file)" "GPU_TRANSCODING" "$GPU_TRANSCODING"
     config_set_kv "$INSTALL_DIR/.env" "GPU_TRANSCODING" "$GPU_TRANSCODING" 0
     _config_edit_restart_stack
@@ -501,8 +720,13 @@ _config_edit_gpu() {
 
 _config_edit_byparr() {
     _config_edit_load
-    configure_byparr
+    local prev_byparr="${BYPARR_ENABLED:-n}"
+    configure_byparr || return $?
     BYPARR_ENABLED="${byparr_enabled:-n}"
+    if [ "${BYPARR_ENABLED,,}" = "${prev_byparr,,}" ]; then
+        log_info "Byparr unchanged (${prev_byparr,,}) — no restart needed."
+        return 0
+    fi
     config_set_kv "$(_config_edit_runtime_file)" "BYPARR_ENABLED" "$BYPARR_ENABLED"
     config_set_kv "$INSTALL_DIR/.env" "BYPARR_ENABLED" "$BYPARR_ENABLED" 0
     _config_edit_restart_stack
@@ -514,8 +738,17 @@ _config_edit_byparr() {
 
 _config_edit_usenet() {
     _config_edit_load
-    configure_usenet
+    local prev_usenet="${USENET_ENABLED:-n}"
+    configure_usenet || return $?
     USENET_ENABLED="${usenet_enabled:-n}"
+    if [ "$USENET_ENABLED" = "n" ] && [ "${prev_usenet,,}" != "y" ]; then
+        log_info "SABnzbd / Usenet already disabled — no restart needed."
+        return 0
+    fi
+    if [ "${usenet_keep_nntp:-0}" = "1" ] && [ "${prev_usenet,,}" = "y" ]; then
+        log_info "SABnzbd / Usenet unchanged — no restart needed."
+        return 0
+    fi
     config_set_kv "$(_config_edit_runtime_file)" "USENET_ENABLED" "$USENET_ENABLED"
     config_set_kv "$INSTALL_DIR/.env" "USENET_ENABLED" "$USENET_ENABLED" 0
     config_set_kv "$(_config_edit_runtime_file)" "USENET_HOST" "${usenet_host:-}"
@@ -587,34 +820,49 @@ config_edit_run() {
     esac
 
     _config_edit_load_picker
-    raw=$(_config_edit_pick)
-    raw=$(echo "${raw:-}" | head -1 | tr -d '[:space:]')
-    if [ -z "$raw" ]; then
-        echo "Cancelled."
-        return 0
-    fi
+    local prev_allow_esc="${PROMPT_ALLOW_ESC:-0}"
+    local rc=0
+    PROMPT_ALLOW_ESC=1
+    while true; do
+        raw=$(_config_edit_pick)
+        raw=$(echo "${raw:-}" | head -1 | tr -d '[:space:]')
+        if [ -z "$raw" ]; then
+            echo "Cancelled."
+            rc=0
+            break
+        fi
 
-    if ! section=$(config_edit_resolve "$raw"); then
-        log_error "Unknown config section: $raw"
-        return 1
-    fi
+        if ! section=$(config_edit_resolve "$raw"); then
+            log_error "Unknown config section: $raw"
+            rc=1
+            break
+        fi
 
-    flush_tty_input
+        flush_tty_input
 
-    case "$section" in
-        indexers) _config_edit_indexers ;;
-        providers) _config_edit_providers ;;
-        language) _config_edit_language ;;
-        profile) _config_edit_profile ;;
-        opensubtitles) _config_edit_opensubtitles ;;
-        auth) _config_edit_auth ;;
-        timezone) _config_edit_timezone ;;
-        vpn) _config_edit_vpn ;;
-        vuetorrent) _config_edit_vuetorrent ;;
-        gpu) _config_edit_gpu ;;
-        byparr) _config_edit_byparr ;;
-        usenet) _config_edit_usenet ;;
-        all) _config_edit_all ;;
-        *) log_error "Unknown config section: $section"; return 1 ;;
-    esac
+        rc=0
+        case "$section" in
+            indexers) _config_edit_indexers || rc=$? ;;
+            providers) _config_edit_providers || rc=$? ;;
+            language) _config_edit_language || rc=$? ;;
+            profile) _config_edit_profile || rc=$? ;;
+            opensubtitles) _config_edit_opensubtitles || rc=$? ;;
+            auth) _config_edit_auth || rc=$? ;;
+            timezone) _config_edit_timezone || rc=$? ;;
+            vpn) _config_edit_vpn || rc=$? ;;
+            qbit-ui|vuetorrent) _config_edit_qbit_ui || rc=$? ;;
+            gpu) _config_edit_gpu || rc=$? ;;
+            byparr) _config_edit_byparr || rc=$? ;;
+            usenet) _config_edit_usenet || rc=$? ;;
+            all) _config_edit_all || rc=$? ;;
+            *) log_error "Unknown config section: $section"; rc=1; break ;;
+        esac
+
+        if [ "$rc" -eq "${PROMPT_CANCEL_RC:-2}" ]; then
+            continue
+        fi
+        break
+    done
+    PROMPT_ALLOW_ESC="$prev_allow_esc"
+    return "$rc"
 }

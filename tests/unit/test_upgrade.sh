@@ -225,7 +225,7 @@ fi
 rm -rf "$tmp4" "$tmp5"
 
 test_suite "managed files include modular libs & feature overlays"
-for req in lib/log.sh lib/usenet.sh lib/recyclarr.sh lib/languages.sh compose/vuetorrent.yaml compose/gpu-intel.yaml compose/gpu-nvidia.yaml compose/byparr.yaml compose/usenet.yaml docs/komodo.md NOTICE; do
+for req in lib/log.sh lib/usenet.sh lib/recyclarr.sh lib/languages.sh compose/vuetorrent.yaml compose/qui.yaml compose/gpu-intel.yaml compose/gpu-nvidia.yaml compose/byparr.yaml compose/usenet.yaml docs/komodo.md NOTICE; do
     assert_true "has $req" "echo \"\$list\" | grep -q '${req}|${req}'"
 done
 

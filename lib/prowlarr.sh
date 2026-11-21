@@ -206,6 +206,13 @@ _prowlarr_ensure_tag() {
     [ -n "$tid" ] && echo "$tid"
 }
 
+_byparr_is_ready() {
+    command -v docker >/dev/null 2>&1 || return 0
+    local st
+    st=$(docker inspect --format='{{.State.Health.Status}}' byparr 2>/dev/null || echo "")
+    [ "$st" = "healthy" ]
+}
+
 # Sync Byparr (FlareSolverr-compatible API solver) in Prowlarr.
 prowlarr_sync_byparr_proxy() {
     local apikey="$1"
@@ -234,6 +241,11 @@ prowlarr_sync_byparr_proxy() {
         fi
         log_step_fail "Prowlarr: could not remove Byparr proxy (HTTP ${code:-?})"
         return 1
+    fi
+
+    # Wait for Byparr's initial GeoIP/browser warmup so Prowlarr's synchronous proxy test succeeds.
+    if command -v docker >/dev/null 2>&1 && docker inspect byparr >/dev/null 2>&1; then
+        wait_until "Waiting for Byparr solver" 60 2 _byparr_is_ready || true
     fi
 
     local tag_id schema payload result

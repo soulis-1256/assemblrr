@@ -304,6 +304,7 @@ prepare_install_dirs() {
         "config/recyclarr"
         "config/bazarr"
         "config/sabnzbd"
+        "config/qui"
         "secrets"
         "scripts"
     )

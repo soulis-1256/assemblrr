@@ -510,3 +510,21 @@ probe_writable_path() {
     fi
     return 0
 }
+
+# Single source of truth for qBittorrent WebUI selection: vuetorrent | qui | stock.
+# Falls back to legacy VUETORRENT_ENABLED when QBIT_UI is unset.
+qbit_ui_mode() {
+    local raw="${QBIT_UI:-}"
+    case "${raw,,}" in
+        qui) echo "qui" ;;
+        vuetorrent|vue) echo "vuetorrent" ;;
+        stock|none|default) echo "stock" ;;
+        "")
+            case "${VUETORRENT_ENABLED:-n}" in
+                y|Y|yes|YES) echo "vuetorrent" ;;
+                *) echo "stock" ;;
+            esac
+            ;;
+        *) echo "stock" ;;
+    esac
+}

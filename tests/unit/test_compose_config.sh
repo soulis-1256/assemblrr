@@ -58,6 +58,13 @@ run_config "base + vpn + vuetorrent + gpu-intel + byparr + usenet" \
     -f "$tmp/compose/byparr.yaml" \
     -f "$tmp/compose/usenet.yaml"
 
+run_config "base + vpn + qui + byparr + usenet" \
+    -f "$tmp/compose/base.yaml" \
+    -f "$tmp/compose/vpn.yaml" \
+    -f "$tmp/compose/qui.yaml" \
+    -f "$tmp/compose/byparr.yaml" \
+    -f "$tmp/compose/usenet.yaml"
+
 run_config "base + direct-access + gpu-nvidia + usenet" \
     -f "$tmp/compose/base.yaml" \
     -f "$tmp/compose/direct-access.yaml" \

@@ -298,7 +298,8 @@ generate_env_file() {
     export VPN_ENABLED VPN_SERVICE VPN_TYPE
     export WIREGUARD_ADDRESSES
     export PORT_FORWARD_ONLY VPN_PORT_FORWARDING
-    export VUETORRENT_ENABLED="${vuetorrent_enabled:-y}"
+    export QBIT_UI="${qbit_ui:-vuetorrent}"
+    [ "$QBIT_UI" = "vuetorrent" ] && export VUETORRENT_ENABLED="y" || export VUETORRENT_ENABLED="n"
     export GPU_TRANSCODING="${gpu_transcoding:-none}"
     export BYPARR_ENABLED="${byparr_enabled:-n}"
     export USENET_ENABLED="${usenet_enabled:-n}"
@@ -309,7 +310,7 @@ generate_env_file() {
         log_error "Failed to locate .env.example"
     fi
     # Explicit key list matching .env.example 1-to-1
-    envsubst '${PUID} ${PGID} ${MEDIA_DIRECTORY} ${INSTALL_DIRECTORY} ${MEDIA_SERVICE} ${TZ} ${VPN_ENABLED} ${VPN_SERVICE} ${VPN_TYPE} ${WIREGUARD_ADDRESSES} ${PORT_FORWARD_ONLY} ${VPN_PORT_FORWARDING} ${VUETORRENT_ENABLED} ${GPU_TRANSCODING} ${BYPARR_ENABLED} ${USENET_ENABLED} ${API_HOST}' \
+    envsubst '${PUID} ${PGID} ${MEDIA_DIRECTORY} ${INSTALL_DIRECTORY} ${MEDIA_SERVICE} ${TZ} ${VPN_ENABLED} ${VPN_SERVICE} ${VPN_TYPE} ${WIREGUARD_ADDRESSES} ${PORT_FORWARD_ONLY} ${VPN_PORT_FORWARDING} ${QBIT_UI} ${VUETORRENT_ENABLED} ${GPU_TRANSCODING} ${BYPARR_ENABLED} ${USENET_ENABLED} ${API_HOST}' \
         < "$env_template" | tr -d '\r' > "$env_file" || \
         log_error "Failed to generate .env file"
 
@@ -461,7 +462,8 @@ MEDIA_SERVICE="${media_service:-jellyfin}"
 VPN_ENABLED="${setup_vpn,,}"
 VPN_TYPE="${vpn_type:-openvpn}"
 TZ="$tz"
-VUETORRENT_ENABLED="${vuetorrent_enabled:-y}"
+QBIT_UI="${qbit_ui:-vuetorrent}"
+VUETORRENT_ENABLED="$([ "${qbit_ui:-vuetorrent}" = "vuetorrent" ] && echo y || echo n)"
 GPU_TRANSCODING="${gpu_transcoding:-none}"
 BYPARR_ENABLED="${byparr_enabled:-n}"
 USENET_ENABLED="${usenet_enabled:-n}"
@@ -856,7 +858,7 @@ main() {
     configure_quality_profile
     configure_subtitle_language
     configure_opensubtitles
-    configure_vuetorrent
+    configure_qbit_ui
     configure_gpu_transcoding
     configure_byparr
     configure_usenet
@@ -877,7 +879,7 @@ main() {
         echo "  VPN:               DISABLED"
     fi
     echo "  Media service:     $media_service (port $media_service_port)"
-    echo "  VueTorrent UI:     ${vuetorrent_enabled:-y}"
+    echo "  qBittorrent UI:    ${qbit_ui:-vuetorrent}"
     echo "  GPU transcoding:   ${gpu_transcoding:-none}"
     echo "  Byparr solver:     ${byparr_enabled:-n}"
     echo "  SABnzbd / Usenet:  ${usenet_enabled:-n}"
@@ -932,7 +934,7 @@ main() {
     write_auth_secrets
     write_opensubtitles_secrets
     write_usenet_secrets
-    VUETORRENT_ENABLED="${vuetorrent_enabled:-y}" write_qbittorrent_config
+    QBIT_UI="${qbit_ui:-vuetorrent}" VUETORRENT_ENABLED="${vuetorrent_enabled:-y}" write_qbittorrent_config
     write_runtime_config
     _record_install_metadata
     install_cli
@@ -973,7 +975,10 @@ main() {
         ready_badges+=("VPN off")
     fi
     [ "${gpu_transcoding:-none}" != "none" ] && ready_badges+=("GPU ${gpu_transcoding}")
-    [ "${vuetorrent_enabled:-y}" = "y" ] && ready_badges+=("VueTorrent")
+    case "${qbit_ui:-vuetorrent}" in
+        vuetorrent) ready_badges+=("VueTorrent") ;;
+        qui)        ready_badges+=("qui") ;;
+    esac
     [ "${byparr_enabled:-n}" = "y" ] && ready_badges+=("Byparr")
     [ "${usenet_enabled:-n}" = "y" ] && ready_badges+=("Usenet")
     local badge_str="" _b

@@ -669,7 +669,10 @@ check_status() {
             badges+=("VPN off")
         fi
         [ "${GPU_TRANSCODING:-none}" != "none" ] && badges+=("GPU ${GPU_TRANSCODING}")
-        [ "${VUETORRENT_ENABLED:-n}" = "y" ] && badges+=("VueTorrent")
+        case "$(qbit_ui_mode 2>/dev/null || echo "${QBIT_UI:-stock}")" in
+            vuetorrent) badges+=("VueTorrent") ;;
+            qui)        badges+=("qui") ;;
+        esac
         [ "${BYPARR_ENABLED:-n}" = "y" ] && badges+=("Byparr")
         [ "${USENET_ENABLED:-n}" = "y" ] && badges+=("Usenet")
         local badge_str="" b
@@ -837,7 +840,7 @@ show_config() {
     echo "  VPN enabled:        ${VPN_ENABLED:-n}"
     echo "  VPN type:           ${VPN_TYPE:-openvpn}"
     echo "  Timezone:           ${TZ:-UTC}"
-    echo "  VueTorrent:         ${VUETORRENT_ENABLED:-n}"
+    echo "  qBittorrent UI:     $(qbit_ui_mode 2>/dev/null || echo "${QBIT_UI:-stock}")"
     echo "  GPU transcoding:    ${GPU_TRANSCODING:-none}"
     echo "  Byparr solver:      ${BYPARR_ENABLED:-n}"
     echo "  SABnzbd / Usenet:   ${USENET_ENABLED:-n}"

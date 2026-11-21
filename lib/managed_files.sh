@@ -42,6 +42,7 @@ compose/base.yaml|compose/base.yaml
 compose/direct-access.yaml|compose/direct-access.yaml
 compose/vpn.yaml|compose/vpn.yaml
 compose/vuetorrent.yaml|compose/vuetorrent.yaml
+compose/qui.yaml|compose/qui.yaml
 compose/gpu-intel.yaml|compose/gpu-intel.yaml
 compose/gpu-nvidia.yaml|compose/gpu-nvidia.yaml
 compose/byparr.yaml|compose/byparr.yaml

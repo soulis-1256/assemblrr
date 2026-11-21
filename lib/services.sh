@@ -21,6 +21,10 @@ list_service_catalog() {
         "prowlarr|Prowlarr|9696|/|ui" \
         "qbittorrent|qBittorrent|8081|/|ui"
 
+    if type qbit_ui_mode >/dev/null 2>&1 && [ "$(qbit_ui_mode)" = "qui" ]; then
+        printf '%s\n' "qui|qui (qBit UI)|7476|/|ui"
+    fi
+
     if [ "${USENET_ENABLED:-n}" = "y" ] || [ "${USENET_ENABLED:-n}" = "Y" ]; then
         printf '%s\n' "sabnzbd|SABnzbd|8085|/|ui"
     fi

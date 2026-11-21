@@ -1,0 +1,30 @@
+# Overlay: qui standalone qBittorrent WebUI (alternative to VueTorrent; leaves stock qBittorrent on :8081)
+services:
+  qui:
+    image: ghcr.io/autobrr/qui:v1.36.0
+    container_name: qui
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+      - QUI__HOST=0.0.0.0
+      - QUI__PORT=7476
+    ports:
+      - 7476:7476
+    volumes:
+      - ${INSTALL_DIRECTORY}/config/qui:/config
+      - ${MEDIA_DIRECTORY}:/data
+    depends_on:
+      qbittorrent:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://127.0.0.1:7476/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+      start_interval: 2s
+    restart: unless-stopped
+    networks:
+      assemblrr_network:
+        ipv4_address: 172.60.0.27
