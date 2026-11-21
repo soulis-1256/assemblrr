@@ -65,4 +65,10 @@ assert_not_contains "$_stalled_out" "fresh333" "skips grab younger than threshol
 assert_not_contains "$_stalled_out" "part444" "skips torrent that already downloaded data"
 assert_not_contains "$_stalled_out" "act555" "skips active downloading torrent with seeds"
 
+test_suite "watchdog_find_corrupted_trackers strips zero-width chars once"
+_corrupt_tr=$(printf '[{"url":"udp://192.0.2.1:6969/announ\\u200bce"},{"url":"udp://198.51.100.1:6969/ann\\u200bounce"},{"url":"udp://198.51.100.1:6969/announce"}]')
+_clean_out=$(watchdog_find_corrupted_trackers "$_corrupt_tr")
+assert_contains "$_clean_out" "udp://192.0.2.1:6969/announce" "emits cleaned tracker URL when not present yet"
+assert_not_contains "$_clean_out" "198.51.100.1" "skips corrupted URL when clean counterpart already exists"
+
 test_summary

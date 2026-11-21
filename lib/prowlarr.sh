@@ -15,7 +15,7 @@ readonly PROWLARR_GLUETUN_PROXY_PORT="8888"
 readonly PROWLARR_BYPARR_PROXY_NAME="assemblrr Byparr"
 readonly PROWLARR_BYPARR_HOST="http://byparr:8191/"
 readonly PROWLARR_BYPARR_TAG="byparr"
-PROWLARR_MIN_SEEDERS="${PROWLARR_MIN_SEEDERS:-5}"
+PROWLARR_MIN_SEEDERS="${PROWLARR_MIN_SEEDERS:-0}"
 
 _prowlarr_byparr_enabled() {
     case "${BYPARR_ENABLED:-n}" in
@@ -26,7 +26,7 @@ _prowlarr_byparr_enabled() {
 
 prowlarr_set_app_profile_min_seeders() {
     local prowlarr_key="$1"
-    local min_seeders="${PROWLARR_MIN_SEEDERS:-5}"
+    local min_seeders="${PROWLARR_MIN_SEEDERS:-0}"
     local profiles
     profiles=$(api_get "9696" "/api/v1/appprofile" "$prowlarr_key" || echo "")
     if [ -z "$profiles" ] || [ "$profiles" = "[]" ]; then
@@ -56,7 +56,7 @@ arr_set_indexer_min_seeders() {
     local service_name="$1"
     local port="$2"
     local apikey="$3"
-    local min_seeders="${PROWLARR_MIN_SEEDERS:-5}"
+    local min_seeders="${PROWLARR_MIN_SEEDERS:-0}"
 
     [ -z "$apikey" ] && return 1
 

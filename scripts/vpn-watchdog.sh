@@ -93,6 +93,55 @@ watchdog_should_restart_vpn() {
     return 0
 }
 
+# Pure helper: find tracker URLs corrupted by invisible zero-width Unicode chars
+# (e.g. \u200b injected into /announ\u200bce by HTML anti-scraper obfuscation)
+# whose cleaned counterpart is not yet on the torrent.
+# Prints "<orig_url>\t<clean_url>" per corrupted tracker needing repair.
+watchdog_find_corrupted_trackers() {
+    local trackers_json="${1:-[]}"
+    printf '%s' "$trackers_json" | jq -r '
+        (reduce .[]? as $t ({}; . + {($t.url // ""): true})) as $have |
+        .[]? |
+        (.url // "") as $orig |
+        ($orig | gsub("[\u200b\u200c\u200d\ufeff]"; "")) as $clean |
+        select($orig != "" and $orig != $clean and ($have[$clean] | not)) |
+        [$orig, $clean] | @tsv
+    ' 2>/dev/null || true
+}
+
+watchdog_sanitize_torrent_trackers() {
+    local hash="$1"
+    local name="$2"
+    local trackers_json="$3"
+    [ -n "$hash" ] && [ -n "$trackers_json" ] || return 0
+
+    local orig_url clean_url clean_list="" fixed=0
+    while IFS=$'\t' read -r orig_url clean_url; do
+        [ -n "$orig_url" ] && [ -n "$clean_url" ] || continue
+        if [ -n "$clean_list" ]; then
+            clean_list="${clean_list}"$'\n'"${clean_url}"
+        else
+            clean_list="${clean_url}"
+        fi
+        fixed=$((fixed + 1))
+    done < <(watchdog_find_corrupted_trackers "$trackers_json")
+
+    if [ "$fixed" -gt 0 ]; then
+        curl -sS -o /dev/null --connect-timeout 5 --max-time 10 \
+            -b "$COOKIE_JAR" \
+            -H "Referer: http://${QBIT_HOST}" \
+            --data-urlencode "hash=${hash}" \
+            --data-urlencode "urls=${clean_list}" \
+            "http://${QBIT_HOST}/api/v2/torrents/addTrackers" 2>/dev/null || true
+        curl -sS -o /dev/null --connect-timeout 5 --max-time 10 \
+            -b "$COOKIE_JAR" \
+            -H "Referer: http://${QBIT_HOST}" \
+            --data-urlencode "hashes=${hash}" \
+            "http://${QBIT_HOST}/api/v2/torrents/reannounce" 2>/dev/null || true
+        log_watchdog INFO "Sanitized ${fixed} obfuscated tracker URL(s) (removed zero-width chars) on '${name}'."
+    fi
+}
+
 # Pure helper: find 0%-progress torrents stuck in metaDL/stalledDL with 0 connected seeds
 # for at least <threshold_sec>. Prints "<hash>\t<name>\t<age_sec>" per line.
 watchdog_find_stalled_grabs() {
@@ -296,6 +345,7 @@ watchdog_main() {
 
         properties=$(qbit_watchdog_get "/api/v2/torrents/properties?hash=${hash}")
         trackers=$(qbit_watchdog_get "/api/v2/torrents/trackers?hash=${hash}")
+        watchdog_sanitize_torrent_trackers "$hash" "$name" "$trackers" || true
 
         read -r is_broken is_working < <(watchdog_classify_torrent "$properties" "$trackers")
         if [ "$is_working" -eq 1 ]; then
