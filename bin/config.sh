@@ -103,7 +103,7 @@ main() {
         QBITTORRENT_HOST="qbittorrent"
     fi
 
-    AUTH_USERNAME=$(cat "$INSTALL_DIR/secrets/auth_username.txt" 2>/dev/null || echo "$USER")
+    AUTH_USERNAME=$(cat "$INSTALL_DIR/secrets/auth_username.txt" 2>/dev/null || id -un)
     AUTH_PASSWORD=$(cat "$INSTALL_DIR/secrets/auth_password.txt" 2>/dev/null || echo "")
     CONFIGURE_LOG="${CONFIGURE_LOG:-/tmp/${APP_NAME:-assemblrr}-configure-$(date '+%Y%m%d-%H%M%S').log}"
 

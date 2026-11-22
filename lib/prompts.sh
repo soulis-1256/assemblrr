@@ -944,7 +944,7 @@ configure_auth() {
     ui_note \
         "Same login on Radarr, Sonarr, Prowlarr, qBittorrent, qui, Jellyfin, Bazarr, and SABnzbd (when enabled). Seerr signs in via Jellyfin." \
         "Updates Radarr, Sonarr, Prowlarr, qBittorrent, qui, Jellyfin, Bazarr, and SABnzbd (when enabled). Seerr signs in via Jellyfin."
-    local cur_user="${USER}"
+    local cur_user="${USER:-$(id -un)}"
     if ui_is_edit && [ -n "${AUTH_USERNAME:-}" ]; then
         cur_user="$AUTH_USERNAME"
         log_info "Current login: ${cur_user}"
@@ -986,10 +986,27 @@ configure_auth() {
     export auth_username auth_password
 }
 
+_detect_host_timezone() {
+    local detected=""
+    if [ -s /etc/timezone ]; then
+        detected=$(tr -d '[:space:]' < /etc/timezone 2>/dev/null || true)
+    fi
+    if [ -z "$detected" ] && command -v timedatectl >/dev/null 2>&1; then
+        detected=$(timedatectl show -p Timezone -v 2>/dev/null | tail -1 || true)
+    fi
+    if [ -z "$detected" ] && [ -L /etc/localtime ]; then
+        local target
+        target=$(readlink -f /etc/localtime 2>/dev/null || true)
+        case "$target" in
+            */zoneinfo/*) detected="${target#*zoneinfo/}" ;;
+        esac
+    fi
+    printf '%s\n' "${detected:-UTC}"
+}
+
 configure_timezone() {
     local detected_tz
-    detected_tz=$(cat /etc/timezone 2>/dev/null || timedatectl show -p Timezone -v 2>/dev/null | tail -1 || echo "UTC")
-    detected_tz=${detected_tz:-"UTC"}
+    detected_tz=$(_detect_host_timezone)
 
     if [ "${SETUP_MODE:-}" = "express" ]; then
         tz="$detected_tz"
@@ -1034,8 +1051,9 @@ if ! type running_services_location >/dev/null 2>&1; then
 fi
 
 get_user_info() {
+    local def_user="${USER:-$(id -un)}"
     if [ "${SETUP_MODE:-}" = "express" ]; then
-        username="$USER"
+        username="$def_user"
         puid=$(id -u "$username")
         pgid=$(id -g "$username")
         log_success "User: $username (PUID=$puid, PGID=$pgid)"
@@ -1044,8 +1062,8 @@ get_user_info() {
     fi
 
     while true; do
-        read_prompt "User to own the media server files? [$USER]: " username
-        username=${username:-$USER}
+        read_prompt "User to own the media server files? [$def_user]: " username
+        username=${username:-$def_user}
 
         if id -u "$username" &>/dev/null; then
             puid=$(id -u "$username")
