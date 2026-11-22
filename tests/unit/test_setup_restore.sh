@@ -63,4 +63,59 @@ assert_contains "$(cat "$install_directory/.${APP_NAME}-config")" 'VPN_ENABLED="
 HOME="$setup_home" generate_env_file
 assert_contains "$(cat "$install_directory/.env")" 'TZ=UTC' "generate_env_file defaults unset tz to UTC"
 
+test_suite "setup.sh --express with VPN=n and unset USER completes setup steps under set -u"
+e2e_home="$tmp/e2e-home"
+e2e_bin="$tmp/e2e-bin"
+mkdir -p "$e2e_home" "$e2e_bin"
+cat > "$e2e_bin/docker" <<'EOF'
+#!/bin/sh
+if [ "$1" = "compose" ]; then
+    case " $* " in
+        *" up "*) echo "mock-compose-up-stop"; exit 1 ;;
+    esac
+fi
+exit 0
+EOF
+cat > "$e2e_bin/curl" <<'EOF'
+#!/bin/sh
+if [ "${1:-}" = "--version" ]; then
+    echo "curl 8.0.0"
+    exit 0
+fi
+exit 1
+EOF
+cat > "$e2e_bin/fzf" <<'EOF'
+#!/bin/sh
+if [ "${1:-}" = "--version" ]; then
+    echo "0.42.0"
+    exit 0
+fi
+exit 1
+EOF
+chmod +x "$e2e_bin/docker" "$e2e_bin/curl" "$e2e_bin/fzf"
+
+e2e_rc=0
+e2e_out=$(
+    env -u USER HOME="$e2e_home" PATH="$e2e_bin:$PATH" \
+        bash "$REPO_ROOT/bin/setup.sh" --express <<'INPUTS' 2>&1
+n
+1
+1
+2
+
+n
+
+testpass123
+testpass123
+INPUTS
+) || e2e_rc=$?
+assert_eq "1" "$e2e_rc" "reaches mock compose_up_stack cleanly"
+assert_not_contains "$e2e_out" "unbound variable" "no unbound variable errors anywhere in express setup"
+assert_contains "$e2e_out" "Installation Summary" "prints full installation summary"
+assert_contains "$e2e_out" "Install files ready" "completes config and secret generation"
+assert_true "generated .assemblrr-config" "[ -f \"$e2e_home/assemblrr/.assemblrr-config\" ]"
+assert_true "generated .env" "[ -f \"$e2e_home/assemblrr/.env\" ]"
+assert_contains "$(cat "$e2e_home/assemblrr/.assemblrr-config")" 'VPN_ENABLED="n"' "persists VPN_ENABLED=n"
+assert_contains "$(cat "$e2e_home/assemblrr/.env")" 'TZ=' "persists TZ in .env"
+
 test_summary

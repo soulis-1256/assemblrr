@@ -116,7 +116,7 @@ main() {
             ;;
     esac
 
-    sudo usermod -aG docker "$USER"
+    sudo usermod -aG docker "${USER:-$(id -un)}"
 
     if [ "$(ps -p 1 -o comm= 2>/dev/null || true)" = "systemd" ]; then
         sudo systemctl enable docker

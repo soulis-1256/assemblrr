@@ -325,14 +325,15 @@ generate_env_file() {
 }
 
 write_vpn_secrets() {
-    if [ "${setup_vpn,,}" != "y" ]; then
+    local _vpn_flag="${setup_vpn:-n}"
+    if [ "${_vpn_flag,,}" != "y" ]; then
         return 0
     fi
     local secrets_dir="$install_directory/secrets"
     mkdir -p "$secrets_dir"
     chmod 700 "$secrets_dir"
 
-    if [ "$vpn_type" = "openvpn" ]; then
+    if [ "${vpn_type:-openvpn}" = "openvpn" ]; then
         write_secret_file "$secrets_dir/openvpn_user.txt" "${vpn_user:-}"
         write_secret_file "$secrets_dir/openvpn_password.txt" "${vpn_password:-}"
         write_secret_file "$secrets_dir/wireguard_private_key.txt" ""
@@ -383,7 +384,7 @@ test_vpn_connection() {
 }
 
 set_provisional_vpn_test_defaults() {
-    username="${username:-$USER}"
+    username="${username:-${USER:-$(id -un)}}"
     puid="${puid:-$(id -u)}"
     pgid="${pgid:-$(id -g)}"
     install_directory="${install_directory:-$APP_DEFAULT_INSTALL_DIR}"
@@ -395,8 +396,12 @@ set_provisional_vpn_test_defaults() {
     media_service="jellyfin"
     media_service_port=8096
     if [ -z "${tz:-}" ]; then
-        tz=$(cat /etc/timezone 2>/dev/null || timedatectl show -p Timezone -v 2>/dev/null | tail -1 || echo "UTC")
-        tz=${tz:-UTC}
+        if declare -F _detect_host_timezone >/dev/null 2>&1; then
+            tz=$(_detect_host_timezone)
+        else
+            tz=$(cat /etc/timezone 2>/dev/null || timedatectl show -p Timezone -v 2>/dev/null | tail -1 || echo "UTC")
+            tz=${tz:-UTC}
+        fi
     fi
     export username puid pgid install_directory media_directory media_service media_service_port tz
 }
@@ -887,28 +892,28 @@ main() {
     else
         echo "  VPN:               DISABLED"
     fi
-    echo "  Media service:     $media_service (port $media_service_port)"
+    echo "  Media service:     ${media_service:-jellyfin} (port ${media_service_port:-8096})"
     echo "  qBittorrent UI:    ${qbit_ui:-vuetorrent}"
     echo "  GPU transcoding:   ${gpu_transcoding:-none}"
     echo "  Byparr solver:     ${byparr_enabled:-n}"
     echo "  SABnzbd / Usenet:  ${usenet_enabled:-n}"
-    if [ "$QUALITY_TIER" = "any" ]; then
+    if [ "${QUALITY_TIER:-}" = "any" ]; then
         echo "  Quality profile:   any"
     else
-        echo "  Quality profile:   $QUALITY_TIER / ${QUALITY_SOURCE:-bluray} (4K=${seerr_is_4k:-false})"
+        echo "  Quality profile:   ${QUALITY_TIER:-uhd} / ${QUALITY_SOURCE:-bluray} (4K=${seerr_is_4k:-false})"
     fi
     if [ -n "${subtitle_languages:-}" ] && [ "${subtitle_languages}" != "${subtitle_language:-}" ]; then
-        echo "  Subtitle languages: ${subtitle_language} (preferred), ${subtitle_languages#*,}"
+        echo "  Subtitle languages: ${subtitle_language:-} (preferred), ${subtitle_languages#*,}"
     else
         echo "  Subtitle language: ${subtitle_language:-en (Bazarr default)}"
     fi
     if [ "${opensubtitles_enabled:-n}" = "y" ]; then
-        echo "  OpenSubtitles.com: yes (username=${opensubtitles_username})"
+        echo "  OpenSubtitles.com: yes (username=${opensubtitles_username:-})"
     else
         echo "  OpenSubtitles.com: no"
     fi
-    echo "  Timezone:          $tz"
-    echo "  Service login:     $auth_username"
+    echo "  Timezone:          ${tz:-UTC}"
+    echo "  Service login:     ${auth_username:-admin}"
     echo "========================================================"
     echo
 
