@@ -46,4 +46,21 @@ tar -xzf "$mock_archive" -C "$mock_dest"
 assert_true "archive contains .env" "[ -f \"$mock_dest/.env\" ]"
 assert_true "archive contains jellyfin config dir" "[ -d \"$mock_dest/config/jellyfin\" ]"
 
+test_suite "write_runtime_config & generate_env_file handle unset tz (issue #4)"
+# shellcheck source=/dev/null
+source "$REPO_ROOT/bin/setup.sh"
+setup_home="$tmp/setup-home"
+install_directory="$tmp/setup-install"
+media_directory="$tmp/setup-media"
+mkdir -p "$setup_home" "$install_directory" "$media_directory"
+unset tz setup_vpn vpn_type qbit_ui gpu_transcoding byparr_enabled usenet_enabled QUALITY_TIER QUALITY_SOURCE SEERR_IS_4K || true
+setup_vpn="n"
+puid=1000
+pgid=1000
+HOME="$setup_home" write_runtime_config
+assert_contains "$(cat "$install_directory/.${APP_NAME}-config")" 'TZ="UTC"' "write_runtime_config defaults unset tz to UTC"
+assert_contains "$(cat "$install_directory/.${APP_NAME}-config")" 'VPN_ENABLED="n"' "write_runtime_config records VPN_ENABLED=n"
+HOME="$setup_home" generate_env_file
+assert_contains "$(cat "$install_directory/.env")" 'TZ=UTC' "generate_env_file defaults unset tz to UTC"
+
 test_summary
