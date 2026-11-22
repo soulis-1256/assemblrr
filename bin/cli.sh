@@ -180,51 +180,115 @@ purge_media() {
 }
 
 wait_for_services() {
+    local -a targets=("$@")
     local wait_time=0
     local timeout="${WAIT_READY_SECONDS:-180}"
-    local total=0 ready=0
+    local interval="${ASSEMBLRR_WAIT_INTERVAL:-1}"
+    local start_ts="${ASSEMBLRR_LIVE_START_TS:-$(date +%s)}"
+    local wait_start_ts
+    wait_start_ts=$(date +%s)
+    local total=0 ready=0 elapsed=0
     local -a waiting=()
+    local use_live=0
 
-    while [ $wait_time -lt "$timeout" ]; do
+    if type service_live_snapshot >/dev/null 2>&1 && type _services_live_draw >/dev/null 2>&1; then
+        use_live=1
+    fi
+
+    local prev_int_trap prev_term_trap
+    prev_int_trap=$(trap -p INT 2>/dev/null || true)
+    prev_term_trap=$(trap -p TERM 2>/dev/null || true)
+    _wfs_restore_traps() {
+        if [ -n "$prev_int_trap" ]; then eval "$prev_int_trap"; else trap - INT; fi
+        if [ -n "$prev_term_trap" ]; then eval "$prev_term_trap"; else trap - TERM; fi
+    }
+    trap '_services_live_clear || true; _wfs_restore_traps; exit 130' INT
+    trap '_services_live_clear || true; _wfs_restore_traps; exit 143' TERM
+
+    while [ "$wait_time" -lt "$timeout" ]; do
         total=0
         ready=0
         waiting=()
 
-        local svc state health label port path kind
-        declare -A st_state=()
-        declare -A st_health=()
-        while IFS=$'\t' read -r svc state health; do
-            [ -z "$svc" ] && continue
-            st_state["$svc"]="$state"
-            st_health["$svc"]="$health"
-        done < <(_status_compose_rows)
+        local rows_raw svc label token is_ready detail
+        rows_raw=$(_status_compose_rows)
 
-        if type list_service_catalog >/dev/null 2>&1; then
-            while IFS='|' read -r svc label port path kind; do
+        if [ "$use_live" -eq 1 ]; then
+            local snapshot
+            snapshot=$(service_live_snapshot "waiting" "$rows_raw" "${targets[@]+"${targets[@]}"}")
+            while IFS='|' read -r svc label token is_ready detail; do
                 [ -z "$svc" ] && continue
                 total=$((total + 1))
-                state="${st_state[$svc]:-}"
-                health="${st_health[$svc]:-}"
-                if type service_row_ready >/dev/null 2>&1 && service_row_ready "$state" "$health"; then
+                if [ "$is_ready" = "1" ]; then
                     ready=$((ready + 1))
                 else
-                    waiting+=("${label} (${health:-${state:-missing}})")
+                    waiting+=("${label} (${token})")
                 fi
-            done < <(list_service_catalog)
+            done <<< "$snapshot"
+
+            elapsed=$(( $(date +%s) - start_ts ))
+            if [ "$total" -gt 0 ] && [ "$ready" -eq "$total" ]; then
+                _services_live_clear || true
+                _wfs_restore_traps
+                if [ "$elapsed" -gt 0 ]; then
+                    log_success "All ${total} services ready (${elapsed}s)"
+                else
+                    log_success "All ${total} services ready"
+                fi
+                return 0
+            fi
+
+            _services_live_draw "$snapshot" "Waiting for services" "$elapsed"
+        else
+            local state health port path kind
+            declare -A st_state=()
+            declare -A st_health=()
+            while IFS=$'\t' read -r svc state health; do
+                [ -z "$svc" ] && continue
+                st_state["$svc"]="$state"
+                st_health["$svc"]="$health"
+            done <<< "$rows_raw"
+
+            if type list_service_catalog >/dev/null 2>&1; then
+                while IFS='|' read -r svc label port path kind; do
+                    [ -z "$svc" ] && continue
+                    total=$((total + 1))
+                    state="${st_state[$svc]:-}"
+                    health="${st_health[$svc]:-}"
+                    if type service_row_ready >/dev/null 2>&1 && service_row_ready "$state" "$health"; then
+                        ready=$((ready + 1))
+                    else
+                        waiting+=("${label} (${health:-${state:-missing}})")
+                    fi
+                done < <(list_service_catalog)
+            fi
+
+            if [ "$total" -gt 0 ] && [ "$ready" -eq "$total" ]; then
+                _wfs_restore_traps
+                [ "$wait_time" -gt 0 ] && echo >&2
+                log_success "All ${total} services ready"
+                return 0
+            fi
+
+            wait_inline "Waiting for services: ${ready}/${total} ready" "$wait_time"
         fi
 
-        if [ "$total" -gt 0 ] && [ "$ready" -eq "$total" ]; then
-            [ "$wait_time" -gt 0 ] && echo >&2
-            log_success "All ${total} services ready"
-            return 0
+        sleep "$interval"
+        if [[ "$interval" =~ ^[0-9]+$ ]] && [ "$interval" -gt 0 ]; then
+            wait_time=$((wait_time + interval))
+        elif [ "$interval" = "0" ]; then
+            wait_time=$((wait_time + 1))
+        else
+            wait_time=$(( $(date +%s) - wait_start_ts ))
         fi
-
-        wait_inline "Waiting for services: ${ready}/${total} ready" "$wait_time"
-        sleep 3
-        wait_time=$((wait_time + 3))
     done
 
-    echo >&2
+    if [ "$use_live" -eq 1 ]; then
+        _services_live_clear || true
+    else
+        echo >&2
+    fi
+    _wfs_restore_traps
     if [ "${#waiting[@]}" -gt 0 ]; then
         log_warning "Timed out after ${timeout}s — still starting: ${waiting[*]}"
     else
@@ -233,42 +297,109 @@ wait_for_services() {
     return 1
 }
 
+_is_valid_ip() {
+    local ip="${1:-}"
+    if [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+        return 0
+    fi
+    if [[ "$ip" == *:*:* ]] && [[ "$ip" =~ ^[0-9a-fA-F:]+$ ]]; then
+        return 0
+    fi
+    return 1
+}
+
+_fetch_ip_from_endpoint() {
+    local is_vpn="$1"
+    local endpoint="$2"
+    local ip="" rc=0
+
+    if [ "$is_vpn" = "true" ]; then
+        # shellcheck disable=SC2016
+        ip=$(run_docker exec gluetun sh -c '
+            if command -v curl >/dev/null 2>&1; then
+                curl -fsS -4 --max-time 5 "$1" 2>/dev/null || curl -fsS --max-time 5 "$1" 2>/dev/null
+            elif command -v wget >/dev/null 2>&1; then
+                if wget --version 2>&1 | grep -qi "GNU Wget"; then
+                    wget -qO- -T 5 --tries=1 -4 "$1" 2>/dev/null || wget -qO- -T 5 --tries=1 "$1" 2>/dev/null
+                else
+                    wget -qO- -T 5 "$1" 2>/dev/null
+                fi
+            else
+                exit 127
+            fi
+        ' _ "$endpoint" 2>/dev/null) || rc=$?
+        if [ "$rc" -eq 127 ]; then
+            return 127
+        fi
+    else
+        ip=$(curl -fsS -4 --max-time 5 "$endpoint" 2>/dev/null || curl -fsS --max-time 5 "$endpoint" 2>/dev/null || true)
+    fi
+
+    ip=$(printf '%s' "$ip" | tr -d '[:space:]')
+    if _is_valid_ip "$ip"; then
+        echo "$ip"
+        return 0
+    fi
+    return 1
+}
+
 get_ip_with_retries() {
     local is_vpn=$1
     local retry=0
     local max_retries=5
-    local ip=""
+    local ip="" rc=0
 
-    while [ $retry -lt $max_retries ]; do
+    while [ "$retry" -lt "$max_retries" ]; do
         for endpoint in "${IP_ENDPOINTS[@]}"; do
-            if [ "$is_vpn" = "true" ]; then
-                ip=$(run_docker exec gluetun curl -s --max-time 5 "$endpoint" 2>/dev/null || true)
-            else
-                ip=$(curl -s --max-time 5 "$endpoint" 2>/dev/null || true)
-            fi
-            if [[ $ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            rc=0
+            ip=$(_fetch_ip_from_endpoint "$is_vpn" "$endpoint") || rc=$?
+            if [ "$rc" -eq 0 ] && [ -n "$ip" ]; then
                 echo "$ip"
                 return 0
             fi
+            if [ "$rc" -eq 127 ]; then
+                return 127
+            fi
         done
         retry=$((retry + 1))
-        sleep 2
+        if [ "$retry" -lt "$max_retries" ]; then
+            sleep 2
+        fi
     done
     return 1
 }
 
 check_vpn() {
-    if [ "${VPN_ENABLED:-n}" != "y" ]; then
+    if [ "${VPN_ENABLED,,}" != "y" ]; then
         log_error "VPN is not enabled in your configuration."
+        return 1
+    fi
+
+    local gluetun_running gluetun_health
+    gluetun_running=$(run_docker inspect -f '{{.State.Running}}' gluetun 2>/dev/null || true)
+    if [ "$gluetun_running" != "true" ]; then
+        log_error "Gluetun container is not running. Start services with: ${APP_CLI_NAME:-assemblrr} start"
+        return 1
     fi
 
     echo "Checking VPN connection..."
-    local vpn_ip public_ip
-    vpn_ip=$(get_ip_with_retries "true")
-    public_ip=$(get_ip_with_retries "false")
+    local vpn_ip="" public_ip="" vpn_rc=0
+    vpn_ip=$(get_ip_with_retries "true") || vpn_rc=$?
+    if [ "$vpn_rc" -eq 127 ]; then
+        log_error "Failed to check VPN IP: neither curl nor wget is available inside gluetun"
+        return 1
+    fi
+    if [ -z "$vpn_ip" ]; then
+        gluetun_health=$(run_docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' gluetun 2>/dev/null || echo "unknown")
+        log_error "Failed to obtain VPN IP (gluetun health: ${gluetun_health}). Check: ${APP_CLI_NAME:-assemblrr} logs gluetun"
+        return 1
+    fi
 
-    [ -z "$vpn_ip" ] && log_error "Failed to obtain VPN IP"
-    [ -z "$public_ip" ] && log_error "Failed to obtain public IP"
+    public_ip=$(get_ip_with_retries "false" || true)
+    if [ -z "$public_ip" ]; then
+        log_error "Failed to obtain public IP"
+        return 1
+    fi
 
     echo
     echo "IP check:"
@@ -278,8 +409,10 @@ check_vpn() {
 
     if [ "$vpn_ip" != "$public_ip" ]; then
         log_success "VPN is active and routing traffic correctly!"
+        return 0
     else
         log_warning "VPN IP matches your real IP — VPN may not be routing properly"
+        return 1
     fi
 }
 
@@ -549,23 +682,51 @@ _load_install_ids() {
     echo "$puid $pgid"
 }
 
+_run_live_compose_action() {
+    local label="$1"
+    shift
+    if type wait_while_services >/dev/null 2>&1; then
+        ASSEMBLRR_LIVE_KEEP=1 wait_while_services "$label" "$@" && return 0
+        _services_live_clear || true
+        if [ -n "${WAIT_WHILE_OUTPUT:-}" ]; then
+            echo "$WAIT_WHILE_OUTPUT" | tail -n 40
+        fi
+        return 1
+    fi
+    "$@"
+}
+
 start_app() {
-    local _ids _puid _pgid
+    local _puid _pgid
     if [ -d "$INSTALL_DIR/compose" ] && type prepare_install_dirs >/dev/null 2>&1; then
         read -r _puid _pgid < <(_load_install_ids)
         prepare_install_dirs "$INSTALL_DIR" "$_puid" "$_pgid"
     fi
     echo "Starting ${APP_DISPLAY_NAME:-assemblrr} services..."
+    ASSEMBLRR_LIVE_START_TS=$(date +%s)
     if [ "$#" -gt 0 ]; then
-        "${DC[@]}" start "$@" || log_error "Failed to start $*"
+        ASSEMBLRR_LIVE_TARGETS="$*" _run_live_compose_action "Starting $*" "${DC[@]}" start "$@" || {
+            ASSEMBLRR_LIVE_START_TS=""
+            log_error "Failed to start $*"
+        }
+        wait_for_services "$@" || true
         log_success "Service(s) started: $*"
     elif [ "${#COMPOSE_ARGS[@]}" -gt 0 ] && type compose_up_stack >/dev/null 2>&1; then
-        compose_up_stack "default" || log_error "Failed to start services"
+        ASSEMBLRR_LIVE_TARGETS="" ASSEMBLRR_LIVE_SERVICES=1 ASSEMBLRR_LIVE_KEEP=1 compose_up_stack "default" || {
+            type _services_live_clear >/dev/null 2>&1 && _services_live_clear || true
+            ASSEMBLRR_LIVE_START_TS=""
+            log_error "Failed to start services"
+        }
         wait_for_services || true
     else
-        "${DC[@]}" up -d --remove-orphans || log_error "Failed to start services"
+        ASSEMBLRR_LIVE_TARGETS="" _run_live_compose_action "Starting services" "${DC[@]}" up -d --remove-orphans || {
+            ASSEMBLRR_LIVE_START_TS=""
+            log_error "Failed to start services"
+        }
         wait_for_services || true
     fi
+    ASSEMBLRR_LIVE_START_TS=""
+    ASSEMBLRR_LIVE_TARGETS=""
     if [ "$#" -eq 0 ]; then
         echo
         check_status || true
@@ -575,9 +736,15 @@ start_app() {
 
 restart_app() {
     echo "Restarting ${APP_DISPLAY_NAME:-assemblrr} services..."
-    "${DC[@]}" restart "$@" || log_error "Failed to restart services"
+    ASSEMBLRR_LIVE_START_TS=$(date +%s)
+    ASSEMBLRR_LIVE_TARGETS="$*" _run_live_compose_action "Restarting services" "${DC[@]}" restart "$@" || {
+        ASSEMBLRR_LIVE_START_TS=""
+        log_error "Failed to restart services"
+    }
+    wait_for_services "$@" || true
+    ASSEMBLRR_LIVE_START_TS=""
+    ASSEMBLRR_LIVE_TARGETS=""
     if [ "$#" -eq 0 ]; then
-        wait_for_services || true
         echo
         check_status || true
     else
@@ -600,23 +767,25 @@ _status_compose_rows() {
 }
 
 _status_normalize() {
+    if type service_status_normalize >/dev/null 2>&1; then
+        service_status_normalize "$@"
+        return $?
+    fi
     local state="${1:-}" health="${2:-}"
     state=$(echo "$state" | tr '[:upper:]' '[:lower:]')
     health=$(echo "$health" | tr '[:upper:]' '[:lower:]')
-
-    if [ "$health" = "healthy" ]; then
-        echo "healthy"
-    elif [ "$health" = "unhealthy" ]; then
-        echo "unhealthy"
-    elif [ "$health" = "starting" ]; then
-        echo "starting"
-    elif [ "$state" = "running" ]; then
-        echo "running"
-    elif [ -z "$state" ]; then
-        echo "missing"
-    else
-        echo "$state"
-    fi
+    case "$health" in
+        healthy|unhealthy|starting) echo "$health" ;;
+        *)
+            if [ "$state" = "running" ]; then
+                echo "running"
+            elif [ -z "$state" ]; then
+                echo "missing"
+            else
+                echo "$state"
+            fi
+            ;;
+    esac
 }
 
 _status_short_bg_label() {

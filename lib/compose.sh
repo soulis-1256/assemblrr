@@ -77,7 +77,12 @@ compose_up_stack() {
         return 1
     fi
 
-    if ! wait_while "Starting services" \
+    local wait_fn="wait_while"
+    if [ "${ASSEMBLRR_LIVE_SERVICES:-0}" = "1" ] && type wait_while_services >/dev/null 2>&1; then
+        wait_fn="wait_while_services"
+    fi
+
+    if ! "$wait_fn" "Starting services" \
         run_docker compose "${COMPOSE_ARGS[@]}" "${profile_args[@]}" up -d --remove-orphans "$@"; then
         log_warning "Failed to start services"
         if [ -n "${WAIT_WHILE_OUTPUT:-}" ]; then
