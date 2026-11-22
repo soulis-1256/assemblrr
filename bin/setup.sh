@@ -265,9 +265,10 @@ copy_configuration_files() {
 
 generate_env_file() {
     local env_file="$install_directory/.env"
+    local _vpn_flag="${setup_vpn:-n}"
     log_debug "Generating environment configuration..."
 
-    if [ "${setup_vpn,,}" = "y" ]; then
+    if [ "${_vpn_flag,,}" = "y" ]; then
         VPN_ENABLED="y"
         VPN_SERVICE="${vpn_service:-}"
         VPN_TYPE="${vpn_type:-openvpn}"
@@ -294,7 +295,7 @@ generate_env_file() {
     export MEDIA_DIRECTORY="$media_directory"
     export INSTALL_DIRECTORY="$install_directory"
     export MEDIA_SERVICE="${media_service:-jellyfin}"
-    export TZ="$tz"
+    export TZ="${tz:-UTC}"
     export VPN_ENABLED VPN_SERVICE VPN_TYPE
     export WIREGUARD_ADDRESSES
     export PORT_FORWARD_ONLY VPN_PORT_FORWARDING
@@ -460,13 +461,14 @@ early_vpn_gate() {
 
 write_runtime_config() {
     local config_file="$install_directory/.${APP_NAME}-config"
+    local _vpn_flag="${setup_vpn:-n}"
     cat > "$config_file" << EOF
 INSTALL_DIRECTORY="$install_directory"
 MEDIA_DIRECTORY="$media_directory"
 MEDIA_SERVICE="${media_service:-jellyfin}"
-VPN_ENABLED="${setup_vpn,,}"
+VPN_ENABLED="${_vpn_flag,,}"
 VPN_TYPE="${vpn_type:-openvpn}"
-TZ="$tz"
+TZ="${tz:-UTC}"
 QBIT_UI="${qbit_ui:-vuetorrent}"
 VUETORRENT_ENABLED="$([ "${qbit_ui:-vuetorrent}" = "vuetorrent" ] && echo y || echo n)"
 GPU_TRANSCODING="${gpu_transcoding:-none}"

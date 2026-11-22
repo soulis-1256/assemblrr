@@ -87,6 +87,7 @@ assert_contains "$out" "VPN is not enabled" "reports when VPN is disabled"
 
 # Case 2: Gluetun stopped fails immediately without retry delay
 VPN_ENABLED=y
+# shellcheck disable=SC2329
 run_docker() {
     if [ "${1:-}" = "inspect" ]; then
         echo "false"
@@ -119,6 +120,7 @@ echo "198.51.100.10"
 EOF
 chmod +x "$_mock_bin/curl"
 
+# shellcheck disable=SC2329
 run_docker() {
     case "${1:-}" in
         inspect)
@@ -150,6 +152,7 @@ assert_eq "1" "$leak_rc" "returns non-zero when VPN IP matches host IP"
 assert_contains "$out" "VPN IP matches your real IP" "warns on IP match"
 
 # Case 5: Missing curl and wget inside gluetun fails cleanly instead of silent exit
+# shellcheck disable=SC2329
 run_docker() {
     case "${1:-}" in
         inspect) echo "true"; return 0 ;;
@@ -202,6 +205,7 @@ test_suite "wait_for_services & wait_while_services dynamically track transition
 _orig_status_rows=$(declare -f _status_compose_rows)
 _state_counter="$tmp/wait_tick"
 echo 0 > "$_state_counter"
+# shellcheck disable=SC2329
 _status_compose_rows() {
     local n
     n=$(cat "$_state_counter")
